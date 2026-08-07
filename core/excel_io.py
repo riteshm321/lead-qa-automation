@@ -69,6 +69,12 @@ def append_leads(
     headers = [cell.value for cell in ws[1]]
     lead_headers_norm = {str(h).strip().lower(): h for h in leads_df.columns}
 
+    has_reason_column = any(h is not None and str(h).strip().lower() == "reason" for h in headers)
+    if reasons and not has_reason_column:
+        reason_col_idx = len(headers) + 1
+        ws.cell(row=1, column=reason_col_idx, value="Reason")
+        headers.append("Reason")
+
     formula_template: dict[str, tuple[str, str]] = {}
     if ws.max_row >= 2:
         for col_idx, header in enumerate(headers, start=1):
