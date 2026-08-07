@@ -10,6 +10,14 @@ TAL_SHEET1 = pd.DataFrame([
     {"Account Name": "Severn Trent Water Limited", "Domain": "stwater.co.uk"},
 ])
 
+TAL_SHEET_BASWARE = pd.DataFrame([
+    {"Account Name": "Basware Oy", "Domain": "basware.com"},
+])
+
+TAL_SHEET_ACME = pd.DataFrame([
+    {"Account Name": "Acme Industrial Supply", "Domain": "acme.com"},
+])
+
 
 def test_flat_tal_domain_found_passes():
     config = TalConfig(enabled=True, segmented=False, flat_sheet_name="Sheet1")
@@ -56,3 +64,13 @@ def test_disabled_check_produces_no_failures():
     outcome = check_tal(new_leads, FM, config, {}, alias_groups=[])
 
     assert outcome.fail == {}
+
+
+def test_company_name_gray_zone_fuzzy_match_goes_to_review():
+    config = TalConfig(enabled=True, segmented=False, flat_sheet_name="Sheet1", check_company_name=True)
+    new_leads = pd.DataFrame([{"emailaddress": "x@acme.com", "company": "Acme Industries", "CID": "1"}])
+
+    outcome = check_tal(new_leads, FM, config, {"Sheet1": TAL_SHEET_ACME}, alias_groups=[])
+
+    assert 0 not in outcome.fail, "Lead should not fail when company name is a gray-zone match"
+    assert outcome.review[0] == "TAL - company name ambiguous match"
