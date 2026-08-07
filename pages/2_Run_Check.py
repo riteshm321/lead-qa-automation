@@ -32,14 +32,23 @@ if profile.leadcap.enabled:
                                          type=["csv"], key=f"purchased_{segment.name}")
             if uploaded:
                 df = pd.read_csv(uploaded)
-                unexpected = validate_purchased_report_cids(df, segment.cids, profile.leadcap.purchased_report_cid_column)
-                if unexpected:
-                    st.warning(f"'{segment.name}' file contains unexpected CIDs {unexpected} — wrong file?")
-                purchased_reports[segment.name] = df
+                try:
+                    require_columns(df, [profile.leadcap.purchased_report_cid_column], segment.name)
+                    unexpected = validate_purchased_report_cids(df, segment.cids, profile.leadcap.purchased_report_cid_column)
+                    if unexpected:
+                        st.warning(f"'{segment.name}' file contains unexpected CIDs {unexpected} — wrong file?")
+                    purchased_reports[segment.name] = df
+                except ValueError as exc:
+                    st.error(str(exc))
     else:
         uploaded = st.file_uploader("Purchased Lead Report", type=["csv"], key="purchased_flat")
         if uploaded:
-            purchased_reports["_flat_"] = pd.read_csv(uploaded)
+            df = pd.read_csv(uploaded)
+            try:
+                require_columns(df, [profile.leadcap.purchased_report_cid_column], "Purchased Lead Report")
+                purchased_reports["_flat_"] = df
+            except ValueError as exc:
+                st.error(str(exc))
 
 if st.button("Run Check") and new_leads_file:
     try:
