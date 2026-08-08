@@ -25,6 +25,7 @@ class LeadcapConfig:
     flat_cap: Optional[int] = None
     segments: list[LeadcapSegment] = field(default_factory=list)
     purchased_report_cid_column: str = "Campaign ID"
+    purchased_report_email_column: str = "Email"
 
 
 @dataclass
@@ -82,6 +83,8 @@ class DedupeListConfig:
 class ClientProfile:
     name: str
     accumulated_report_path: str
+    accumulated_tab_name: str = "Accumulated"
+    refund_tab_name: str = "Refund"
     tal_path: Optional[str] = None
     exclusion_path: Optional[str] = None
     suppression_path: Optional[str] = None
