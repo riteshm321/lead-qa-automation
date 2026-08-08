@@ -33,7 +33,8 @@ if profile.leadcap.enabled:
             if uploaded:
                 df = pd.read_csv(uploaded)
                 try:
-                    require_columns(df, [profile.leadcap.purchased_report_cid_column], segment.name)
+                    require_columns(df, [profile.leadcap.purchased_report_cid_column,
+                                          profile.leadcap.purchased_report_email_column], segment.name)
                     unexpected = validate_purchased_report_cids(df, segment.cids, profile.leadcap.purchased_report_cid_column)
                     if unexpected:
                         st.warning(f"'{segment.name}' file contains unexpected CIDs {unexpected} — wrong file?")
@@ -45,7 +46,8 @@ if profile.leadcap.enabled:
         if uploaded:
             df = pd.read_csv(uploaded)
             try:
-                require_columns(df, [profile.leadcap.purchased_report_cid_column], "Purchased Lead Report")
+                require_columns(df, [profile.leadcap.purchased_report_cid_column,
+                                      profile.leadcap.purchased_report_email_column], "Purchased Lead Report")
                 purchased_reports["_flat_"] = df
             except ValueError as exc:
                 st.error(str(exc))

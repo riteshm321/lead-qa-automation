@@ -183,14 +183,16 @@ if st.button("Save Client Profile"):
                                    flat_cap=int(leadcap_flat_cap) if leadcap_flat_cap else None,
                                    segments=leadcap_segments),
             exclusion=ExclusionConfig(enabled=exclusion_enabled, check_company_name=exclusion_check_company,
-                                       sheet_name=exclusion_sheet or "Exclusion"),
+                                       sheet_name=exclusion_sheet or (profile.exclusion.sheet_name if profile else "Exclusion")),
             tal=TalConfig(enabled=tal_enabled, check_company_name=tal_check_company, segmented=tal_segmented,
-                          flat_sheet_name=tal_flat_sheet, segments=tal_segments),
+                          flat_sheet_name=tal_flat_sheet or (profile.tal.flat_sheet_name if profile else None),
+                          segments=tal_segments),
             suppression=SuppressionConfig(enabled=suppression_enabled, check_domain=suppression_check_domain,
                                            check_company_name=suppression_check_company,
                                            check_email=suppression_check_email,
-                                           sheet_name=suppression_sheet or "Sheet1"),
-            dedupe_list=DedupeListConfig(enabled=dedupe_enabled, sheet_name=dedupe_sheet or "Sheet1"),
+                                           sheet_name=suppression_sheet or (profile.suppression.sheet_name if profile else "Sheet1")),
+            dedupe_list=DedupeListConfig(enabled=dedupe_enabled,
+                                          sheet_name=dedupe_sheet or (profile.dedupe_list.sheet_name if profile else "Sheet1")),
         )
         saved_path = save_profile(new_profile)
         st.success(f"Saved profile to {saved_path}")
