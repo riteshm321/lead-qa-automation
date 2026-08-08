@@ -25,6 +25,10 @@ client_name = st.text_input("Client name", value=profile.name if profile else ""
 st.header("Reference Files")
 accumulated_path = st.text_input("Accumulated Report path",
                                   value=profile.accumulated_report_path if profile else "")
+accumulated_tab_name = st.text_input("Accumulated tab name",
+                                      value=profile.accumulated_tab_name if profile else "Accumulated")
+refund_tab_name = st.text_input("Refund tab name",
+                                 value=profile.refund_tab_name if profile else "Refund")
 tal_path = st.text_input("TAL file path", value=(profile.tal_path if profile else "") or "")
 exclusion_path = st.text_input("Exclusion List path", value=(profile.exclusion_path if profile else "") or "")
 suppression_path = st.text_input("Suppression List path", value=(profile.suppression_path if profile else "") or "")
@@ -42,13 +46,22 @@ if sample_leads_path:
         st.error(f"Could not read headers from '{sample_leads_path}': {exc}")
 
 if lead_headers:
-    fm_email = st.selectbox("Email column", lead_headers)
-    fm_first = st.selectbox("First Name column", lead_headers)
-    fm_last = st.selectbox("Last Name column", lead_headers)
-    fm_company = st.selectbox("Company column", lead_headers)
-    fm_cid = st.selectbox("CID column", lead_headers)
+    _fm_default = profile.field_mapping if profile else None
+
+    def _idx(value: str | None) -> int:
+        return lead_headers.index(value) if value and value in lead_headers else 0
+
+    fm_email = st.selectbox("Email column", lead_headers, index=_idx(_fm_default.email if _fm_default else None))
+    fm_first = st.selectbox("First Name column", lead_headers, index=_idx(_fm_default.first_name if _fm_default else None))
+    fm_last = st.selectbox("Last Name column", lead_headers, index=_idx(_fm_default.last_name if _fm_default else None))
+    fm_company = st.selectbox("Company column", lead_headers, index=_idx(_fm_default.company if _fm_default else None))
+    fm_cid = st.selectbox("CID column", lead_headers, index=_idx(_fm_default.cid if _fm_default else None))
 else:
-    st.info("Enter a sample New Leads file path above to map its columns.")
+    if profile and profile.field_mapping:
+        st.info("Using the field mapping already saved on this profile. "
+                 "Enter a sample New Leads file path above only if you need to change it.")
+    else:
+        st.info("Enter a sample New Leads file path above to map its columns.")
     fm_email = fm_first = fm_last = fm_company = fm_cid = ""
 
 st.header("Checks")
@@ -81,7 +94,9 @@ exclusion_sheet = None
 if exclusion_enabled and exclusion_path:
     try:
         sheets = list_sheet_names(exclusion_path)
-        exclusion_sheet = st.selectbox("Which sheet holds the exclusion data?", sheets)
+        _exclusion_idx = (sheets.index(profile.exclusion.sheet_name)
+                          if profile and profile.exclusion.sheet_name in sheets else 0)
+        exclusion_sheet = st.selectbox("Which sheet holds the exclusion data?", sheets, index=_exclusion_idx)
     except Exception as exc:
         st.error(f"Could not read sheets from '{exclusion_path}': {exc}")
 
@@ -99,7 +114,9 @@ if tal_enabled and tal_path:
         st.error(f"Could not read sheets from '{tal_path}': {exc}")
         tal_sheets = []
     if tal_enabled and not tal_segmented and tal_sheets:
-        tal_flat_sheet = st.selectbox("TAL sheet", tal_sheets)
+        _tal_flat_idx = (tal_sheets.index(profile.tal.flat_sheet_name)
+                         if profile and profile.tal.flat_sheet_name in tal_sheets else 0)
+        tal_flat_sheet = st.selectbox("TAL sheet", tal_sheets, index=_tal_flat_idx)
     if tal_enabled and tal_segmented and tal_sheets:
         st.caption("Define segments as: name | comma-separated CIDs | sheet name, one per line")
         default_text = "\n".join(f"{s.name}|{','.join(s.cids)}|{s.sheet_name}" for s in (profile.tal.segments if profile else []))
@@ -119,7 +136,10 @@ suppression_sheet = None
 if suppression_enabled and suppression_path:
     try:
         sheets = list_sheet_names(suppression_path)
-        suppression_sheet = st.selectbox("Which sheet holds the suppression data?", sheets, key="suppression_sheet")
+        _suppression_idx = (sheets.index(profile.suppression.sheet_name)
+                            if profile and profile.suppression.sheet_name in sheets else 0)
+        suppression_sheet = st.selectbox("Which sheet holds the suppression data?", sheets,
+                                          index=_suppression_idx, key="suppression_sheet")
     except Exception as exc:
         st.error(f"Could not read sheets from '{suppression_path}': {exc}")
 
@@ -129,7 +149,10 @@ dedupe_sheet = None
 if dedupe_enabled and dedupe_list_path:
     try:
         sheets = list_sheet_names(dedupe_list_path)
-        dedupe_sheet = st.selectbox("Which sheet holds the dedupe list data?", sheets, key="dedupe_sheet")
+        _dedupe_idx = (sheets.index(profile.dedupe_list.sheet_name)
+                       if profile and profile.dedupe_list.sheet_name in sheets else 0)
+        dedupe_sheet = st.selectbox("Which sheet holds the dedupe list data?", sheets,
+                                     index=_dedupe_idx, key="dedupe_sheet")
     except Exception as exc:
         st.error(f"Could not read sheets from '{dedupe_list_path}': {exc}")
 
@@ -137,15 +160,24 @@ if st.button("Save Client Profile"):
     if not client_name:
         st.error("Client name is required.")
     else:
+        if fm_email:
+            new_field_mapping = FieldMapping(email=fm_email, first_name=fm_first, last_name=fm_last,
+                                              company=fm_company, cid=fm_cid)
+        else:
+            # No new sample file was read this session (or it failed to read) — preserve the
+            # existing field mapping rather than silently wiping it out on Save.
+            new_field_mapping = profile.field_mapping if profile else None
+
         new_profile = ClientProfile(
             name=client_name,
             accumulated_report_path=accumulated_path,
+            accumulated_tab_name=accumulated_tab_name or "Accumulated",
+            refund_tab_name=refund_tab_name or "Refund",
             tal_path=tal_path or None,
             exclusion_path=exclusion_path or None,
             suppression_path=suppression_path or None,
             dedupe_list_path=dedupe_list_path or None,
-            field_mapping=FieldMapping(email=fm_email, first_name=fm_first, last_name=fm_last,
-                                        company=fm_company, cid=fm_cid) if fm_email else None,
+            field_mapping=new_field_mapping,
             duplicate=DuplicateConfig(enabled=duplicate_enabled),
             leadcap=LeadcapConfig(enabled=leadcap_enabled, segmented=leadcap_segmented,
                                    flat_cap=int(leadcap_flat_cap) if leadcap_flat_cap else None,

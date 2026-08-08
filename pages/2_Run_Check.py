@@ -51,9 +51,12 @@ if profile.leadcap.enabled:
                 st.error(str(exc))
 
 if st.button("Run Check") and new_leads_file:
+    if profile.field_mapping is None:
+        st.error("This client's profile has no field mapping configured — edit it in Client Setup first.")
+        st.stop()
     try:
         new_leads = pd.read_excel(new_leads_file)
-        accumulated_leads = read_sheet_as_dataframe(profile.accumulated_report_path, "Accumulated")
+        accumulated_leads = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
 
         reference_data: dict = {"purchased_reports": purchased_reports}
         if profile.exclusion.enabled:
@@ -85,7 +88,7 @@ if st.button("Run Check") and new_leads_file:
 
         st.session_state["run_new_leads"] = new_leads
         st.session_state["run_result"] = result
-    except ValueError as exc:
+    except Exception as exc:
         st.error(str(exc))
 
 if "run_result" in st.session_state:
@@ -123,11 +126,11 @@ if "run_result" in st.session_state:
 
         run_date = datetime.date.today().isoformat()
         if result.valid_indices:
-            append_leads(profile.accumulated_report_path, "Accumulated",
+            append_leads(profile.accumulated_report_path, profile.accumulated_tab_name,
                          new_leads.loc[result.valid_indices], profile.field_mapping, run_date)
         if result.refund_reasons:
             refund_indices = list(result.refund_reasons.keys())
-            append_leads(profile.accumulated_report_path, "Refund",
+            append_leads(profile.accumulated_report_path, profile.refund_tab_name,
                          new_leads.loc[refund_indices], profile.field_mapping, run_date,
                          reasons=result.refund_reasons)
 
