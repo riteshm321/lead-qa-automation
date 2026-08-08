@@ -38,6 +38,8 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
     return ClientProfile(
         name=data["name"],
         accumulated_report_path=data["accumulated_report_path"],
+        accumulated_tab_name=data.get("accumulated_tab_name", "Accumulated"),
+        refund_tab_name=data.get("refund_tab_name", "Refund"),
         tal_path=data.get("tal_path"),
         exclusion_path=data.get("exclusion_path"),
         suppression_path=data.get("suppression_path"),
