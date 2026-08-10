@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from core.excel_io import read_sheet_as_dataframe, append_leads, backup_file
-from core.models import ClientProfile, FieldMapping, DuplicateConfig, ExclusionConfig
+from core.models import ClientProfile, FieldMapping, DuplicateConfig, ExclusionConfig, ReferenceSource
 from core.pipeline import run_pipeline
 
 SAMPLE_DIR = "sample_data"
@@ -21,22 +21,24 @@ def accumulated_copy(tmp_path):
 def test_master_output_leads_are_flagged_as_duplicates_against_accumulated(accumulated_copy):
     fm = FieldMapping(email="emailaddress", first_name="firstname", last_name="lastname",
                        company="company", cid="CID")
+    exclusion_path = f"{SAMPLE_DIR}/Basware -Exclusion List.xlsx"
     profile = ClientProfile(
         name="Basware",
         accumulated_report_path=accumulated_copy,
-        exclusion_path=f"{SAMPLE_DIR}/Basware -Exclusion List.xlsx",
         field_mapping=fm,
         duplicate=DuplicateConfig(enabled=True),
-        exclusion=ExclusionConfig(enabled=True, sheet_name="Exclusion"),
+        exclusion=ExclusionConfig(enabled=True, sources=[
+            ReferenceSource(name="Basware Exclusion", file_path=exclusion_path, sheet_name="Exclusion"),
+        ]),
     )
 
     new_leads = pd.read_excel(f"{SAMPLE_DIR}/Master_Output.xlsx")
     accumulated_leads = read_sheet_as_dataframe(accumulated_copy, "Accumulated")
-    exclusion_df = read_sheet_as_dataframe(profile.exclusion_path, "Exclusion")
+    exclusion_df = read_sheet_as_dataframe(exclusion_path, "Exclusion")
 
     result = run_pipeline(
         new_leads, profile, accumulated_leads,
-        reference_data={"exclusion_df": exclusion_df},
+        reference_data={"exclusion_sources": {"Basware Exclusion": exclusion_df}},
         alias_groups=[],
     )
 
