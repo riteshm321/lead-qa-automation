@@ -5,26 +5,38 @@ from core.matching import extract_domain, company_names_match
 from core.models import FieldMapping, ExclusionConfig
 
 
+def _applicable_sources(cid: str, config: ExclusionConfig) -> list:
+    return [s for s in config.sources if not s.cids or cid in s.cids]
+
+
 def check_exclusion(
     new_leads: pd.DataFrame,
     field_mapping: FieldMapping,
     config: ExclusionConfig,
-    exclusion_df: pd.DataFrame,
+    sources_data: dict[str, pd.DataFrame],
     alias_groups: list[list[str]],
 ) -> CheckOutcome:
     outcome = CheckOutcome()
     if not config.enabled:
         return outcome
 
-    domains = set()
-    if config.domain_column in exclusion_df.columns:
-        domains = set(exclusion_df[config.domain_column].astype(str).str.strip().str.lower())
-
-    companies: list[str] = []
-    if config.check_company_name and config.company_column in exclusion_df.columns:
-        companies = list(exclusion_df[config.company_column].astype(str))
-
     for idx, row in new_leads.iterrows():
+        cid = str(row.get(field_mapping.cid, "")).strip()
+        applicable = _applicable_sources(cid, config)
+        if not applicable:
+            continue
+
+        domains: set[str] = set()
+        companies: list[str] = []
+        for source in applicable:
+            df = sources_data.get(source.name)
+            if df is None:
+                continue
+            if config.domain_column in df.columns:
+                domains |= set(df[config.domain_column].astype(str).str.strip().str.lower())
+            if config.check_company_name and config.company_column in df.columns:
+                companies.extend(list(df[config.company_column].astype(str)))
+
         email = str(row.get(field_mapping.email, "") or "")
         domain = extract_domain(email)
         reasons = []
