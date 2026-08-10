@@ -4,7 +4,7 @@ from core.aliases_path import ALIASES_PATH
 from core.excel_io import list_sheet_names
 from core.models import (
     ClientProfile, FieldMapping, DuplicateConfig, LeadcapConfig, LeadcapSegment,
-    ExclusionConfig, TalConfig, TalSegment, SuppressionConfig, DedupeListConfig,
+    ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
@@ -30,7 +30,6 @@ accumulated_tab_name = st.text_input("Accumulated tab name",
 refund_tab_name = st.text_input("Refund tab name",
                                  value=profile.refund_tab_name if profile else "Refund")
 tal_path = st.text_input("TAL file path", value=(profile.tal_path if profile else "") or "")
-exclusion_path = st.text_input("Exclusion List path", value=(profile.exclusion_path if profile else "") or "")
 suppression_path = st.text_input("Suppression List path", value=(profile.suppression_path if profile else "") or "")
 dedupe_list_path = st.text_input("Dedupe List path (optional)", value=(profile.dedupe_list_path if profile else "") or "")
 
@@ -90,15 +89,47 @@ st.subheader("Exclusion")
 exclusion_enabled = st.checkbox("Enable Exclusion check", value=profile.exclusion.enabled if profile else False)
 exclusion_check_company = st.checkbox("Also check Exclusion by company name",
                                        value=profile.exclusion.check_company_name if profile else False)
-exclusion_sheet = None
-if exclusion_enabled and exclusion_path:
-    try:
-        sheets = list_sheet_names(exclusion_path)
-        _exclusion_idx = (sheets.index(profile.exclusion.sheet_name)
-                          if profile and profile.exclusion.sheet_name in sheets else 0)
-        exclusion_sheet = st.selectbox("Which sheet holds the exclusion data?", sheets, index=_exclusion_idx)
-    except Exception as exc:
-        st.error(f"Could not read sheets from '{exclusion_path}': {exc}")
+
+if "exclusion_sources" not in st.session_state:
+    st.session_state["exclusion_sources"] = (
+        [{"name": s.name, "file_path": s.file_path, "sheet_name": s.sheet_name, "cids": ",".join(s.cids)}
+         for s in profile.exclusion.sources]
+        if profile else []
+    )
+
+exclusion_sources_result: list[ReferenceSource] = []
+if exclusion_enabled:
+    if st.button("Add Exclusion Source"):
+        st.session_state["exclusion_sources"].append({"name": "", "file_path": "", "sheet_name": "", "cids": ""})
+
+    remove_exclusion_idx = None
+    for i, src in enumerate(st.session_state["exclusion_sources"]):
+        st.markdown(f"**Exclusion Source {i + 1}**")
+        src["name"] = st.text_input("Name", value=src["name"], key=f"excl_src_name_{i}")
+        src["file_path"] = st.text_input("File path", value=src["file_path"], key=f"excl_src_path_{i}")
+        sheet_options: list[str] = []
+        if src["file_path"]:
+            try:
+                sheet_options = list_sheet_names(src["file_path"])
+            except Exception as exc:
+                st.error(f"Could not read sheets from '{src['file_path']}': {exc}")
+        if sheet_options:
+            sheet_idx = sheet_options.index(src["sheet_name"]) if src["sheet_name"] in sheet_options else 0
+            src["sheet_name"] = st.selectbox("Sheet", sheet_options, index=sheet_idx, key=f"excl_src_sheet_{i}")
+        else:
+            src["sheet_name"] = st.text_input("Sheet name (enter a valid file path above to pick from a list)",
+                                               value=src["sheet_name"], key=f"excl_src_sheet_text_{i}")
+        src["cids"] = st.text_input("CIDs this source applies to (comma-separated, blank = applies to all leads)",
+                                     value=src["cids"], key=f"excl_src_cids_{i}")
+        if st.button("Remove this source", key=f"excl_src_remove_{i}"):
+            remove_exclusion_idx = i
+        exclusion_sources_result.append(ReferenceSource(
+            name=src["name"], file_path=src["file_path"], sheet_name=src["sheet_name"],
+            cids=[c.strip() for c in src["cids"].split(",") if c.strip()],
+        ))
+    if remove_exclusion_idx is not None:
+        st.session_state["exclusion_sources"].pop(remove_exclusion_idx)
+        st.rerun()
 
 st.subheader("TAL")
 tal_enabled = st.checkbox("Enable TAL check", value=profile.tal.enabled if profile else False)
@@ -174,7 +205,6 @@ if st.button("Save Client Profile"):
             accumulated_tab_name=accumulated_tab_name or "Accumulated",
             refund_tab_name=refund_tab_name or "Refund",
             tal_path=tal_path or None,
-            exclusion_path=exclusion_path or None,
             suppression_path=suppression_path or None,
             dedupe_list_path=dedupe_list_path or None,
             field_mapping=new_field_mapping,
@@ -183,7 +213,7 @@ if st.button("Save Client Profile"):
                                    flat_cap=int(leadcap_flat_cap) if leadcap_flat_cap else None,
                                    segments=leadcap_segments),
             exclusion=ExclusionConfig(enabled=exclusion_enabled, check_company_name=exclusion_check_company,
-                                       sheet_name=exclusion_sheet or (profile.exclusion.sheet_name if profile else "Exclusion")),
+                                       sources=exclusion_sources_result),
             tal=TalConfig(enabled=tal_enabled, check_company_name=tal_check_company, segmented=tal_segmented,
                           flat_sheet_name=tal_flat_sheet or (profile.tal.flat_sheet_name if profile else None),
                           segments=tal_segments),
