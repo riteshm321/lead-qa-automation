@@ -86,18 +86,26 @@ if leadcap_enabled and leadcap_segmented:
         name, cids_str, cap_str = [p.strip() for p in line.split("|")]
         leadcap_segments.append(LeadcapSegment(name=name, cids=[c.strip() for c in cids_str.split(",")], cap=int(cap_str)))
 
-st.subheader("Exclusion")
-exclusion_enabled = st.checkbox("Enable Exclusion check", value=profile.exclusion.enabled if profile else False)
-exclusion_check_company = st.checkbox("Also check Exclusion by company name",
-                                       value=profile.exclusion.check_company_name if profile else False)
-
-if "exclusion_sources" not in st.session_state:
+_profile_identity = f"{mode}::{selected_name or ''}"
+if st.session_state.get("_loaded_sources_for") != _profile_identity:
+    st.session_state["_loaded_sources_for"] = _profile_identity
     st.session_state["exclusion_sources"] = (
         [{"id": str(uuid.uuid4()), "name": s.name, "file_path": s.file_path, "sheet_name": s.sheet_name,
           "cids": ",".join(s.cids)}
          for s in profile.exclusion.sources]
         if profile else []
     )
+    st.session_state["tal_sources"] = (
+        [{"id": str(uuid.uuid4()), "name": s.name, "file_path": s.file_path, "sheet_name": s.sheet_name,
+          "cids": ",".join(s.cids)}
+         for s in profile.tal.sources]
+        if profile else []
+    )
+
+st.subheader("Exclusion")
+exclusion_enabled = st.checkbox("Enable Exclusion check", value=profile.exclusion.enabled if profile else False)
+exclusion_check_company = st.checkbox("Also check Exclusion by company name",
+                                       value=profile.exclusion.check_company_name if profile else False)
 
 exclusion_sources_result: list[ReferenceSource] = []
 if exclusion_enabled:
@@ -137,17 +145,12 @@ if exclusion_enabled:
         ]
         st.rerun()
 
+if exclusion_enabled and not exclusion_sources_result:
+    st.warning("Exclusion is enabled but no sources are configured — this check will do nothing.")
+
 st.subheader("TAL")
 tal_enabled = st.checkbox("Enable TAL check", value=profile.tal.enabled if profile else False)
 tal_check_company = st.checkbox("Also check TAL by company name", value=profile.tal.check_company_name if profile else False)
-
-if "tal_sources" not in st.session_state:
-    st.session_state["tal_sources"] = (
-        [{"id": str(uuid.uuid4()), "name": s.name, "file_path": s.file_path, "sheet_name": s.sheet_name,
-          "cids": ",".join(s.cids)}
-         for s in profile.tal.sources]
-        if profile else []
-    )
 
 tal_sources_result: list[ReferenceSource] = []
 if tal_enabled:
@@ -185,6 +188,9 @@ if tal_enabled:
         st.session_state["tal_sources"] = [s for s in st.session_state["tal_sources"] if s["id"] != remove_tal_id]
         st.rerun()
 
+if tal_enabled and not tal_sources_result:
+    st.warning("TAL is enabled but no sources are configured — this check will do nothing.")
+
 st.subheader("Suppression")
 suppression_enabled = st.checkbox("Enable Suppression check", value=profile.suppression.enabled if profile else False)
 suppression_check_domain = st.checkbox("Check Suppression by domain", value=profile.suppression.check_domain if profile else True)
@@ -214,9 +220,28 @@ if dedupe_enabled and dedupe_list_path:
     except Exception as exc:
         st.error(f"Could not read sheets from '{dedupe_list_path}': {exc}")
 
+def _find_source_name_problems(sources: list[ReferenceSource]) -> list[str]:
+    problems: list[str] = []
+    seen: set[str] = set()
+    for src in sources:
+        if not src.name.strip():
+            problems.append("a source has a blank name")
+        elif src.name in seen:
+            problems.append(f"duplicate source name '{src.name}'")
+        else:
+            seen.add(src.name)
+    return problems
+
+
 if st.button("Save Client Profile"):
     if not client_name:
         st.error("Client name is required.")
+    elif exclusion_enabled and (_excl_problems := _find_source_name_problems(exclusion_sources_result)):
+        st.error("Exclusion sources have naming problems: " + "; ".join(_excl_problems) +
+                  ". Each source needs a non-empty, unique name.")
+    elif tal_enabled and (_tal_problems := _find_source_name_problems(tal_sources_result)):
+        st.error("TAL sources have naming problems: " + "; ".join(_tal_problems) +
+                  ". Each source needs a non-empty, unique name.")
     else:
         if fm_email:
             new_field_mapping = FieldMapping(email=fm_email, first_name=fm_first, last_name=fm_last,
