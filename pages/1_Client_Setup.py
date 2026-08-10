@@ -1,3 +1,5 @@
+import uuid
+
 import streamlit as st
 
 from core.aliases_path import ALIASES_PATH
@@ -92,7 +94,8 @@ exclusion_check_company = st.checkbox("Also check Exclusion by company name",
 
 if "exclusion_sources" not in st.session_state:
     st.session_state["exclusion_sources"] = (
-        [{"name": s.name, "file_path": s.file_path, "sheet_name": s.sheet_name, "cids": ",".join(s.cids)}
+        [{"id": str(uuid.uuid4()), "name": s.name, "file_path": s.file_path, "sheet_name": s.sheet_name,
+          "cids": ",".join(s.cids)}
          for s in profile.exclusion.sources]
         if profile else []
     )
@@ -100,13 +103,15 @@ if "exclusion_sources" not in st.session_state:
 exclusion_sources_result: list[ReferenceSource] = []
 if exclusion_enabled:
     if st.button("Add Exclusion Source"):
-        st.session_state["exclusion_sources"].append({"name": "", "file_path": "", "sheet_name": "", "cids": ""})
+        st.session_state["exclusion_sources"].append(
+            {"id": str(uuid.uuid4()), "name": "", "file_path": "", "sheet_name": "", "cids": ""})
 
-    remove_exclusion_idx = None
+    remove_exclusion_id = None
     for i, src in enumerate(st.session_state["exclusion_sources"]):
+        row_id = src["id"]
         st.markdown(f"**Exclusion Source {i + 1}**")
-        src["name"] = st.text_input("Name", value=src["name"], key=f"excl_src_name_{i}")
-        src["file_path"] = st.text_input("File path", value=src["file_path"], key=f"excl_src_path_{i}")
+        src["name"] = st.text_input("Name", value=src["name"], key=f"excl_src_name_{row_id}")
+        src["file_path"] = st.text_input("File path", value=src["file_path"], key=f"excl_src_path_{row_id}")
         sheet_options: list[str] = []
         if src["file_path"]:
             try:
@@ -115,20 +120,22 @@ if exclusion_enabled:
                 st.error(f"Could not read sheets from '{src['file_path']}': {exc}")
         if sheet_options:
             sheet_idx = sheet_options.index(src["sheet_name"]) if src["sheet_name"] in sheet_options else 0
-            src["sheet_name"] = st.selectbox("Sheet", sheet_options, index=sheet_idx, key=f"excl_src_sheet_{i}")
+            src["sheet_name"] = st.selectbox("Sheet", sheet_options, index=sheet_idx, key=f"excl_src_sheet_{row_id}")
         else:
             src["sheet_name"] = st.text_input("Sheet name (enter a valid file path above to pick from a list)",
-                                               value=src["sheet_name"], key=f"excl_src_sheet_text_{i}")
+                                               value=src["sheet_name"], key=f"excl_src_sheet_text_{row_id}")
         src["cids"] = st.text_input("CIDs this source applies to (comma-separated, blank = applies to all leads)",
-                                     value=src["cids"], key=f"excl_src_cids_{i}")
-        if st.button("Remove this source", key=f"excl_src_remove_{i}"):
-            remove_exclusion_idx = i
+                                     value=src["cids"], key=f"excl_src_cids_{row_id}")
+        if st.button("Remove this source", key=f"excl_src_remove_{row_id}"):
+            remove_exclusion_id = row_id
         exclusion_sources_result.append(ReferenceSource(
             name=src["name"], file_path=src["file_path"], sheet_name=src["sheet_name"],
             cids=[c.strip() for c in src["cids"].split(",") if c.strip()],
         ))
-    if remove_exclusion_idx is not None:
-        st.session_state["exclusion_sources"].pop(remove_exclusion_idx)
+    if remove_exclusion_id is not None:
+        st.session_state["exclusion_sources"] = [
+            s for s in st.session_state["exclusion_sources"] if s["id"] != remove_exclusion_id
+        ]
         st.rerun()
 
 st.subheader("TAL")
