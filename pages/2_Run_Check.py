@@ -62,21 +62,19 @@ if st.button("Run Check") and new_leads_file:
 
         reference_data: dict = {"purchased_reports": purchased_reports}
         if profile.exclusion.enabled:
-            exclusion_df = read_sheet_as_dataframe(profile.exclusion_path, profile.exclusion.sheet_name)
-            require_columns(exclusion_df, [profile.exclusion.domain_column], profile.exclusion_path)
-            reference_data["exclusion_df"] = exclusion_df
+            exclusion_sources_data: dict[str, pd.DataFrame] = {}
+            for source in profile.exclusion.sources:
+                df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
+                require_columns(df, [profile.exclusion.domain_column], f"{source.file_path} [{source.sheet_name}]")
+                exclusion_sources_data[source.name] = df
+            reference_data["exclusion_sources"] = exclusion_sources_data
         if profile.tal.enabled:
-            if profile.tal.segmented:
-                tal_sheets = {}
-                for seg in profile.tal.segments:
-                    df = read_sheet_as_dataframe(profile.tal_path, seg.sheet_name)
-                    require_columns(df, [profile.tal.domain_column], f"{profile.tal_path} [{seg.sheet_name}]")
-                    tal_sheets[seg.sheet_name] = df
-                reference_data["tal_sheets"] = tal_sheets
-            else:
-                df = read_sheet_as_dataframe(profile.tal_path, profile.tal.flat_sheet_name)
-                require_columns(df, [profile.tal.domain_column], f"{profile.tal_path} [{profile.tal.flat_sheet_name}]")
-                reference_data["tal_sheets"] = {profile.tal.flat_sheet_name: df}
+            tal_sources_data: dict[str, pd.DataFrame] = {}
+            for source in profile.tal.sources:
+                df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
+                require_columns(df, [profile.tal.domain_column], f"{source.file_path} [{source.sheet_name}]")
+                tal_sources_data[source.name] = df
+            reference_data["tal_sources"] = tal_sources_data
         if profile.suppression.enabled:
             suppression_df = read_sheet_as_dataframe(profile.suppression_path, profile.suppression.sheet_name)
             reference_data["suppression_df"] = suppression_df
