@@ -1,7 +1,7 @@
 import pandas as pd
 
 from core.checks.tal import check_tal
-from core.models import FieldMapping, TalConfig, TalSegment
+from core.models import FieldMapping, TalConfig, ReferenceSource
 
 FM = FieldMapping(email="emailaddress", first_name="firstname", last_name="lastname",
                    company="company", cid="CID")
@@ -10,49 +10,71 @@ TAL_SHEET1 = pd.DataFrame([
     {"Account Name": "Severn Trent Water Limited", "Domain": "stwater.co.uk"},
 ])
 
-TAL_SHEET_BASWARE = pd.DataFrame([
-    {"Account Name": "Basware Oy", "Domain": "basware.com"},
-])
-
 TAL_SHEET_ACME = pd.DataFrame([
     {"Account Name": "Acme Industrial Supply", "Domain": "acme.com"},
 ])
 
+UNIVERSAL_SOURCE = ReferenceSource(name="Global TAL", file_path="tal.xlsx", sheet_name="Sheet1")
+
 
 def test_flat_tal_domain_found_passes():
-    config = TalConfig(enabled=True, segmented=False, flat_sheet_name="Sheet1")
+    config = TalConfig(enabled=True, sources=[UNIVERSAL_SOURCE])
     new_leads = pd.DataFrame([{"emailaddress": "x@stwater.co.uk", "company": "Severn Trent", "CID": "1"}])
 
-    outcome = check_tal(new_leads, FM, config, {"Sheet1": TAL_SHEET1}, alias_groups=[])
+    outcome = check_tal(new_leads, FM, config, {"Global TAL": TAL_SHEET1}, alias_groups=[])
 
     assert outcome.fail == {}
 
 
 def test_flat_tal_domain_not_found_fails():
-    config = TalConfig(enabled=True, segmented=False, flat_sheet_name="Sheet1")
+    config = TalConfig(enabled=True, sources=[UNIVERSAL_SOURCE])
     new_leads = pd.DataFrame([{"emailaddress": "x@notlisted.com", "company": "Not Listed", "CID": "1"}])
 
-    outcome = check_tal(new_leads, FM, config, {"Sheet1": TAL_SHEET1}, alias_groups=[])
+    outcome = check_tal(new_leads, FM, config, {"Global TAL": TAL_SHEET1}, alias_groups=[])
 
     assert outcome.fail[0] == "TAL - not found"
 
 
-def test_segmented_tal_resolves_correct_sheet_by_cid():
-    config = TalConfig(enabled=True, segmented=True, segments=[
-        TalSegment(name="UK Geo", cids=["114578"], sheet_name="UKTab"),
+def test_segmented_tal_resolves_correct_source_by_cid():
+    config = TalConfig(enabled=True, sources=[
+        ReferenceSource(name="UK Geo", file_path="tal_uk.xlsx", sheet_name="UKTab", cids=["114578"]),
     ])
     new_leads = pd.DataFrame([{"emailaddress": "x@stwater.co.uk", "company": "Severn Trent", "CID": "114578"}])
 
-    outcome = check_tal(new_leads, FM, config, {"UKTab": TAL_SHEET1}, alias_groups=[])
+    outcome = check_tal(new_leads, FM, config, {"UK Geo": TAL_SHEET1}, alias_groups=[])
+
+    assert outcome.fail == {}
+
+
+def test_lead_outside_any_segment_cids_is_skipped_not_failed():
+    config = TalConfig(enabled=True, sources=[
+        ReferenceSource(name="UK Geo", file_path="tal_uk.xlsx", sheet_name="UKTab", cids=["114578"]),
+    ])
+    new_leads = pd.DataFrame([{"emailaddress": "x@notlisted.com", "company": "X", "CID": "999999"}])
+
+    outcome = check_tal(new_leads, FM, config, {"UK Geo": TAL_SHEET1}, alias_groups=[])
+
+    assert outcome.fail == {}
+
+
+def test_universal_and_segment_scoped_sources_combine_for_in_scope_lead():
+    universal_df = pd.DataFrame([{"Account Name": "Global Partner", "Domain": "globalpartner.com"}])
+    config = TalConfig(enabled=True, sources=[
+        ReferenceSource(name="Global", file_path="global.xlsx", sheet_name="Sheet1"),
+        ReferenceSource(name="UK Geo", file_path="tal_uk.xlsx", sheet_name="UKTab", cids=["114578"]),
+    ])
+    new_leads = pd.DataFrame([{"emailaddress": "x@stwater.co.uk", "company": "Severn Trent", "CID": "114578"}])
+
+    outcome = check_tal(new_leads, FM, config, {"Global": universal_df, "UK Geo": TAL_SHEET1}, alias_groups=[])
 
     assert outcome.fail == {}
 
 
 def test_company_name_required_and_not_found_fails_even_with_domain_match():
-    config = TalConfig(enabled=True, segmented=False, flat_sheet_name="Sheet1", check_company_name=True)
+    config = TalConfig(enabled=True, sources=[UNIVERSAL_SOURCE], check_company_name=True)
     new_leads = pd.DataFrame([{"emailaddress": "x@stwater.co.uk", "company": "Totally Different Co", "CID": "1"}])
 
-    outcome = check_tal(new_leads, FM, config, {"Sheet1": TAL_SHEET1}, alias_groups=[])
+    outcome = check_tal(new_leads, FM, config, {"Global TAL": TAL_SHEET1}, alias_groups=[])
 
     assert outcome.fail[0] == "TAL - company not found"
 
@@ -67,10 +89,12 @@ def test_disabled_check_produces_no_failures():
 
 
 def test_company_name_gray_zone_fuzzy_match_goes_to_review():
-    config = TalConfig(enabled=True, segmented=False, flat_sheet_name="Sheet1", check_company_name=True)
+    config = TalConfig(enabled=True, sources=[
+        ReferenceSource(name="Acme Source", file_path="acme.xlsx", sheet_name="Sheet1"),
+    ], check_company_name=True)
     new_leads = pd.DataFrame([{"emailaddress": "x@acme.com", "company": "Acme Industries", "CID": "1"}])
 
-    outcome = check_tal(new_leads, FM, config, {"Sheet1": TAL_SHEET_ACME}, alias_groups=[])
+    outcome = check_tal(new_leads, FM, config, {"Acme Source": TAL_SHEET_ACME}, alias_groups=[])
 
     assert 0 not in outcome.fail, "Lead should not fail when company name is a gray-zone match"
     assert outcome.review[0] == "TAL - company name ambiguous match"
