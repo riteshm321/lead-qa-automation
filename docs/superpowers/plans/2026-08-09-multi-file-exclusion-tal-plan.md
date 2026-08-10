@@ -1040,7 +1040,8 @@ tal_check_company = st.checkbox("Also check TAL by company name", value=profile.
 
 if "tal_sources" not in st.session_state:
     st.session_state["tal_sources"] = (
-        [{"name": s.name, "file_path": s.file_path, "sheet_name": s.sheet_name, "cids": ",".join(s.cids)}
+        [{"id": str(uuid.uuid4()), "name": s.name, "file_path": s.file_path, "sheet_name": s.sheet_name,
+          "cids": ",".join(s.cids)}
          for s in profile.tal.sources]
         if profile else []
     )
@@ -1048,13 +1049,15 @@ if "tal_sources" not in st.session_state:
 tal_sources_result: list[ReferenceSource] = []
 if tal_enabled:
     if st.button("Add TAL Source"):
-        st.session_state["tal_sources"].append({"name": "", "file_path": "", "sheet_name": "", "cids": ""})
+        st.session_state["tal_sources"].append(
+            {"id": str(uuid.uuid4()), "name": "", "file_path": "", "sheet_name": "", "cids": ""})
 
-    remove_tal_idx = None
-    for i, src in enumerate(st.session_state["tal_sources"]):
-        st.markdown(f"**TAL Source {i + 1}**")
-        src["name"] = st.text_input("Name", value=src["name"], key=f"tal_src_name_{i}")
-        src["file_path"] = st.text_input("File path", value=src["file_path"], key=f"tal_src_path_{i}")
+    remove_tal_id = None
+    for src in st.session_state["tal_sources"]:
+        row_id = src["id"]
+        st.markdown(f"**TAL Source: {src['name'] or '(unnamed)'}**")
+        src["name"] = st.text_input("Name", value=src["name"], key=f"tal_src_name_{row_id}")
+        src["file_path"] = st.text_input("File path", value=src["file_path"], key=f"tal_src_path_{row_id}")
         sheet_options: list[str] = []
         if src["file_path"]:
             try:
@@ -1063,22 +1066,24 @@ if tal_enabled:
                 st.error(f"Could not read sheets from '{src['file_path']}': {exc}")
         if sheet_options:
             sheet_idx = sheet_options.index(src["sheet_name"]) if src["sheet_name"] in sheet_options else 0
-            src["sheet_name"] = st.selectbox("Sheet", sheet_options, index=sheet_idx, key=f"tal_src_sheet_{i}")
+            src["sheet_name"] = st.selectbox("Sheet", sheet_options, index=sheet_idx, key=f"tal_src_sheet_{row_id}")
         else:
             src["sheet_name"] = st.text_input("Sheet name (enter a valid file path above to pick from a list)",
-                                               value=src["sheet_name"], key=f"tal_src_sheet_text_{i}")
+                                               value=src["sheet_name"], key=f"tal_src_sheet_text_{row_id}")
         src["cids"] = st.text_input("CIDs this source applies to (comma-separated, blank = applies to all leads)",
-                                     value=src["cids"], key=f"tal_src_cids_{i}")
-        if st.button("Remove this source", key=f"tal_src_remove_{i}"):
-            remove_tal_idx = i
+                                     value=src["cids"], key=f"tal_src_cids_{row_id}")
+        if st.button("Remove this source", key=f"tal_src_remove_{row_id}"):
+            remove_tal_id = row_id
         tal_sources_result.append(ReferenceSource(
             name=src["name"], file_path=src["file_path"], sheet_name=src["sheet_name"],
             cids=[c.strip() for c in src["cids"].split(",") if c.strip()],
         ))
-    if remove_tal_idx is not None:
-        st.session_state["tal_sources"].pop(remove_tal_idx)
+    if remove_tal_id is not None:
+        st.session_state["tal_sources"] = [s for s in st.session_state["tal_sources"] if s["id"] != remove_tal_id]
         st.rerun()
 ```
+
+Note: this uses `uuid.uuid4()` to give each row a stable identity so widget state survives row removal correctly — Streamlit ties widget state to its `key`, not to the `value=` passed in, so keying widgets by loop index (as an earlier draft of this plan did for the Exclusion section in Task 5) causes remaining rows' data to scramble when a non-last row is removed. Task 5's Exclusion section was fixed to this same stable-ID pattern after a task review caught the bug — make sure `import uuid` is present near the top of the file (Task 5's fix should have already added it; if it's there, don't add it twice).
 
 - [ ] **Step 2: Update the Save button's `TalConfig` construction**
 
