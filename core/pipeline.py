@@ -39,11 +39,11 @@ def run_pipeline(
 
     if profile.exclusion.enabled:
         merge(exclusion.check_exclusion(new_leads, fm, profile.exclusion,
-                                         reference_data.get("exclusion_df", pd.DataFrame()), alias_groups))
+                                         reference_data.get("exclusion_sources", {}), alias_groups))
 
     if profile.tal.enabled:
         merge(tal.check_tal(new_leads, fm, profile.tal,
-                             reference_data.get("tal_sheets", {}), alias_groups))
+                             reference_data.get("tal_sources", {}), alias_groups))
 
     if profile.suppression.enabled:
         merge(suppression.check_suppression(new_leads, fm, profile.suppression,

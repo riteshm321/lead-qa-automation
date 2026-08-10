@@ -2,7 +2,7 @@ import pandas as pd
 
 from core.pipeline import run_pipeline
 from core.models import (
-    ClientProfile, FieldMapping, DuplicateConfig, ExclusionConfig, LeadcapConfig,
+    ClientProfile, FieldMapping, DuplicateConfig, ExclusionConfig, ReferenceSource,
 )
 
 FM = FieldMapping(email="emailaddress", first_name="firstname", last_name="lastname",
@@ -34,7 +34,9 @@ def test_valid_lead_passes_through_with_no_checks_enabled():
 def test_lead_failing_duplicate_and_exclusion_lists_both_reasons():
     profile = _profile(
         duplicate=DuplicateConfig(enabled=True),
-        exclusion=ExclusionConfig(enabled=True, sheet_name="Exclusion"),
+        exclusion=ExclusionConfig(enabled=True, sources=[
+            ReferenceSource(name="Global", file_path="unused.xlsx", sheet_name="Exclusion"),
+        ]),
     )
     new_leads = pd.DataFrame([{"emailaddress": "a@excluded.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1"}])
     accumulated = pd.DataFrame([{"emailaddress": "a@excluded.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1"}])
@@ -42,7 +44,7 @@ def test_lead_failing_duplicate_and_exclusion_lists_both_reasons():
 
     result = run_pipeline(
         new_leads, profile, accumulated,
-        reference_data={"exclusion_df": exclusion_df},
+        reference_data={"exclusion_sources": {"Global": exclusion_df}},
         alias_groups=[],
     )
 
@@ -66,7 +68,9 @@ def test_review_item_excluded_from_valid_and_refund():
 def test_fail_takes_precedence_over_review_for_same_lead():
     profile = _profile(
         duplicate=DuplicateConfig(enabled=True),
-        exclusion=ExclusionConfig(enabled=True, sheet_name="Exclusion"),
+        exclusion=ExclusionConfig(enabled=True, sources=[
+            ReferenceSource(name="Global", file_path="unused.xlsx", sheet_name="Exclusion"),
+        ]),
     )
     new_leads = pd.DataFrame([{"emailaddress": "andy@excluded.com", "firstname": "Andy", "lastname": "Jones", "company": "Unrelated", "CID": "1"}])
     accumulated = pd.DataFrame([{"emailaddress": "andy@google.com", "firstname": "Andy", "lastname": "Jones", "company": "Google", "CID": "1"}])
@@ -74,7 +78,7 @@ def test_fail_takes_precedence_over_review_for_same_lead():
 
     result = run_pipeline(
         new_leads, profile, accumulated,
-        reference_data={"exclusion_df": exclusion_df},
+        reference_data={"exclusion_sources": {"Global": exclusion_df}},
         alias_groups=[],
     )
 
