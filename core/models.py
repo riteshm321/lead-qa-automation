@@ -29,19 +29,18 @@ class LeadcapConfig:
 
 
 @dataclass
-class TalSegment:
+class ReferenceSource:
     name: str
-    cids: list[str]
+    file_path: str
     sheet_name: str
+    cids: list[str] = field(default_factory=list)
 
 
 @dataclass
 class TalConfig:
     enabled: bool = False
     check_company_name: bool = False
-    segmented: bool = False
-    flat_sheet_name: Optional[str] = None
-    segments: list[TalSegment] = field(default_factory=list)
+    sources: list[ReferenceSource] = field(default_factory=list)
     domain_column: str = "Domain"
     company_column: str = "Account Name"
 
@@ -50,7 +49,7 @@ class TalConfig:
 class ExclusionConfig:
     enabled: bool = False
     check_company_name: bool = False
-    sheet_name: str = "Exclusion"
+    sources: list[ReferenceSource] = field(default_factory=list)
     domain_column: str = "Domain"
     company_column: str = "Account Name"
 
@@ -85,8 +84,6 @@ class ClientProfile:
     accumulated_report_path: str
     accumulated_tab_name: str = "Accumulated"
     refund_tab_name: str = "Refund"
-    tal_path: Optional[str] = None
-    exclusion_path: Optional[str] = None
     suppression_path: Optional[str] = None
     dedupe_list_path: Optional[str] = None
     field_mapping: Optional[FieldMapping] = None

@@ -1,6 +1,6 @@
 from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
-    TalConfig, TalSegment, ExclusionConfig,
+    TalConfig, ExclusionConfig, ReferenceSource,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
@@ -9,15 +9,21 @@ def _sample_profile() -> ClientProfile:
     return ClientProfile(
         name="Basware",
         accumulated_report_path="sample_data/Basware APAC – Accumulated Report.xlsx",
-        exclusion_path="sample_data/Basware -Exclusion List.xlsx",
         field_mapping=FieldMapping(email="emailaddress", first_name="firstname",
                                     last_name="lastname", company="company", cid="CID"),
         leadcap=LeadcapConfig(enabled=True, segmented=True, segments=[
             LeadcapSegment(name="AU Geo", cids=["114578"], cap=8),
             LeadcapSegment(name="IN Geo", cids=["114568"], cap=5),
         ]),
-        tal=TalConfig(enabled=True, segmented=False, flat_sheet_name="Sheet1"),
-        exclusion=ExclusionConfig(enabled=True, sheet_name="Exclusion"),
+        tal=TalConfig(enabled=True, sources=[
+            ReferenceSource(name="Global TAL", file_path="sample_data/tal.xlsx", sheet_name="Sheet1"),
+        ]),
+        exclusion=ExclusionConfig(enabled=True, sources=[
+            ReferenceSource(name="Global Exclusion", file_path="sample_data/Basware -Exclusion List.xlsx",
+                             sheet_name="Exclusion"),
+            ReferenceSource(name="EMEA Exclusion", file_path="sample_data/emea_exclusion.xlsx",
+                             sheet_name="Sheet1", cids=["114578", "114579"]),
+        ]),
     )
 
 
