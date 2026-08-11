@@ -140,10 +140,24 @@ mode = st.radio("Mode", ["Create new client", "Edit existing client"])
 
 if mode == "Edit existing client" and existing:
     selected_name = st.selectbox("Client", existing)
-    profile = load_profile(selected_name)
+    try:
+        profile = load_profile(selected_name)
+    except TypeError as exc:
+        st.error(f"Could not load the profile for '{selected_name}' — it may be in an older format. "
+                 f"Delete and re-create it in Client Setup. (Technical detail: {exc})")
+        st.stop()
 else:
     selected_name = None
     profile = None
+
+_profile_identity = f"{mode}::{selected_name or ''}"
+if st.session_state.get("_loaded_sources_for") != _profile_identity:
+    st.session_state["_loaded_sources_for"] = _profile_identity
+    st.session_state["exclusion_sources"] = _sources_to_state(profile.exclusion.sources) if profile else []
+    st.session_state["tal_sources"] = _sources_to_state(profile.tal.sources) if profile else []
+    st.session_state["suppression_sources"] = _sources_to_state(profile.suppression.sources) if profile else []
+    st.session_state["dedupe_sources"] = _sources_to_state(profile.dedupe_list.sources) if profile else []
+    st.session_state["accumulated_path_input"] = profile.accumulated_report_path if profile else ""
 
 client_name = st.text_input("Client name", value=profile.name if profile else "")
 
@@ -167,6 +181,7 @@ leadcap_check_company = st.checkbox("Also check Leadcap by company name",
 leadcap_segmented = st.checkbox("Leadcap is segmented by CID", value=profile.leadcap.segmented if profile else False)
 leadcap_flat_cap = None
 leadcap_segments: list[LeadcapSegment] = []
+leadcap_blank_cap_segments: list[str] = []
 if leadcap_enabled and not leadcap_segmented:
     leadcap_flat_cap = st.number_input("Flat lead cap", min_value=0, step=1,
                                         value=profile.leadcap.flat_cap if profile and profile.leadcap.flat_cap else 0)
@@ -185,16 +200,13 @@ if leadcap_enabled and leadcap_segmented:
         if not line.strip():
             continue
         name, cids_str, cap_str = [p.strip() for p in line.split("|")]
-        leadcap_segments.append(LeadcapSegment(name=name, cids=[c.strip() for c in cids_str.split(",")],
-                                                 cap=int(cap_str) if cap_str else 0))
-
-_profile_identity = f"{mode}::{selected_name or ''}"
-if st.session_state.get("_loaded_sources_for") != _profile_identity:
-    st.session_state["_loaded_sources_for"] = _profile_identity
-    st.session_state["exclusion_sources"] = _sources_to_state(profile.exclusion.sources) if profile else []
-    st.session_state["tal_sources"] = _sources_to_state(profile.tal.sources) if profile else []
-    st.session_state["suppression_sources"] = _sources_to_state(profile.suppression.sources) if profile else []
-    st.session_state["dedupe_sources"] = _sources_to_state(profile.dedupe_list.sources) if profile else []
+        if not cap_str:
+            leadcap_blank_cap_segments.append(name or "(unnamed)")
+            leadcap_segments.append(LeadcapSegment(name=name, cids=[c.strip() for c in cids_str.split(",")],
+                                                     cap=0))
+        else:
+            leadcap_segments.append(LeadcapSegment(name=name, cids=[c.strip() for c in cids_str.split(",")],
+                                                     cap=int(cap_str)))
 
 st.subheader("Exclusion")
 exclusion_enabled = st.checkbox("Enable Exclusion check", value=profile.exclusion.enabled if profile else False)
@@ -259,6 +271,10 @@ if st.button("Save Client Profile"):
 
     if not client_name:
         st.error("Client name is required.")
+    elif leadcap_enabled and leadcap_segmented and leadcap_blank_cap_segments:
+        st.error("Leadcap segments are missing a cap: " + ", ".join(leadcap_blank_cap_segments) +
+                  ". Fill in a cap for every segment before saving (this is required after using "
+                  "'Detect CIDs from Accumulated Report', which leaves caps blank).")
     elif _name_error:
         st.error(_name_error)
     else:
@@ -273,14 +289,18 @@ if st.button("Save Client Profile"):
                                    flat_cap=int(leadcap_flat_cap) if leadcap_flat_cap else None,
                                    segments=leadcap_segments, check_company_name=leadcap_check_company),
             exclusion=ExclusionConfig(enabled=exclusion_enabled, check_company_name=exclusion_check_company,
-                                       sources=exclusion_sources_result),
+                                       sources=exclusion_sources_result if exclusion_enabled else (
+                                           profile.exclusion.sources if profile else [])),
             tal=TalConfig(enabled=tal_enabled, check_company_name=tal_check_company,
-                          sources=tal_sources_result),
+                          sources=tal_sources_result if tal_enabled else (
+                              profile.tal.sources if profile else [])),
             suppression=SuppressionConfig(enabled=suppression_enabled, check_domain=suppression_check_domain,
                                            check_company_name=suppression_check_company,
                                            check_email=suppression_check_email,
-                                           sources=suppression_sources_result),
-            dedupe_list=DedupeListConfig(enabled=dedupe_enabled, sources=dedupe_sources_result),
+                                           sources=suppression_sources_result if suppression_enabled else (
+                                               profile.suppression.sources if profile else [])),
+            dedupe_list=DedupeListConfig(enabled=dedupe_enabled, sources=dedupe_sources_result if dedupe_enabled else (
+                profile.dedupe_list.sources if profile else [])),
         )
         saved_path = save_profile(new_profile)
         st.success(f"Saved profile to {saved_path}")

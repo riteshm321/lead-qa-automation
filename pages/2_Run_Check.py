@@ -20,7 +20,12 @@ if not profile_names:
     st.stop()
 
 client_name = st.selectbox("Client", profile_names)
-profile = load_profile(client_name)
+try:
+    profile = load_profile(client_name)
+except TypeError as exc:
+    st.error(f"Could not load the profile for '{client_name}' — it may be in an older format. "
+             f"Delete and re-create it in Client Setup. (Technical detail: {exc})")
+    st.stop()
 
 new_leads_file = st.file_uploader("New Leads file", type=["xlsx"])
 
@@ -102,14 +107,20 @@ if st.button("Run Check") and new_leads_file:
             exclusion_sources_data: dict[str, pd.DataFrame] = {}
             for source in profile.exclusion.sources:
                 df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                require_columns(df, [source.domain_column], f"{source.file_path} [{source.sheet_name}]")
+                required_cols = [source.domain_column]
+                if profile.exclusion.check_company_name:
+                    required_cols.append(source.company_column)
+                require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
                 exclusion_sources_data[source.name] = df
             reference_data["exclusion_sources"] = exclusion_sources_data
         if profile.tal.enabled:
             tal_sources_data: dict[str, pd.DataFrame] = {}
             for source in profile.tal.sources:
                 df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                require_columns(df, [source.domain_column], f"{source.file_path} [{source.sheet_name}]")
+                required_cols = [source.domain_column]
+                if profile.tal.check_company_name:
+                    required_cols.append(source.company_column)
+                require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
                 tal_sources_data[source.name] = df
             reference_data["tal_sources"] = tal_sources_data
         if profile.suppression.enabled:
