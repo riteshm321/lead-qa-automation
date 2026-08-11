@@ -119,6 +119,8 @@ if st.button("Run Check") and new_leads_file:
                 required_cols = []
                 if profile.suppression.check_domain:
                     required_cols.append(source.domain_column)
+                if profile.suppression.check_company_name:
+                    required_cols.append(source.company_column)
                 if profile.suppression.check_email:
                     required_cols.append(source.email_column)
                 if required_cols:
