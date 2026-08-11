@@ -61,3 +61,59 @@ def test_require_columns_raises_clear_error_naming_file_and_column(tmp_path):
     message = str(exc_info.value)
     assert path in message
     assert "Email" in message
+
+
+def test_detect_cids_from_pacing_overview_handles_offset_layout(tmp_path):
+    from core.excel_io import detect_cids_from_pacing_overview
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing Overview"
+    # Real sheets often have their used range start at B2, not A1 — header row 3.
+    ws["B2"] = "Pacing Overview"
+    ws["B3"] = "SR No"
+    ws["C3"] = "CID"
+    ws["D3"] = "Campaign Segment"
+    ws["C4"] = "118118"
+    ws["D4"] = "APAC Mgr+ Q3"
+    ws["C5"] = "118119"
+    ws["D5"] = "EMEA Mgr+ Q3"
+    ws["C6"] = "Grand Total"
+    wb.save(path)
+
+    pairs = detect_cids_from_pacing_overview(path)
+
+    assert pairs == [("118118", "APAC Mgr+ Q3"), ("118119", "EMEA Mgr+ Q3")]
+
+
+def test_detect_cids_from_pacing_overview_raises_clear_error_when_no_cid_header(tmp_path):
+    from core.excel_io import detect_cids_from_pacing_overview
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing Overview"
+    ws["A1"] = "Nothing relevant here"
+    wb.save(path)
+
+    try:
+        detect_cids_from_pacing_overview(path)
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "CID" in str(exc)
+
+
+def test_detect_cids_from_pacing_overview_raises_clear_error_when_sheet_missing(tmp_path):
+    from core.excel_io import detect_cids_from_pacing_overview
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "SomeOtherSheet"
+    wb.save(path)
+
+    try:
+        detect_cids_from_pacing_overview(path)
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "Pacing Overview" in str(exc)
