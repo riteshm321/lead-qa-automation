@@ -32,10 +32,10 @@ def check_exclusion(
             df = sources_data.get(source.name)
             if df is None:
                 continue
-            if config.domain_column in df.columns:
-                domains |= set(df[config.domain_column].astype(str).str.strip().str.lower())
-            if config.check_company_name and config.company_column in df.columns:
-                companies.extend(list(df[config.company_column].astype(str)))
+            if source.domain_column in df.columns:
+                domains |= set(df[source.domain_column].astype(str).str.strip().str.lower())
+            if config.check_company_name and source.company_column in df.columns:
+                companies.extend(list(df[source.company_column].astype(str)))
 
         email = str(row.get(field_mapping.email, "") or "")
         domain = extract_domain(email)

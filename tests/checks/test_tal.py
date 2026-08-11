@@ -98,3 +98,18 @@ def test_company_name_gray_zone_fuzzy_match_goes_to_review():
 
     assert 0 not in outcome.fail, "Lead should not fail when company name is a gray-zone match"
     assert outcome.review[0] == "TAL - company name ambiguous match"
+
+
+def test_sources_with_different_column_names_each_use_their_own():
+    df_a = pd.DataFrame([{"Domain": "a.com", "Account Name": "A Co"}])
+    df_b = pd.DataFrame([{"Website": "b.com", "Company": "B Co"}])
+    config = TalConfig(enabled=True, sources=[
+        ReferenceSource(name="A", file_path="a.xlsx", sheet_name="Sheet1"),
+        ReferenceSource(name="B", file_path="b.xlsx", sheet_name="Sheet1",
+                         domain_column="Website", company_column="Company"),
+    ])
+    new_leads = pd.DataFrame([{"emailaddress": "x@b.com", "company": "B Co", "CID": "1"}])
+
+    outcome = check_tal(new_leads, FM, config, {"A": df_a, "B": df_b}, alias_groups=[])
+
+    assert outcome.fail == {}

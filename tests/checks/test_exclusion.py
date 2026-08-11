@@ -89,3 +89,18 @@ def test_universal_and_segment_scoped_sources_combine_for_in_scope_lead():
     outcome = check_exclusion(new_leads, FM, config, {"Global": universal_df, "EMEA": emea_df}, alias_groups=[])
 
     assert outcome.fail[0] == "Exclusion - domain"
+
+
+def test_sources_with_different_column_names_each_use_their_own():
+    df_a = pd.DataFrame([{"Domain": "a.com", "Account Name": "A Co"}])
+    df_b = pd.DataFrame([{"Website": "b.com", "Company": "B Co"}])
+    config = ExclusionConfig(enabled=True, sources=[
+        ReferenceSource(name="A", file_path="a.xlsx", sheet_name="Sheet1"),
+        ReferenceSource(name="B", file_path="b.xlsx", sheet_name="Sheet1",
+                         domain_column="Website", company_column="Company"),
+    ])
+    new_leads = pd.DataFrame([{"emailaddress": "x@b.com", "company": "B Co", "CID": "1"}])
+
+    outcome = check_exclusion(new_leads, FM, config, {"A": df_a, "B": df_b}, alias_groups=[])
+
+    assert outcome.fail[0] == "Exclusion - domain"
