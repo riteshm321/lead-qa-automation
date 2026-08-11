@@ -5,30 +5,41 @@ from core.matching import extract_domain, company_names_match
 from core.models import FieldMapping, SuppressionConfig
 
 
+def _applicable_sources(cid: str, config: SuppressionConfig) -> list:
+    return [s for s in config.sources if not s.cids or cid in s.cids]
+
+
 def check_suppression(
     new_leads: pd.DataFrame,
     field_mapping: FieldMapping,
     config: SuppressionConfig,
-    suppression_df: pd.DataFrame,
+    sources_data: dict[str, pd.DataFrame],
     alias_groups: list[list[str]],
 ) -> CheckOutcome:
     outcome = CheckOutcome()
     if not config.enabled:
         return outcome
 
-    domains = set()
-    if config.check_domain and config.domain_column in suppression_df.columns:
-        domains = set(suppression_df[config.domain_column].astype(str).str.strip().str.lower())
-
-    emails = set()
-    if config.check_email and config.email_column in suppression_df.columns:
-        emails = set(suppression_df[config.email_column].astype(str).str.strip().str.lower())
-
-    companies: list[str] = []
-    if config.check_company_name and config.company_column in suppression_df.columns:
-        companies = list(suppression_df[config.company_column].astype(str))
-
     for idx, row in new_leads.iterrows():
+        cid = str(row.get(field_mapping.cid, "")).strip()
+        applicable = _applicable_sources(cid, config)
+        if not applicable:
+            continue
+
+        domains: set[str] = set()
+        emails: set[str] = set()
+        companies: list[str] = []
+        for source in applicable:
+            df = sources_data.get(source.name)
+            if df is None:
+                continue
+            if config.check_domain and source.domain_column in df.columns:
+                domains |= set(df[source.domain_column].astype(str).str.strip().str.lower())
+            if config.check_email and source.email_column in df.columns:
+                emails |= set(df[source.email_column].astype(str).str.strip().str.lower())
+            if config.check_company_name and source.company_column in df.columns:
+                companies.extend(list(df[source.company_column].astype(str)))
+
         email = str(row.get(field_mapping.email, "") or "").strip().lower()
         domain = extract_domain(email)
         reasons = []
