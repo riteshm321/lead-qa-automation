@@ -158,6 +158,9 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
     st.session_state["suppression_sources"] = _sources_to_state(profile.suppression.sources) if profile else []
     st.session_state["dedupe_sources"] = _sources_to_state(profile.dedupe_list.sources) if profile else []
     st.session_state["accumulated_path_input"] = profile.accumulated_report_path if profile else ""
+    st.session_state["leadcap_segments_text"] = (
+        "\n".join(f"{s.name}|{','.join(s.cids)}|{s.cap}" for s in profile.leadcap.segments) if profile else ""
+    )
 
 client_name = st.text_input("Client name", value=profile.name if profile else "")
 
