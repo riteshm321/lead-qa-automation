@@ -38,20 +38,24 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
     tal = data.get("tal") or {}
     tal["sources"] = [ReferenceSource(**s) for s in tal.get("sources", [])]
 
+    suppression = data.get("suppression") or {}
+    suppression["sources"] = [ReferenceSource(**s) for s in suppression.get("sources", [])]
+
+    dedupe_list = data.get("dedupe_list") or {}
+    dedupe_list["sources"] = [ReferenceSource(**s) for s in dedupe_list.get("sources", [])]
+
     return ClientProfile(
         name=data["name"],
         accumulated_report_path=data["accumulated_report_path"],
         accumulated_tab_name=data.get("accumulated_tab_name", "Accumulated"),
         refund_tab_name=data.get("refund_tab_name", "Refund"),
-        suppression_path=data.get("suppression_path"),
-        dedupe_list_path=data.get("dedupe_list_path"),
         field_mapping=field_mapping,
         duplicate=DuplicateConfig(**(data.get("duplicate") or {})),
         leadcap=LeadcapConfig(**leadcap),
         exclusion=ExclusionConfig(**exclusion),
         tal=TalConfig(**tal),
-        suppression=SuppressionConfig(**(data.get("suppression") or {})),
-        dedupe_list=DedupeListConfig(**(data.get("dedupe_list") or {})),
+        suppression=SuppressionConfig(**suppression),
+        dedupe_list=DedupeListConfig(**dedupe_list),
     )
 
 

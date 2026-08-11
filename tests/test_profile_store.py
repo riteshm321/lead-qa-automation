@@ -1,6 +1,6 @@
 from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
-    TalConfig, ExclusionConfig, ReferenceSource,
+    TalConfig, ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
@@ -11,7 +11,7 @@ def _sample_profile() -> ClientProfile:
         accumulated_report_path="sample_data/Basware APAC – Accumulated Report.xlsx",
         field_mapping=FieldMapping(email="emailaddress", first_name="firstname",
                                     last_name="lastname", company="company", cid="CID"),
-        leadcap=LeadcapConfig(enabled=True, segmented=True, segments=[
+        leadcap=LeadcapConfig(enabled=True, segmented=True, check_company_name=True, segments=[
             LeadcapSegment(name="AU Geo", cids=["114578"], cap=8),
             LeadcapSegment(name="IN Geo", cids=["114568"], cap=5),
         ]),
@@ -22,7 +22,14 @@ def _sample_profile() -> ClientProfile:
             ReferenceSource(name="Global Exclusion", file_path="sample_data/Basware -Exclusion List.xlsx",
                              sheet_name="Exclusion"),
             ReferenceSource(name="EMEA Exclusion", file_path="sample_data/emea_exclusion.xlsx",
-                             sheet_name="Sheet1", cids=["114578", "114579"]),
+                             sheet_name="Sheet1", cids=["114578", "114579"],
+                             domain_column="Website", company_column="Company"),
+        ]),
+        suppression=SuppressionConfig(enabled=True, check_domain=True, sources=[
+            ReferenceSource(name="Global Suppression", file_path="sample_data/suppression.xlsx", sheet_name="Sheet1"),
+        ]),
+        dedupe_list=DedupeListConfig(enabled=True, sources=[
+            ReferenceSource(name="Global Dedupe", file_path="sample_data/dedupe.xlsx", sheet_name="Sheet1"),
         ]),
     )
 

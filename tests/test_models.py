@@ -1,6 +1,6 @@
 from core.models import (
     FieldMapping, LeadcapSegment, LeadcapConfig, TalConfig,
-    ExclusionConfig, ReferenceSource, SuppressionConfig, DuplicateConfig, DedupeListConfig,
+    ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, DuplicateConfig,
     ClientProfile,
 )
 from core.check_result import CheckOutcome
@@ -18,6 +18,8 @@ def test_client_profile_defaults():
     assert profile.leadcap.enabled is False
     assert profile.tal.sources == []
     assert profile.exclusion.sources == []
+    assert profile.suppression.sources == []
+    assert profile.dedupe_list.sources == []
     assert profile.field_mapping.email == "emailaddress"
 
 
@@ -30,6 +32,13 @@ def test_leadcap_segment_equality():
 def test_reference_source_defaults_to_applying_everywhere():
     source = ReferenceSource(name="Global", file_path="x.xlsx", sheet_name="Sheet1")
     assert source.cids == []
+
+
+def test_reference_source_column_defaults():
+    source = ReferenceSource(name="Global", file_path="x.xlsx", sheet_name="Sheet1")
+    assert source.domain_column == "Domain"
+    assert source.company_column == "Account Name"
+    assert source.email_column == "Email"
 
 
 def test_reference_source_equality():

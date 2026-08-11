@@ -36,6 +36,9 @@ class ReferenceSource:
     file_path: str
     sheet_name: str
     cids: list[str] = field(default_factory=list)
+    domain_column: str = "Domain"
+    company_column: str = "Account Name"
+    email_column: str = "Email"
 
 
 @dataclass
@@ -43,8 +46,6 @@ class TalConfig:
     enabled: bool = False
     check_company_name: bool = False
     sources: list[ReferenceSource] = field(default_factory=list)
-    domain_column: str = "Domain"
-    company_column: str = "Account Name"
 
 
 @dataclass
@@ -52,8 +53,6 @@ class ExclusionConfig:
     enabled: bool = False
     check_company_name: bool = False
     sources: list[ReferenceSource] = field(default_factory=list)
-    domain_column: str = "Domain"
-    company_column: str = "Account Name"
 
 
 @dataclass
@@ -62,10 +61,7 @@ class SuppressionConfig:
     check_domain: bool = False
     check_company_name: bool = False
     check_email: bool = False
-    sheet_name: str = "Sheet1"
-    domain_column: str = "Domain"
-    company_column: str = "Account Name"
-    email_column: str = "Email"
+    sources: list[ReferenceSource] = field(default_factory=list)
 
 
 @dataclass
@@ -76,8 +72,7 @@ class DuplicateConfig:
 @dataclass
 class DedupeListConfig:
     enabled: bool = False
-    sheet_name: str = "Sheet1"
-    email_column: str = "Email"
+    sources: list[ReferenceSource] = field(default_factory=list)
 
 
 @dataclass
@@ -86,8 +81,6 @@ class ClientProfile:
     accumulated_report_path: str
     accumulated_tab_name: str = "Accumulated"
     refund_tab_name: str = "Refund"
-    suppression_path: Optional[str] = None
-    dedupe_list_path: Optional[str] = None
     field_mapping: Optional[FieldMapping] = None
     duplicate: DuplicateConfig = field(default_factory=DuplicateConfig)
     leadcap: LeadcapConfig = field(default_factory=LeadcapConfig)
