@@ -8,8 +8,9 @@ from core.aliases_path import ALIASES_PATH
 from core.checks.leadcap import validate_purchased_report_cids
 from core.excel_io import read_sheet_as_dataframe, append_leads, backup_file, require_columns
 from core.matching import load_alias_groups, add_alias_pair
+from core.models import FieldMapping
 from core.pipeline import run_pipeline
-from core.profile_store import list_profile_names, load_profile
+from core.profile_store import list_profile_names, load_profile, save_profile
 
 st.title("Run Check")
 
@@ -23,9 +24,47 @@ profile = load_profile(client_name)
 
 new_leads_file = st.file_uploader("New Leads file", type=["xlsx"])
 
+new_leads_df = None
+new_leads_headers: list[str] = []
+if new_leads_file:
+    new_leads_df = pd.read_excel(new_leads_file)
+    new_leads_headers = list(new_leads_df.columns)
+
+field_mapping = profile.field_mapping
+mapping_valid = (
+    field_mapping is not None
+    and all(col in new_leads_headers for col in
+            [field_mapping.email, field_mapping.first_name, field_mapping.last_name,
+             field_mapping.company, field_mapping.cid])
+)
+
+if new_leads_file and not mapping_valid:
+    st.subheader("Map New Leads columns")
+    st.caption("This client's saved mapping doesn't match this file's columns (or none is saved yet) — "
+               "map them once, and it'll be remembered for future runs.")
+
+    def _idx(value: str | None) -> int:
+        return new_leads_headers.index(value) if value and value in new_leads_headers else 0
+
+    fm_email = st.selectbox("Email column", new_leads_headers, index=_idx(field_mapping.email if field_mapping else None))
+    fm_first = st.selectbox("First Name column", new_leads_headers, index=_idx(field_mapping.first_name if field_mapping else None))
+    fm_last = st.selectbox("Last Name column", new_leads_headers, index=_idx(field_mapping.last_name if field_mapping else None))
+    fm_company = st.selectbox("Company column", new_leads_headers, index=_idx(field_mapping.company if field_mapping else None))
+    fm_cid = st.selectbox("CID column", new_leads_headers, index=_idx(field_mapping.cid if field_mapping else None))
+
+    if st.button("Save column mapping for this client"):
+        profile.field_mapping = FieldMapping(email=fm_email, first_name=fm_first, last_name=fm_last,
+                                              company=fm_company, cid=fm_cid)
+        save_profile(profile)
+        st.success("Column mapping saved for this client.")
+        st.rerun()
+
 purchased_reports: dict[str, pd.DataFrame] = {}
 if profile.leadcap.enabled:
     st.subheader("Leadcap: Purchased Lead Report(s)")
+    leadcap_required_cols = [profile.leadcap.purchased_report_cid_column, profile.leadcap.purchased_report_email_column]
+    if profile.leadcap.check_company_name:
+        leadcap_required_cols.append(profile.leadcap.purchased_report_company_column)
     if profile.leadcap.segmented:
         for segment in profile.leadcap.segments:
             uploaded = st.file_uploader(f"Purchased Lead Report for: {segment.name} — CID {', '.join(segment.cids)}",
@@ -33,8 +72,7 @@ if profile.leadcap.enabled:
             if uploaded:
                 df = pd.read_csv(uploaded)
                 try:
-                    require_columns(df, [profile.leadcap.purchased_report_cid_column,
-                                          profile.leadcap.purchased_report_email_column], segment.name)
+                    require_columns(df, leadcap_required_cols, segment.name)
                     unexpected = validate_purchased_report_cids(df, segment.cids, profile.leadcap.purchased_report_cid_column)
                     if unexpected:
                         st.warning(f"'{segment.name}' file contains unexpected CIDs {unexpected} — wrong file?")
@@ -46,18 +84,17 @@ if profile.leadcap.enabled:
         if uploaded:
             df = pd.read_csv(uploaded)
             try:
-                require_columns(df, [profile.leadcap.purchased_report_cid_column,
-                                      profile.leadcap.purchased_report_email_column], "Purchased Lead Report")
+                require_columns(df, leadcap_required_cols, "Purchased Lead Report")
                 purchased_reports["_flat_"] = df
             except ValueError as exc:
                 st.error(str(exc))
 
 if st.button("Run Check") and new_leads_file:
-    if profile.field_mapping is None:
-        st.error("This client's profile has no field mapping configured — edit it in Client Setup first.")
+    if not mapping_valid:
+        st.error("Map the New Leads columns above before running the check.")
         st.stop()
     try:
-        new_leads = pd.read_excel(new_leads_file)
+        new_leads = new_leads_df
         accumulated_leads = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
 
         reference_data: dict = {"purchased_reports": purchased_reports}
@@ -65,23 +102,36 @@ if st.button("Run Check") and new_leads_file:
             exclusion_sources_data: dict[str, pd.DataFrame] = {}
             for source in profile.exclusion.sources:
                 df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                require_columns(df, [profile.exclusion.domain_column], f"{source.file_path} [{source.sheet_name}]")
+                require_columns(df, [source.domain_column], f"{source.file_path} [{source.sheet_name}]")
                 exclusion_sources_data[source.name] = df
             reference_data["exclusion_sources"] = exclusion_sources_data
         if profile.tal.enabled:
             tal_sources_data: dict[str, pd.DataFrame] = {}
             for source in profile.tal.sources:
                 df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                require_columns(df, [profile.tal.domain_column], f"{source.file_path} [{source.sheet_name}]")
+                require_columns(df, [source.domain_column], f"{source.file_path} [{source.sheet_name}]")
                 tal_sources_data[source.name] = df
             reference_data["tal_sources"] = tal_sources_data
         if profile.suppression.enabled:
-            suppression_df = read_sheet_as_dataframe(profile.suppression_path, profile.suppression.sheet_name)
-            reference_data["suppression_df"] = suppression_df
+            suppression_sources_data: dict[str, pd.DataFrame] = {}
+            for source in profile.suppression.sources:
+                df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
+                required_cols = []
+                if profile.suppression.check_domain:
+                    required_cols.append(source.domain_column)
+                if profile.suppression.check_email:
+                    required_cols.append(source.email_column)
+                if required_cols:
+                    require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
+                suppression_sources_data[source.name] = df
+            reference_data["suppression_sources"] = suppression_sources_data
         if profile.dedupe_list.enabled:
-            dedupe_df = read_sheet_as_dataframe(profile.dedupe_list_path, profile.dedupe_list.sheet_name)
-            require_columns(dedupe_df, [profile.dedupe_list.email_column], profile.dedupe_list_path)
-            reference_data["dedupe_df"] = dedupe_df
+            dedupe_sources_data: dict[str, pd.DataFrame] = {}
+            for source in profile.dedupe_list.sources:
+                df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
+                require_columns(df, [source.email_column], f"{source.file_path} [{source.sheet_name}]")
+                dedupe_sources_data[source.name] = df
+            reference_data["dedupe_sources"] = dedupe_sources_data
 
         alias_groups = load_alias_groups(ALIASES_PATH)
         result = run_pipeline(new_leads, profile, accumulated_leads, reference_data, alias_groups)
