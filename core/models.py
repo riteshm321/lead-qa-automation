@@ -24,8 +24,10 @@ class LeadcapConfig:
     segmented: bool = False
     flat_cap: Optional[int] = None
     segments: list[LeadcapSegment] = field(default_factory=list)
+    check_company_name: bool = False
     purchased_report_cid_column: str = "Campaign ID"
     purchased_report_email_column: str = "Email"
+    purchased_report_company_column: str = "Company"
 
 
 @dataclass
