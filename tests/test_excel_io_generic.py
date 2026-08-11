@@ -117,3 +117,52 @@ def test_detect_cids_from_pacing_overview_raises_clear_error_when_sheet_missing(
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "Pacing Overview" in str(exc)
+
+
+def test_detect_cids_from_pacing_overview_stops_at_grand_total_row(tmp_path):
+    from core.excel_io import detect_cids_from_pacing_overview
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing Overview"
+    ws["B2"] = "Pacing Overview"
+    ws["B3"] = "SR No"
+    ws["C3"] = "CID"
+    ws["D3"] = "Campaign Segment"
+    ws["C4"] = "118118"
+    ws["D4"] = "APAC Mgr+ Q3"
+    ws["C5"] = "Grand Total"
+    # A second, unrelated table below the Grand Total row must NOT be picked up.
+    ws["C7"] = "999999"
+    ws["D7"] = "Should Not Appear"
+    wb.save(path)
+
+    pairs = detect_cids_from_pacing_overview(path)
+
+    assert pairs == [("118118", "APAC Mgr+ Q3")]
+
+
+def test_detect_cids_from_pacing_overview_stops_at_first_blank_cid_row(tmp_path):
+    from core.excel_io import detect_cids_from_pacing_overview
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing Overview"
+    ws["B2"] = "Pacing Overview"
+    ws["B3"] = "SR No"
+    ws["C3"] = "CID"
+    ws["D3"] = "Campaign Segment"
+    ws["C4"] = "118118"
+    ws["D4"] = "APAC Mgr+ Q3"
+    # Row 5 has a blank CID cell — scanning must stop here.
+    ws["D5"] = "Blank CID row"
+    # A later, unrelated CID-labeled row must NOT be picked up.
+    ws["C6"] = "999999"
+    ws["D6"] = "Should Not Appear"
+    wb.save(path)
+
+    pairs = detect_cids_from_pacing_overview(path)
+
+    assert pairs == [("118118", "APAC Mgr+ Q3")]

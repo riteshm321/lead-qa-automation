@@ -148,9 +148,11 @@ def detect_cids_from_pacing_overview(
         for row in ws.iter_rows(min_row=header_row_idx + 1, max_row=ws.max_row):
             cid_cell = row[cid_col_idx - 1]
             if cid_cell.value is None or str(cid_cell.value).strip() == "":
-                continue
+                break
             cid = str(cid_cell.value).strip()
-            if cid.lower() in ("grand total", "total") or cid in seen:
+            if cid.lower() in ("grand total", "total"):
+                break
+            if cid in seen:
                 continue
             seen.add(cid)
             campaign = ""
