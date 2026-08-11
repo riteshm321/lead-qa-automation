@@ -3,6 +3,7 @@ import pandas as pd
 from core.pipeline import run_pipeline
 from core.models import (
     ClientProfile, FieldMapping, DuplicateConfig, ExclusionConfig, ReferenceSource,
+    SuppressionConfig, DedupeListConfig,
 )
 
 FM = FieldMapping(email="emailaddress", first_name="firstname", last_name="lastname",
@@ -84,3 +85,25 @@ def test_fail_takes_precedence_over_review_for_same_lead():
 
     assert 0 in result.refund_reasons
     assert 0 not in result.review_reasons
+
+
+def test_suppression_and_dedupe_use_sources_keys():
+    profile = _profile(
+        suppression=SuppressionConfig(enabled=True, check_domain=True, sources=[
+            ReferenceSource(name="Sup", file_path="unused.xlsx", sheet_name="Sheet1"),
+        ]),
+        dedupe_list=DedupeListConfig(enabled=True, sources=[
+            ReferenceSource(name="Dedupe", file_path="unused.xlsx", sheet_name="Sheet1"),
+        ]),
+    )
+    new_leads = pd.DataFrame([{"emailaddress": "x@suppressed.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1"}])
+    accumulated = pd.DataFrame(columns=["emailaddress", "firstname", "lastname", "company", "CID"])
+    suppression_df = pd.DataFrame([{"Domain": "suppressed.com"}])
+
+    result = run_pipeline(
+        new_leads, profile, accumulated,
+        reference_data={"suppression_sources": {"Sup": suppression_df}, "dedupe_sources": {}},
+        alias_groups=[],
+    )
+
+    assert result.refund_reasons[0] == "Suppression - domain"

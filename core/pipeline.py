@@ -47,11 +47,11 @@ def run_pipeline(
 
     if profile.suppression.enabled:
         merge(suppression.check_suppression(new_leads, fm, profile.suppression,
-                                             reference_data.get("suppression_df", pd.DataFrame()), alias_groups))
+                                             reference_data.get("suppression_sources", {}), alias_groups))
 
     if profile.dedupe_list.enabled:
         merge(dedupe_list.check_dedupe_list(new_leads, fm, profile.dedupe_list,
-                                             reference_data.get("dedupe_df", pd.DataFrame())))
+                                             reference_data.get("dedupe_sources", {})))
 
     refund_reasons = {idx: "; ".join(reasons) for idx, reasons in fail.items()}
     review_reasons = {idx: reasons for idx, reasons in review.items() if idx not in fail}
