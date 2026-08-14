@@ -1,6 +1,6 @@
 import pandas as pd
 
-from core.check_result import CheckOutcome
+from core.check_result import CheckOutcome, ReviewDetail
 from core.matching import extract_domain, company_names_match
 from core.models import FieldMapping, TalConfig
 
@@ -48,16 +48,22 @@ def check_tal(
         if config.check_company_name:
             company = str(row.get(field_mapping.company, "") or "")
             status = "no_match"
+            review_candidate, review_score = "", None
             for candidate in companies:
                 result = company_names_match(company, candidate, alias_groups)
                 if result.status == "match":
                     status = "match"
                     break
-                if result.status == "review":
+                if result.status == "review" and status != "review":
                     status = "review"
+                    review_candidate, review_score = candidate, result.score
             if status == "no_match":
                 outcome.fail[idx] = "TAL - company not found"
             elif status == "review":
-                outcome.review[idx] = "TAL - company name ambiguous match"
+                outcome.review[idx] = ReviewDetail(
+                    check="TAL", message="Company name ambiguous match",
+                    lead_value=company, candidate_value=review_candidate,
+                    candidate_context="on the TAL list", score=review_score,
+                )
 
     return outcome

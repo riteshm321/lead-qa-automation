@@ -1,7 +1,7 @@
 import pandas as pd
 
-from core.check_result import CheckOutcome
-from core.matching import extract_domain, normalize_company_name, domain_is_company_variant
+from core.check_result import CheckOutcome, ReviewDetail
+from core.matching import extract_domain, normalize_company_name
 from core.models import FieldMapping
 
 
@@ -45,21 +45,45 @@ def check_duplicates(new_leads: pd.DataFrame, accumulated_leads: pd.DataFrame, f
                 candidates.append(new_leads.loc[other_idx].to_dict())
 
             if key != ("", "") and candidates:
-                hard_match = False
+                # Same first+last name as an existing lead. Company decides
+                # everything from here: a different (or unknown/blank)
+                # company means it's just two different people who share a
+                # name, so the lead passes through untouched. Only when the
+                # company also matches does the email domain decide whether
+                # this is a confirmed duplicate (same domain — someone reused
+                # the same person under a different email) or one that needs
+                # a human look (same company, but a different email domain).
+                domain = extract_domain(email)
+                hard_match_other = None
+                soft_match_other = None
                 for other in candidates:
                     other_company = str(other.get(fm.company, "") or "")
-                    domain = extract_domain(email)
                     same_company = (
                         normalize_company_name(company) != ""
                         and normalize_company_name(company) == normalize_company_name(other_company)
                     )
-                    if same_company or domain_is_company_variant(domain, other_company):
-                        hard_match = True
+                    if not same_company:
+                        continue
+                    other_email = _norm(other.get(fm.email, ""))
+                    if domain and domain == extract_domain(other_email):
+                        hard_match_other = other
                         break
-                if hard_match:
-                    outcome.fail[idx] = "Duplicate - name/company match"
-                else:
-                    outcome.review[idx] = "Duplicate - same name, ambiguous company match"
+                    if soft_match_other is None:
+                        soft_match_other = other
+
+                if hard_match_other is not None:
+                    outcome.fail[idx] = "Duplicate - same name, company, and email domain"
+                elif soft_match_other is not None:
+                    other_email = str(soft_match_other.get(fm.email, "") or "")
+                    other_domain = extract_domain(_norm(soft_match_other.get(fm.email, "")))
+                    outcome.review[idx] = ReviewDetail(
+                        check="Duplicate", message="Same name & company, different email domain",
+                        lead_value=domain or "(blank)", candidate_value=other_domain or "(blank)",
+                        candidate_context="existing lead with the same name & company"
+                                          + (f" ({other_email})" if other_email else ""),
+                    )
+                # else: same name, but no candidate shares the company —
+                # different people, let it pass.
 
         if email:
             seen_emails.setdefault(email, idx)

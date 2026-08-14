@@ -33,7 +33,24 @@ def test_exact_email_match_within_new_batch_fails():
     assert 0 not in outcome.fail
 
 
-def test_same_name_same_company_variant_domain_fails():
+def test_same_name_same_company_same_domain_fails():
+    # Rule 3: same name, same company, same email domain, different email
+    # address — a clear duplicate (e.g. a second alias for the same person).
+    new_leads = pd.DataFrame([
+        {"emailaddress": "andy.jones@google.com", "firstname": "Andy", "lastname": "Jones", "company": "Google", "CID": 1},
+    ])
+    accumulated = pd.DataFrame([
+        {"emailaddress": "andy@google.com", "firstname": "Andy", "lastname": "Jones", "company": "Google Inc", "CID": 1},
+    ])
+
+    outcome = check_duplicates(new_leads, accumulated, FM)
+
+    assert outcome.fail[0] == "Duplicate - same name, company, and email domain"
+
+
+def test_same_name_same_company_different_domain_goes_to_review():
+    # Rule 2: same name, same company, but a different email domain — can't
+    # auto-confirm or auto-clear, needs a human look.
     new_leads = pd.DataFrame([
         {"emailaddress": "andy@gooooogle.com", "firstname": "Andy", "lastname": "Jones", "company": "Google", "CID": 1},
     ])
@@ -43,10 +60,16 @@ def test_same_name_same_company_variant_domain_fails():
 
     outcome = check_duplicates(new_leads, accumulated, FM)
 
-    assert outcome.fail[0] == "Duplicate - name/company match"
+    assert 0 not in outcome.fail
+    detail = outcome.review[0]
+    assert detail.check == "Duplicate"
+    assert detail.lead_value == "gooooogle.com"
+    assert detail.candidate_value == "google.com"
 
 
-def test_same_name_different_unrelated_company_goes_to_review():
+def test_same_name_different_company_passes():
+    # Rule 2 (second half): same name but a genuinely different company —
+    # two different people who happen to share a name, so it passes through.
     new_leads = pd.DataFrame([
         {"emailaddress": "andy@unrelatedco.com", "firstname": "Andy", "lastname": "Jones", "company": "Unrelated Co", "CID": 1},
     ])
@@ -56,8 +79,24 @@ def test_same_name_different_unrelated_company_goes_to_review():
 
     outcome = check_duplicates(new_leads, accumulated, FM)
 
-    assert 0 not in outcome.fail
-    assert 0 in outcome.review
+    assert outcome.fail == {}
+    assert outcome.review == {}
+
+
+def test_same_name_blank_existing_company_passes():
+    # If the existing record's company is blank, there's nothing to confirm
+    # a company match against — treated the same as a different company.
+    new_leads = pd.DataFrame([
+        {"emailaddress": "sachin.thakare@kpit.com", "firstname": "Sachin", "lastname": "Sachin", "company": "KPIT Technologies Limited", "CID": 1},
+    ])
+    accumulated = pd.DataFrame([
+        {"emailaddress": "sachin.agrawal@heromotocorp.com", "firstname": "Sachin", "lastname": "Sachin", "company": "", "CID": 1},
+    ])
+
+    outcome = check_duplicates(new_leads, accumulated, FM)
+
+    assert outcome.fail == {}
+    assert outcome.review == {}
 
 
 def test_no_match_for_distinct_leads():

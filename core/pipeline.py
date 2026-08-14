@@ -58,3 +58,22 @@ def run_pipeline(
     valid_indices = [idx for idx in new_leads.index if idx not in fail and idx not in review_reasons]
 
     return PipelineResult(valid_indices=valid_indices, refund_reasons=refund_reasons, review_reasons=review_reasons)
+
+
+def apply_refund_overrides(
+    result: PipelineResult, approved_refund_indices: list[int]
+) -> tuple[list[int], dict[int, str]]:
+    """Split auto-flagged refund leads by manual override.
+
+    A refund lead the user ticks "approve as valid" for joins the same
+    valid bucket as everything the tool already recognized as valid (so it
+    gets appended to the Accumulated Report and Lead Template); anything
+    left unticked stays refund-only, unchanged from the tool's original
+    call. Returns (final_valid_indices, final_refund_reasons).
+    """
+    final_valid_indices = list(result.valid_indices) + list(approved_refund_indices)
+    final_refund_reasons = {
+        idx: reason for idx, reason in result.refund_reasons.items()
+        if idx not in approved_refund_indices
+    }
+    return final_valid_indices, final_refund_reasons

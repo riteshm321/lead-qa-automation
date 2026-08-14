@@ -68,7 +68,10 @@ def test_company_name_gray_zone_match_routes_to_review():
     outcome = check_suppression(new_leads, FM, config, {"Global": SUPPRESSION_DF}, alias_groups=[])
 
     assert 0 not in outcome.fail
-    assert outcome.review[0] == "Suppression - company name ambiguous match"
+    detail = outcome.review[0]
+    assert detail.check == "Suppression"
+    assert detail.lead_value == "Acme Industrial"
+    assert detail.candidate_value
 
 
 def test_multiple_sources_are_unioned():

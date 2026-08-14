@@ -97,7 +97,10 @@ def test_company_name_gray_zone_fuzzy_match_goes_to_review():
     outcome = check_tal(new_leads, FM, config, {"Acme Source": TAL_SHEET_ACME}, alias_groups=[])
 
     assert 0 not in outcome.fail, "Lead should not fail when company name is a gray-zone match"
-    assert outcome.review[0] == "TAL - company name ambiguous match"
+    detail = outcome.review[0]
+    assert detail.check == "TAL"
+    assert detail.lead_value == "Acme Industries"
+    assert detail.candidate_value
 
 
 def test_sources_with_different_column_names_each_use_their_own():
