@@ -11,3 +11,12 @@ def browse_for_file(file_types: list[tuple[str, str]] | None = None) -> str | No
     )
     root.destroy()
     return path or None
+
+
+def browse_for_folder() -> str | None:
+    root = tk.Tk()
+    root.withdraw()
+    root.wm_attributes("-topmost", 1)
+    path = filedialog.askdirectory()
+    root.destroy()
+    return path or None
