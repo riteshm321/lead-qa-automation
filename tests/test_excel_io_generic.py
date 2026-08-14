@@ -1,8 +1,12 @@
 import os
+import zipfile
+
 import openpyxl
+import pandas as pd
 import pytest
 
-from core.excel_io import list_sheet_names, read_sheet_as_dataframe, backup_file, require_columns
+from core.excel_io import list_sheet_names, read_sheet_as_dataframe, backup_file, require_columns, append_leads
+from core.models import FieldMapping
 
 
 def _make_workbook(path: str) -> None:
@@ -30,7 +34,7 @@ def test_read_sheet_as_dataframe(tmp_path):
     assert df.iloc[0]["Domain"] == "adecco.co.uk"
 
 
-def test_backup_file_creates_timestamped_copy(tmp_path):
+def test_backup_file_creates_timestamped_copy_in_backup_subfolder(tmp_path):
     path = str(tmp_path / "accumulated.xlsx")
     _make_workbook(path)
 
@@ -39,7 +43,29 @@ def test_backup_file_creates_timestamped_copy(tmp_path):
     assert os.path.isfile(backup_path)
     assert backup_path != path
     assert "accumulated_backup_" in os.path.basename(backup_path)
+    assert os.path.basename(os.path.dirname(backup_path)) == "backup"
     assert list_sheet_names(backup_path) == list_sheet_names(path)
+
+
+def test_backup_file_creates_backup_folder_when_missing(tmp_path):
+    path = str(tmp_path / "accumulated.xlsx")
+    _make_workbook(path)
+    backup_dir = tmp_path / "backup"
+    assert not backup_dir.exists()
+
+    backup_file(path)
+
+    assert backup_dir.is_dir()
+
+
+def test_backup_file_reuses_existing_backup_folder(tmp_path):
+    path = str(tmp_path / "accumulated.xlsx")
+    _make_workbook(path)
+    (tmp_path / "backup").mkdir()
+
+    backup_path = backup_file(path)  # must not raise even though the folder already exists
+
+    assert os.path.isfile(backup_path)
 
 
 def test_require_columns_passes_when_all_present(tmp_path):
@@ -141,6 +167,131 @@ def test_detect_cids_from_pacing_overview_stops_at_grand_total_row(tmp_path):
     pairs = detect_cids_from_pacing_overview(path)
 
     assert pairs == [("118118", "APAC Mgr+ Q3")]
+
+
+def test_append_leads_finds_last_row_past_bulk_formatted_empty_rows(tmp_path):
+    # Real templates are often bulk-preformatted (borders/fills applied) far
+    # beyond the actual data, which pushes ws.max_row way past the true last
+    # lead. New leads must land right after the last row with real values,
+    # not after the sheet's whole formatted range.
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "TEMPLATE"
+    ws.append(["Email_Address", "First_Name", "Last_Name", "Company_Name"])
+    ws.append(["jane@x.com", "Jane", "Doe", "Acme"])
+    from openpyxl.styles import PatternFill
+    fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+    for row in range(3, 500):
+        ws.cell(row=row, column=1).fill = fill
+    wb.save(path)
+    assert openpyxl.load_workbook(path)["TEMPLATE"].max_row >= 499
+
+    leads_df = pd.DataFrame([{"Email_Address": "bob@x.com", "First_Name": "Bob",
+                               "Last_Name": "Lee", "Company_Name": "Beta"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    append_leads(path, "TEMPLATE", leads_df, field_mapping, run_date="2026-08-13")
+
+    ws = openpyxl.load_workbook(path)["TEMPLATE"]
+    assert ws.cell(row=3, column=1).value == "bob@x.com"
+    assert ws.cell(row=4, column=1).value is None
+
+
+def test_append_leads_matches_headers_regardless_of_separators(tmp_path):
+    # Leadfile column "jobfunction" (no separator at all) must populate a
+    # target header of "Job Function" (space-separated) — real leadfiles
+    # frequently drop separators entirely between words.
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "Job Function"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([{"Email_Address": "bob@x.com", "First_Name": "Bob",
+                               "Last_Name": "Lee", "Company_Name": "Beta",
+                               "jobfunction": "Engineering"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    append_leads(path, "Accumulated", leads_df, field_mapping, run_date="2026-08-13")
+
+    ws = openpyxl.load_workbook(path)["Accumulated"]
+    assert ws.cell(row=2, column=5).value == "Engineering"
+
+
+def test_append_leads_matches_headers_with_extra_suffix_via_containment(tmp_path):
+    # "MarketSegmentReferential" (leadfile) must populate "Market Segment"
+    # (target) — export tools often append noise like "Referential".
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "Market Segment", "I am a"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([{"Email_Address": "bob@x.com", "First_Name": "Bob",
+                               "Last_Name": "Lee", "Company_Name": "Beta",
+                               "MarketSegmentReferential": "Enterprise",
+                               "IAMAReferential": "Decision Maker"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    unmatched = append_leads(path, "Accumulated", leads_df, field_mapping, run_date="2026-08-13")
+
+    ws = openpyxl.load_workbook(path)["Accumulated"]
+    assert ws.cell(row=2, column=5).value == "Enterprise"
+    assert ws.cell(row=2, column=6).value == "Decision Maker"
+    assert unmatched == []
+
+
+def test_append_leads_leaves_ambiguous_containment_matches_unmatched(tmp_path):
+    # Two leadfile columns both contain "region" — auto-picking either one
+    # risks silently wiring the wrong data into a client's real report, so
+    # neither should be auto-matched.
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "Region"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([{"Email_Address": "bob@x.com", "First_Name": "Bob",
+                               "Last_Name": "Lee", "Company_Name": "Beta",
+                               "SalesRegion": "APAC", "ShippingRegion": "EMEA"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    unmatched = append_leads(path, "Accumulated", leads_df, field_mapping, run_date="2026-08-13")
+
+    ws = openpyxl.load_workbook(path)["Accumulated"]
+    assert ws.cell(row=2, column=5).value is None
+    assert unmatched == ["Region"]
+
+
+def test_append_leads_preserves_external_link_parts_byte_for_byte(tmp_path):
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "TEMPLATE"
+    ws.append(["Email_Address", "First_Name", "Last_Name", "Company_Name"])
+    wb.save(path)
+
+    fake_external_link = b"<not real xml, just needs to round-trip untouched>"
+    with zipfile.ZipFile(path, "a", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("xl/externalLinks/externalLink1.xml", fake_external_link)
+
+    leads_df = pd.DataFrame([{"Email_Address": "bob@x.com", "First_Name": "Bob",
+                               "Last_Name": "Lee", "Company_Name": "Beta"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    append_leads(path, "TEMPLATE", leads_df, field_mapping, run_date="2026-08-13")
+
+    with zipfile.ZipFile(path, "r") as zf:
+        assert zf.read("xl/externalLinks/externalLink1.xml") == fake_external_link
 
 
 def test_detect_cids_from_pacing_overview_stops_at_first_blank_cid_row(tmp_path):

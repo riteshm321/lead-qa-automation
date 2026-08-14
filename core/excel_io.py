@@ -1,5 +1,10 @@
+import csv
 import datetime
+import io
+import os
 import shutil
+import zipfile
+from copy import copy
 from pathlib import Path
 
 import openpyxl
@@ -7,7 +12,27 @@ import pandas as pd
 from openpyxl.formula.translate import Translator
 from openpyxl.utils import get_column_letter
 
-from core.models import FieldMapping
+from core.models import FieldMapping, LeadTemplateTab
+
+
+def _read_external_link_parts(path: str) -> dict[str, bytes]:
+    with zipfile.ZipFile(path, "r") as zin:
+        return {n: zin.read(n) for n in zin.namelist() if n.startswith("xl/externalLinks/")}
+
+
+def _restore_external_link_parts(path: str, original_parts: dict[str, bytes]) -> None:
+    # openpyxl loses/corrupts the cached values in xl/externalLinks/*.xml when
+    # it round-trips a workbook that references another (possibly closed)
+    # workbook — e.g. a data-validation picklist backed by an external file.
+    # Excel still opens the result, but flags it as needing repair every
+    # time. Since we never touch external links ourselves, restoring the
+    # original bytes for exactly those parts is always safe and correct.
+    with zipfile.ZipFile(path, "r") as zin:
+        entries = {n: zin.read(n) for n in zin.namelist()}
+    entries.update(original_parts)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name, data in entries.items():
+            zout.writestr(name, data)
 
 
 def list_sheet_names(path: str) -> list[str]:
@@ -22,11 +47,72 @@ def read_sheet_as_dataframe(path: str, sheet_name: str) -> pd.DataFrame:
     return pd.read_excel(path, sheet_name=sheet_name)
 
 
+_CSV_ENCODINGS = ("utf-8-sig", "cp1252", "latin1")
+
+
+def read_leadfile(uploaded_file) -> pd.DataFrame:
+    """Read an uploaded New Leads file — Excel or CSV — into a DataFrame.
+
+    Real-world CSV exports vary in ways plain read_csv() doesn't handle by
+    default: a UTF-8 byte-order mark from Excel's own CSV export, Windows-1252
+    encoding from older export tools, and semicolon (or tab/pipe) delimiters
+    from European-locale exports. Decoding bytes ourselves first, then
+    sniffing the delimiter from the clean decoded text, avoids a pandas
+    quirk where handing raw bytes + encoding= to read_csv(sep=None) can
+    silently corrupt non-ASCII characters during delimiter detection even
+    though the encoding itself is correct.
+    """
+    name = getattr(uploaded_file, "name", "") or ""
+    if not name.lower().endswith(".csv"):
+        uploaded_file.seek(0)
+        return pd.read_excel(uploaded_file)
+
+    uploaded_file.seek(0)
+    raw = uploaded_file.read()
+
+    text = None
+    last_error: Exception | None = None
+    for encoding in _CSV_ENCODINGS:
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError as exc:
+            last_error = exc
+    if text is None:
+        raise last_error
+
+    try:
+        delimiter = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|").delimiter
+    except csv.Error:
+        delimiter = ","
+
+    return pd.read_csv(io.StringIO(text), sep=delimiter)
+
+
+def _win_long_path(path: str) -> str:
+    # Real client files often live in deeply nested OneDrive folders whose
+    # full path is already close to Windows' 260-character MAX_PATH limit —
+    # appending "_backup_<timestamp>" (or a "backup\" subfolder) pushes some
+    # of them over it, which surfaces as a confusing WinError 3 ("cannot
+    # find the path specified") even though every folder in the path is
+    # real. The \\?\ prefix tells the Windows API to bypass that limit.
+    if os.name != "nt":
+        return path
+    abs_path = os.path.abspath(path)
+    if abs_path.startswith("\\\\?\\"):
+        return abs_path
+    if abs_path.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + abs_path[2:]
+    return "\\\\?\\" + abs_path
+
+
 def backup_file(path: str) -> str:
     source = Path(path)
+    backup_dir = source.parent / "backup"
+    os.makedirs(_win_long_path(str(backup_dir)), exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = source.with_name(f"{source.stem}_backup_{timestamp}{source.suffix}")
-    shutil.copy2(source, backup_path)
+    backup_path = backup_dir / f"{source.stem}_backup_{timestamp}{source.suffix}"
+    shutil.copy2(_win_long_path(str(source)), _win_long_path(str(backup_path)))
     return str(backup_path)
 
 
@@ -48,10 +134,210 @@ _FIELD_SYNONYMS = {
 }
 
 
+def _normalize_header_text(value) -> str:
+    # Strips ALL non-alphanumeric characters (not just collapsing them to a
+    # single space), so "Job Function", "Job_Function" and the fully
+    # concatenated "jobfunction" all normalize to the same "jobfunction" —
+    # real leadfiles frequently drop separators entirely, and requiring an
+    # exact-ish phrase match left most non-core columns unmatched.
+    import re
+    return re.sub(r"[^a-z0-9]", "", str(value).strip().lower())
+
+
+_NORMALIZED_FIELD_SYNONYMS = {
+    attr: {_normalize_header_text(s) for s in synonyms} for attr, synonyms in _FIELD_SYNONYMS.items()
+}
+
+
 def _resolve_field_attr(header_norm: str) -> str | None:
-    for attr, synonyms in _FIELD_SYNONYMS.items():
+    for attr, synonyms in _NORMALIZED_FIELD_SYNONYMS.items():
         if header_norm in synonyms:
             return attr
+    return None
+
+
+def guess_target_field_mapping(headers: list) -> dict[str, str]:
+    """Best-guess header name for each of the 5 known lead fields, via the synonym table.
+
+    Used only to seed a UI default — the caller should let the user confirm/override
+    it and save an explicit mapping, since real target files (Accumulated Reports,
+    Lead Templates) often use header text that doesn't match any synonym.
+    """
+    result: dict[str, str] = {}
+    for header in headers:
+        if header is None:
+            continue
+        attr = _resolve_field_attr(_normalize_header_text(header))
+        if attr and attr not in result:
+            result[attr] = header
+    return result
+
+
+_REASON_HEADER_NAMES = {_normalize_header_text(s) for s in ("reason", "refund reason")}
+
+_ALL_KNOWN_HEADER_MARKERS = {_normalize_header_text(syn) for syns in _FIELD_SYNONYMS.values() for syn in syns}
+
+
+_MIN_STRUCTURAL_HEADER_CELLS = 3
+
+
+def find_header_row(path: str, sheet_name: str, expected_headers: list | None = None,
+                     max_scan_rows: int = 20) -> int:
+    """Detect which row holds the real column headers.
+
+    Some Lead Templates have title/instruction rows above the actual header
+    row, so the headers don't start at row 1. Two-tier detection:
+
+    1. Scan the first `max_scan_rows` rows for a cell matching a known marker
+       (the client's saved column mapping if given, else the generic
+       email/first name/last name/company/cid synonyms) and return that
+       row's 1-based index — most reliable when the header text is
+       recognizable.
+    2. If no marker matches (e.g. the template uses non-standard header text
+       with no saved mapping yet to compare against), fall back to a
+       structural heuristic: among rows with at least
+       `_MIN_STRUCTURAL_HEADER_CELLS` non-empty cells, pick the one with the
+       MOST non-empty cells (earliest row wins on a tie) — real templates
+       often carry annotation/instruction rows above the header that also
+       have a handful of scattered notes in them, so "first row past a
+       threshold" alone is not reliable; the true header row is reliably
+       the densest one, since it names every column.
+
+    Falls back to row 1 if neither tier finds anything, preserving the
+    previous fixed-row-1 assumption.
+    """
+    markers = ({_normalize_header_text(h) for h in expected_headers if h}
+               if expected_headers else set(_ALL_KNOWN_HEADER_MARKERS))
+
+    wb = openpyxl.load_workbook(path, read_only=True)
+    try:
+        ws = wb[sheet_name]
+        rows = list(ws.iter_rows(min_row=1, max_row=min(ws.max_row, max_scan_rows)))
+
+        for row in rows:
+            for cell in row:
+                if isinstance(cell.value, str) and _normalize_header_text(cell.value) in markers:
+                    return cell.row
+
+        best_offset, best_count = None, 0
+        for offset, row in enumerate(rows):
+            non_empty = sum(1 for cell in row if cell.value is not None and str(cell.value).strip() != "")
+            if non_empty >= _MIN_STRUCTURAL_HEADER_CELLS and non_empty > best_count:
+                best_offset, best_count = offset, non_empty
+        if best_offset is not None:
+            return best_offset + 1
+
+        return 1
+    finally:
+        wb.close()
+
+
+def read_sheet_headers(path: str, sheet_name: str, header_row: int = 1) -> list:
+    wb = openpyxl.load_workbook(path, read_only=True)
+    try:
+        ws = wb[sheet_name]
+        # ws[header_row] (openpyxl's __getitem__) raises IndexError on a
+        # genuinely empty sheet even though max_row reports 1 — iter_rows
+        # doesn't have that problem, so use it instead.
+        rows = list(ws.iter_rows(min_row=header_row, max_row=header_row))
+        if not rows:
+            return []
+        return [cell.value for cell in rows[0]]
+    finally:
+        wb.close()
+
+
+def route_leads_by_cid(
+    leads_df: pd.DataFrame, cid_column: str, tabs: list[LeadTemplateTab]
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+    """Split leads across a Lead Template's tabs by CID.
+
+    Tabs are checked in order; a lead is assigned to the first tab whose
+    `cids` list contains its CID (mutually exclusive — a lead never lands in
+    more than one tab). A tab with an empty `cids` list is never matched (a
+    tab always needs its CIDs explicitly configured). Leads that match no
+    tab at all are returned separately as "unmatched" rather than dropped.
+
+    Returns (sheet_name -> matched leads for tabs with at least one match,
+    unmatched leads).
+    """
+    remaining = leads_df
+    groups: dict[str, pd.DataFrame] = {}
+    for tab in tabs:
+        if not tab.cids or remaining.empty:
+            continue
+        mask = remaining[cid_column].astype(str).str.strip().isin(tab.cids)
+        matched = remaining[mask]
+        remaining = remaining[~mask]
+        if not matched.empty:
+            groups[tab.sheet_name] = matched
+    return groups, remaining
+
+
+def _find_last_data_row(ws, first_data_row: int, headers: list) -> int | None:
+    """Return the last row >= first_data_row with a real value in any of the
+    given header's columns, or None if every such row is empty.
+
+    ws.max_row reflects the sheet's whole used range, which includes cells
+    that only ever had formatting applied — real templates are often
+    bulk-preformatted thousands of rows past the actual data, which made
+    ws.max_row alone report a row far below the true last lead. Scanning
+    actual cell values is the only reliable way to find where leads end.
+    """
+    if ws.max_row < first_data_row:
+        return None
+    last = None
+    num_cols = len(headers)
+    for row in ws.iter_rows(min_row=first_data_row, max_row=ws.max_row):
+        if any(cell.value is not None for cell in row[:num_cols]):
+            last = row[0].row
+    return last
+
+
+_CONTAINMENT_MIN_LEN = 4
+_FUZZY_MATCH_THRESHOLD = 88
+
+
+def _find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str, str]) -> str | None:
+    """Best-effort match of a target header to a leadfile column, for the
+    "everything else" passthrough columns (beyond the 5 explicitly-mapped
+    roles). Real leadfiles vary in ways an exact match can't anticipate —
+    export tools append suffixes ("MarketSegmentReferential" for "Market
+    Segment") or contract phrases ("IAMAReferential" for "I am a"). Tried in
+    order, most to least confident:
+
+    1. Exact match on the fully-stripped normalized text (handles
+       "Job Function" / "jobfunction").
+    2. Containment: one normalized string is fully contained in the other
+       (handles suffix/prefix noise like "Referential") — guarded by a
+       minimum length so short strings ("cid") don't swallow unrelated
+       columns.
+    3. Fuzzy similarity (rapidfuzz) above a high threshold, for typos and
+       reordered words.
+
+    A tier is only used if exactly one leadfile column qualifies — wiring
+    the wrong column into a client's real report is worse than leaving a
+    cell blank, so ties are left unmatched rather than guessed.
+    """
+    if header_norm in lead_headers_norm:
+        return lead_headers_norm[header_norm]
+
+    if len(header_norm) >= _CONTAINMENT_MIN_LEN:
+        candidates = [
+            orig for norm, orig in lead_headers_norm.items()
+            if len(norm) >= _CONTAINMENT_MIN_LEN and (norm in header_norm or header_norm in norm)
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+
+    from rapidfuzz import fuzz
+    scored = sorted(
+        ((fuzz.ratio(header_norm, norm), orig) for norm, orig in lead_headers_norm.items()),
+        key=lambda pair: pair[0], reverse=True,
+    )
+    if scored and scored[0][0] >= _FUZZY_MATCH_THRESHOLD and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+        return scored[0][1]
+
     return None
 
 
@@ -62,34 +348,88 @@ def append_leads(
     field_mapping: FieldMapping,
     run_date: str,
     reasons: dict[int, str] | None = None,
-) -> None:
+    target_field_mapping: FieldMapping | None = None,
+    header_row: int = 1,
+) -> list[str]:
+    _original_external_links = _read_external_link_parts(accumulated_path)
+
     wb = openpyxl.load_workbook(accumulated_path)
     ws = wb[tab_name]
 
-    headers = [cell.value for cell in ws[1]]
-    lead_headers_norm = {str(h).strip().lower(): h for h in leads_df.columns}
+    headers = [cell.value for cell in ws[header_row]]
+    lead_headers_norm = {_normalize_header_text(h): h for h in leads_df.columns}
 
-    has_reason_column = any(h is not None and str(h).strip().lower() == "reason" for h in headers)
+    target_role_by_header: dict[str, str] = {}
+    if target_field_mapping is not None:
+        for attr in ("email", "first_name", "last_name", "company", "cid"):
+            target_header = getattr(target_field_mapping, attr, "")
+            if target_header:
+                target_role_by_header[_normalize_header_text(target_header)] = attr
+
+    has_reason_column = any(
+        h is not None and _normalize_header_text(h) in _REASON_HEADER_NAMES for h in headers
+    )
     if reasons and not has_reason_column:
         reason_col_idx = len(headers) + 1
-        ws.cell(row=1, column=reason_col_idx, value="Reason")
-        headers.append("Reason")
+        ws.cell(row=header_row, column=reason_col_idx, value="Refund Reason")
+        headers.append("Refund Reason")
 
+    first_data_row = header_row + 1
     formula_template: dict[str, tuple[str, str]] = {}
-    if ws.max_row >= 2:
+    if ws.max_row >= first_data_row:
         for col_idx, header in enumerate(headers, start=1):
-            cell = ws.cell(row=2, column=col_idx)
+            cell = ws.cell(row=first_data_row, column=col_idx)
             if isinstance(cell.value, str) and cell.value.startswith("="):
                 formula_template[header] = (cell.value, cell.coordinate)
 
-    next_row = ws.max_row + 1
+    last_data_row = _find_last_data_row(ws, first_data_row, headers)
+    has_existing_leads = last_data_row is not None
+    style_template_row = (
+        last_data_row if has_existing_leads
+        else (first_data_row if ws.max_row >= first_data_row else None)
+    )
+    column_styles: dict[int, tuple] = {}
+    if style_template_row is not None:
+        for col_idx in range(1, len(headers) + 1):
+            src = ws.cell(row=style_template_row, column=col_idx)
+            column_styles[col_idx] = (src.font, src.fill, src.border, src.alignment, src.number_format)
+
+    # Which lead column (if any) feeds each header only depends on the
+    # header/column identity, never on a specific row — resolve it once
+    # per column rather than once per (row, column) pair.
+    column_source: dict[int, str | None] = {}
+    unmatched_passthrough_headers: list[str] = []
+    for col_idx, header in enumerate(headers, start=1):
+        if header is None:
+            continue
+        header_norm = _normalize_header_text(header)
+        if header_norm in ("date", "comment", "status") or header in formula_template or header_norm in _REASON_HEADER_NAMES:
+            continue
+        if header_norm in target_role_by_header:
+            column_source[col_idx] = getattr(field_mapping, target_role_by_header[header_norm])
+            continue
+        attr = _resolve_field_attr(header_norm)
+        if attr:
+            column_source[col_idx] = getattr(field_mapping, attr)
+            continue
+        source_col = _find_passthrough_lead_column(header_norm, lead_headers_norm)
+        column_source[col_idx] = source_col
+        if source_col is None:
+            unmatched_passthrough_headers.append(header)
+
+    next_row = first_data_row if not has_existing_leads else last_data_row + 1
     for row_offset, (idx, lead_row) in enumerate(leads_df.iterrows()):
         excel_row = next_row + row_offset
         for col_idx, header in enumerate(headers, start=1):
             if header is None:
                 continue
-            header_norm = str(header).strip().lower()
+            header_norm = _normalize_header_text(header)
             cell = ws.cell(row=excel_row, column=col_idx)
+            if col_idx in column_styles:
+                font, fill, border, alignment, number_format = column_styles[col_idx]
+                cell.font, cell.fill, cell.border, cell.alignment, cell.number_format = (
+                    copy(font), copy(fill), copy(border), copy(alignment), number_format
+                )
 
             if header_norm == "date":
                 cell.value = run_date
@@ -99,19 +439,18 @@ def append_leads(
                 cell.value = Translator(formula, origin=origin_ref).translate_formula(f"{col_letter}{excel_row}")
             elif header_norm in ("comment", "status"):
                 cell.value = None
-            elif header_norm == "reason":
+            elif header_norm in _REASON_HEADER_NAMES:
                 cell.value = (reasons or {}).get(idx, "")
             else:
-                attr = _resolve_field_attr(header_norm)
-                if attr:
-                    source_col = getattr(field_mapping, attr)
-                    cell.value = lead_row.get(source_col, "")
-                elif header_norm in lead_headers_norm:
-                    cell.value = lead_row.get(lead_headers_norm[header_norm], "")
-                else:
-                    cell.value = None
+                source_col = column_source.get(col_idx)
+                cell.value = lead_row.get(source_col, "") if source_col is not None else None
 
     wb.save(accumulated_path)
+
+    if _original_external_links:
+        _restore_external_link_parts(accumulated_path, _original_external_links)
+
+    return unmatched_passthrough_headers
 
 
 def detect_cids_from_pacing_overview(
