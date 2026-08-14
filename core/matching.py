@@ -17,14 +17,20 @@ class MatchResult:
     score: float
 
 
-def extract_domain(email: str) -> str:
-    if not email or "@" not in email:
+def extract_domain(email) -> str:
+    if email is None:
+        return ""
+    email = str(email)
+    if not email or email.strip().lower() == "nan" or "@" not in email:
         return ""
     return email.strip().lower().split("@")[-1]
 
 
-def normalize_company_name(name: str) -> str:
-    if not name:
+def normalize_company_name(name) -> str:
+    if name is None:
+        return ""
+    name = str(name)
+    if not name or name.strip().lower() == "nan":
         return ""
     lowered = re.sub(r"[^\w\s]", " ", name.lower())
     words = [w for w in lowered.split() if w not in LEGAL_SUFFIXES]

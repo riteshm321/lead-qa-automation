@@ -10,10 +10,22 @@ def test_extract_domain():
     assert extract_domain("not-an-email") == ""
 
 
+def test_extract_domain_handles_nan_float_without_crashing():
+    # Blank Excel/CSV cells surface as a raw float NaN (not a string) after
+    # pandas astype(str) on some pandas versions — must not raise.
+    assert extract_domain(float("nan")) == ""
+    assert extract_domain(None) == ""
+
+
 def test_normalize_company_name_strips_suffixes_and_punctuation():
     assert normalize_company_name("Google, Inc.") == "google"
     assert normalize_company_name("Enerpac Tool Group, Inc.") == "enerpac tool group"
     assert normalize_company_name("") == ""
+
+
+def test_normalize_company_name_handles_nan_float_without_crashing():
+    assert normalize_company_name(float("nan")) == ""
+    assert normalize_company_name(None) == ""
 
 
 def test_company_names_match_exact_after_normalization():
