@@ -42,7 +42,7 @@ def check_leadcap(
             lead_domain = extract_domain(str(row.get(field_mapping.email, "")))
             domain_col = report[config.purchased_report_email_column].astype(str).map(extract_domain)
             domain_count = (cid_mask & (domain_col == lead_domain)).sum()
-            if domain_count >= cap:
+            if domain_count > cap:
                 outcome.fail[idx] = "Leadcap exceeded"
                 domain_pass_failed = True
 
@@ -54,7 +54,7 @@ def check_leadcap(
             if lead_company:
                 company_col = report[config.purchased_report_company_column].astype(str).str.strip().str.lower()
                 company_count = (cid_mask & (company_col == lead_company)).sum()
-                if company_count >= cap:
+                if company_count > cap:
                     outcome.fail[idx] = "Leadcap Exceed - By Company Name"
 
     return outcome
