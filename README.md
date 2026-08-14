@@ -58,6 +58,8 @@ Each client is configured **once**, then reused every time you run a check for t
 - **Column mapping** — map the Accumulated Report's own column headers to Email,
   First Name, Last Name, Company, and CID once. Other columns are matched
   automatically by name when possible (see [Section 8](#8-header-matching--what-to-name-your-columns)).
+- **Jira ticket key** (optional) — e.g. `PROJ-1234`. Set this to enable a "Post
+  summary to Jira" button after Finalize — see [Section 13](#13-posting-a-run-summary-to-jira-optional).
 
 ### 3.2 Client Mode
 
@@ -115,6 +117,8 @@ existing client" mode to change anything later.
 7. Click **Finalize**. This backs up the Accumulated Report first (see
    [Section 11](#11-backups)), then writes valid leads to the Accumulated Report (and
    Lead Template, if configured) and refund-only leads to the Refund tab.
+8. If the client has a Jira ticket key configured, a **Post summary to Jira** prompt
+   appears — see [Section 13](#13-posting-a-run-summary-to-jira-optional).
 
 Use **Clear** (top right) to discard the current upload/results and start over.
 
@@ -250,3 +254,30 @@ with a timestamp. If something goes wrong, restore from there.
 | Excel prompts "we found a problem" / offers to repair after a Finalize | Should not happen — the tool preserves the workbook's external-link data byte-for-byte across saves. If you still see this, it's worth a bug report. |
 | A client you expect to see isn't in the dropdown | Check the **Shared team data location** setting points at the right folder, and that the client's `.json` file sits directly inside its `clients` subfolder (not nested further). |
 | A column you expect to be filled is blank after Finalize | Check the on-screen "these columns had no matching leadfile column" warning after Finalize — rename the leadfile column to something closer to the target header and re-run. |
+
+---
+
+## 13. Posting a run summary to Jira (optional)
+
+After Finalize, if the client has a **Jira ticket key** set (Client Setup → Basics),
+a "Post summary to Jira" prompt appears with an editable, pre-filled summary — the
+client name, the date, and the leads-in/valid/refunded counts for that run.
+
+**One-time setup**, in Client Setup → **🔑 Jira account (private to this machine)**:
+
+- **Jira site URL** — e.g. `https://yourcompany.atlassian.net`.
+- **Your Jira email** and **API token** — generate a token at
+  `id.atlassian.com/manage-profile/security/api-tokens`. The comment is posted under
+  *your own* Jira account, using your own credentials.
+
+These credentials are stored **only** in your local, private settings file — never
+inside the shared clients folder from [Section 6](#6-sharing-clients-across-a-team-optional),
+since an API token is a personal secret, not something to sync to a team folder. Each
+person who wants to use this button configures their own token once, on their own
+machine.
+
+Nothing is posted automatically — review (and edit, if you like) the summary text,
+then click the button to actually send it. Click **Dismiss** to skip posting for
+that run without sending anything.
+
+---
