@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 from rapidfuzz import fuzz
 
+from core.atomic_io import atomic_write_json
+
 LEGAL_SUFFIXES = {"inc", "llc", "corp", "corporation", "ltd", "co", "company", "plc", "oy"}
 
 HIGH_THRESHOLD = 90.0
@@ -45,9 +47,7 @@ def load_alias_groups(path: str) -> list[list[str]]:
 
 
 def save_alias_groups(groups: list[list[str]], path: str) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(groups, f, indent=2)
+    atomic_write_json(path, groups)
 
 
 def add_alias_pair(name_a: str, name_b: str, path: str) -> None:

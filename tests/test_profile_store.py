@@ -54,6 +54,22 @@ def test_list_profile_names(tmp_path):
     assert list_profile_names(clients_dir=clients_dir) == ["Basware"]
 
 
+def test_list_profile_names_ignores_non_profile_json_in_same_folder(tmp_path):
+    # Regression test: a shared clients_dir (per the "Client storage
+    # location" setting) can end up with non-profile .json files sitting
+    # right next to real profiles — this reproduces the exact crash where
+    # company_aliases.json (a plain list) landed in the clients folder and
+    # list_profile_names/load_profile treated it as a client.
+    clients_dir = str(tmp_path / "clients")
+    save_profile(_sample_profile(), clients_dir=clients_dir)
+    with open(os.path.join(clients_dir, "company_aliases.json"), "w", encoding="utf-8") as f:
+        json.dump([["acme", "acme corp"]], f)
+    with open(os.path.join(clients_dir, "not_a_profile_either.json"), "w", encoding="utf-8") as f:
+        json.dump({"some": "unrelated dict"}, f)
+
+    assert list_profile_names(clients_dir=clients_dir) == ["Basware"]
+
+
 def test_client_mode_and_lead_template_round_trip(tmp_path):
     clients_dir = str(tmp_path / "clients")
     profile = _sample_profile()

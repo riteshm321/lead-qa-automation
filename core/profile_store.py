@@ -2,6 +2,7 @@ import dataclasses
 import json
 import os
 
+from core.atomic_io import atomic_write_json
 from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
     TalConfig, ExclusionConfig, SuppressionConfig,
@@ -14,10 +15,8 @@ def _profile_path(name: str, clients_dir: str) -> str:
 
 
 def save_profile(profile: ClientProfile, clients_dir: str = "clients") -> str:
-    os.makedirs(clients_dir, exist_ok=True)
     path = _profile_path(profile.name, clients_dir)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(dataclasses.asdict(profile), f, indent=2)
+    atomic_write_json(path, dataclasses.asdict(profile))
     return path
 
 
@@ -74,11 +73,24 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
     )
 
 
+def _looks_like_profile(path: str) -> bool:
+    # A shared clients_dir can accumulate .json files that aren't client
+    # profiles at all — e.g. OneDrive conflict copies, or (before aliases
+    # moved to their own subfolder) the aliases file itself. Requiring the
+    # shape of an actual profile avoids treating those as fake clients.
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and "accumulated_report_path" in data
+
+
 def list_profile_names(clients_dir: str = "clients") -> list[str]:
     if not os.path.isdir(clients_dir):
         return []
     return sorted(
         os.path.splitext(f)[0]
         for f in os.listdir(clients_dir)
-        if f.endswith(".json")
+        if f.endswith(".json") and _looks_like_profile(os.path.join(clients_dir, f))
     )
