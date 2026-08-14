@@ -139,3 +139,26 @@ def test_load_profile_defaults_lead_template_tabs_for_old_schema_json(tmp_path):
     loaded = load_profile("OldClient2", clients_dir=clients_dir)
     assert loaded.lead_template_multi_tab is False
     assert loaded.lead_template_tabs == []
+
+
+def test_jira_ticket_key_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.jira_ticket_key = "PROJ-1234"
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+    assert loaded.jira_ticket_key == "PROJ-1234"
+
+
+def test_load_profile_defaults_jira_ticket_key_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldClient3.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "OldClient3",
+            "accumulated_report_path": "sample_data/x.xlsx",
+        }, f)
+
+    loaded = load_profile("OldClient3", clients_dir=clients_dir)
+    assert loaded.jira_ticket_key == ""

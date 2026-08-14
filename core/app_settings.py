@@ -44,3 +44,24 @@ def get_aliases_path() -> str:
     if root:
         return os.path.join(root, "aliases", "company_aliases.json")
     return "aliases/company_aliases.json"
+
+
+def get_jira_settings() -> dict:
+    # Deliberately read from the plain local app_settings.json only — never
+    # from anything under get_shared_root_dir(). An API token is a secret
+    # tied to one person's Jira account; it must never end up inside the
+    # clients folder a whole team may sync via OneDrive.
+    settings = load_app_settings()
+    return {
+        "base_url": settings.get("jira_base_url", ""),
+        "email": settings.get("jira_email", ""),
+        "api_token": settings.get("jira_api_token", ""),
+    }
+
+
+def save_jira_settings(base_url: str, email: str, api_token: str) -> None:
+    updated = load_app_settings()
+    updated["jira_base_url"] = base_url.strip()
+    updated["jira_email"] = email.strip()
+    updated["jira_api_token"] = api_token
+    save_app_settings(updated)

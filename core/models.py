@@ -87,6 +87,7 @@ class ClientProfile:
     accumulated_report_path: str
     accumulated_tab_name: str = "Accumulated"
     refund_tab_name: str = "Refund"
+    jira_ticket_key: str = ""
     client_mode: str = "Lead QA"
     lead_template_path: str = ""
     lead_template_sheet_name: str = ""

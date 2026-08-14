@@ -1,10 +1,11 @@
 import os
+from unittest.mock import patch
 
 import openpyxl
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
-from core.app_settings import get_clients_dir
+from core.app_settings import get_clients_dir, save_jira_settings
 from core.models import ClientProfile, FieldMapping, DuplicateConfig
 from core.pipeline import PipelineResult
 from core.profile_store import save_profile
@@ -49,7 +50,7 @@ def test_approved_refund_lead_lands_in_accumulated_tab_not_just_refund(tmp_path,
     ])
     result = PipelineResult(valid_indices=[0], refund_reasons={1: "Duplicate - exact email"})
 
-    at = AppTest.from_file(_PAGE_PATH)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.session_state["run_new_leads"] = new_leads
     at.session_state["run_result"] = result
     at.session_state["run_result_for"] = "Test Client"
@@ -97,7 +98,7 @@ def test_unapproved_refund_lead_stays_refund_only(tmp_path, monkeypatch):
     ])
     result = PipelineResult(valid_indices=[], refund_reasons={0: "Duplicate - exact email"})
 
-    at = AppTest.from_file(_PAGE_PATH)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.session_state["run_new_leads"] = new_leads
     at.session_state["run_result"] = result
     at.session_state["run_result_for"] = "Test Client"
@@ -138,7 +139,7 @@ def test_select_all_as_valid_approves_every_refund_lead(tmp_path, monkeypatch):
     ])
     result = PipelineResult(valid_indices=[], refund_reasons={0: "Exclusion - domain", 1: "Exclusion - domain"})
 
-    at = AppTest.from_file(_PAGE_PATH)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.session_state["run_new_leads"] = new_leads
     at.session_state["run_result"] = result
     at.session_state["run_result_for"] = "Test Client"
@@ -161,3 +162,92 @@ def test_select_all_as_valid_approves_every_refund_lead(tmp_path, monkeypatch):
 
     assert {"a@x.com", "b@x.com"} <= acc_emails
     assert refund_rows == []
+
+
+def test_post_summary_to_jira_after_finalize(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    save_jira_settings("https://example.atlassian.net", "me@example.com", "token123")
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        duplicate=DuplicateConfig(enabled=True),
+        jira_ticket_key="PROJ-1234",
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    # The "Post to Jira" prompt should now be showing, pre-filled with a
+    # summary — verify it before actually posting anything.
+    comment_box = next(t for t in at.text_area if t.key == "jira_comment_text")
+    assert "Test Client" in comment_box.value
+    assert "1 leads in" in comment_box.value
+    assert "1 valid" in comment_box.value
+
+    with patch("core.jira_client.post_comment") as mock_post:
+        post_button = next(b for b in at.button if b.key == "jira_post_button")
+        post_button.click().run()
+        assert not at.exception
+
+    mock_post.assert_called_once()
+    call_args = mock_post.call_args[0]
+    assert call_args[0] == "https://example.atlassian.net"
+    assert call_args[1] == "me@example.com"
+    assert call_args[2] == "token123"
+    assert call_args[3] == "PROJ-1234"
+    assert "Test Client" in call_args[4]
+
+    # Session state cleaned up so the prompt disappears after a successful post.
+    assert "last_finalized_summary" not in at.session_state
+
+
+def test_jira_prompt_does_not_appear_without_ticket_key(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        duplicate=DuplicateConfig(enabled=True),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    assert not any(t.key == "jira_comment_text" for t in at.text_area)

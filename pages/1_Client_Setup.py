@@ -8,7 +8,10 @@ from core.excel_io import (
     list_sheet_names, read_sheet_as_dataframe, detect_cids_from_pacing_overview, guess_target_field_mapping,
     find_header_row, read_sheet_headers,
 )
-from core.app_settings import get_aliases_path, get_clients_dir, get_shared_root_dir, load_app_settings, save_app_settings
+from core.app_settings import (
+    get_aliases_path, get_clients_dir, get_jira_settings, get_shared_root_dir,
+    load_app_settings, save_app_settings, save_jira_settings,
+)
 from core.file_browser import browse_for_file, browse_for_folder
 from core.models import (
     ClientProfile, DuplicateConfig, LeadcapConfig, LeadcapSegment,
@@ -85,6 +88,26 @@ with st.expander("⚙️ Shared team data location"):
                 k: v for k, v in load_app_settings().items() if k not in ("clients_dir", "shared_root_dir")
             })
             st.rerun()
+
+with st.expander("🔑 Jira account (private to this machine)"):
+    st.caption(
+        "Used only for the \"Post summary to Jira\" button on the Run Check page, so a finalized run's "
+        "summary can be posted as a comment on that client's Jira ticket under your own account. "
+        "This is stored locally on this machine only — never inside the shared clients folder above, "
+        "since an API token is a secret tied to your Jira login."
+    )
+    _jira = get_jira_settings()
+    jira_base_url = st.text_input("Jira site URL", value=_jira["base_url"],
+                                   placeholder="https://yourcompany.atlassian.net", key="jira_base_url_input")
+    jira_email = st.text_input("Your Jira email", value=_jira["email"], key="jira_email_input")
+    jira_api_token = st.text_input(
+        "Your Jira API token", value=_jira["api_token"], type="password", key="jira_api_token_input",
+        help="Generate one at id.atlassian.com/manage-profile/security/api-tokens",
+    )
+    if st.button("Save Jira account", key="jira_settings_save"):
+        save_jira_settings(jira_base_url, jira_email, jira_api_token)
+        st.success("Saved.")
+        st.rerun()
 
 
 def _path_input_with_browse(label: str, session_key: str, current_value: str, show_label: bool = True) -> str:
@@ -378,6 +401,12 @@ with tab_basics:
         refund_tab_name = st.text_input("Refund tab name",
                                          value=profile.refund_tab_name if profile else "Refund")
 
+    jira_ticket_key = st.text_input(
+        "Jira ticket key (optional)", value=profile.jira_ticket_key if profile else "",
+        placeholder="e.g. PROJ-1234",
+        help="Enables a \"Post summary to Jira\" button on Run Check after Finalize. Leave blank to skip.",
+    )
+
     accumulated_headers = _safe_read_headers(accumulated_path, accumulated_tab_name)
 
     # Reset the mapping dropdowns whenever the actual file/tab changes —
@@ -636,6 +665,7 @@ if st.button("💾 Save Client Profile", type="primary"):
             accumulated_report_path=accumulated_path,
             accumulated_tab_name=accumulated_tab_name or "Accumulated",
             refund_tab_name=refund_tab_name or "Refund",
+            jira_ticket_key=jira_ticket_key.strip(),
             client_mode=client_mode,
             lead_template_path=lead_template_path if client_mode == "Lead QA" else "",
             lead_template_sheet_name=(

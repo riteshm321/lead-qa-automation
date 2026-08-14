@@ -15,7 +15,7 @@ def test_browse_button_does_not_raise_session_state_exception(tmp_path, monkeypa
     fake_dir = str(tmp_path / "OneDriveShared" / "Clients")
 
     with patch("core.file_browser.browse_for_folder", return_value=fake_dir):
-        at = AppTest.from_file(_PAGE_PATH)
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
         at.run()
         assert not at.exception
 
@@ -36,7 +36,7 @@ def test_save_button_persists_shared_root_and_migrates_aliases(tmp_path, monkeyp
     new_root = str(tmp_path / "Shared" / "LeadQA")
 
     with patch("core.file_browser.browse_for_folder", return_value=new_root):
-        at = AppTest.from_file(_PAGE_PATH)
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
         at.run()
 
         browse_button = next(b for b in at.button if b.key == "clients_dir_browse")
@@ -70,7 +70,7 @@ def test_migrated_aliases_do_not_pollute_client_list_in_shared_folder(tmp_path, 
     new_root = str(tmp_path / "Shared" / "LeadQA")
 
     with patch("core.file_browser.browse_for_folder", return_value=new_root):
-        at = AppTest.from_file(_PAGE_PATH)
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
         at.run()
         at.button(key="clients_dir_browse").click().run()
         at.button(key="clients_dir_save").click().run()

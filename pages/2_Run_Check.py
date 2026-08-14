@@ -4,17 +4,20 @@ import datetime
 import pandas as pd
 import streamlit as st
 
-from core.app_settings import get_aliases_path, get_clients_dir
+from core.app_settings import get_aliases_path, get_clients_dir, get_jira_settings
 from core.checks.leadcap import validate_purchased_report_cids
 from core.errors import render_error
 from core.excel_io import (
     read_sheet_as_dataframe, append_leads, backup_file, require_columns, find_header_row, route_leads_by_cid,
     read_leadfile,
 )
+from core import jira_client
+from core.jira_client import JiraError
 from core.matching import load_alias_groups, add_alias_pair
 from core.models import FieldMapping
 from core.pipeline import run_pipeline, apply_refund_overrides
 from core.profile_store import list_profile_names, load_profile, save_profile
+import requests
 
 st.title("▶️ Run Check")
 
@@ -29,7 +32,7 @@ with col_client:
 with col_clear:
     if st.button("🔄 Clear", use_container_width=True,
                  help="Clear the uploaded files and any displayed results, and start a fresh run."):
-        for key in ("run_result", "run_new_leads", "run_result_for"):
+        for key in ("run_result", "run_new_leads", "run_result_for", "last_finalized_summary"):
             st.session_state.pop(key, None)
         st.session_state["upload_reset_counter"] = st.session_state.get("upload_reset_counter", 0) + 1
         st.rerun()
@@ -326,7 +329,46 @@ if "run_result" in st.session_state:
                 )
 
             st.success("Accumulated Report updated.")
+            if profile.jira_ticket_key:
+                st.session_state["last_finalized_summary"] = {
+                    "client_name": client_name,
+                    "ticket_key": profile.jira_ticket_key,
+                    "run_date": run_date,
+                    "leads_in": len(new_leads),
+                    "valid": len(final_valid_indices),
+                    "refund": len(final_refund_indices),
+                }
             del st.session_state["run_result"]
             del st.session_state["run_new_leads"]
         except Exception as exc:
             render_error(exc)
+
+_pending_summary = st.session_state.get("last_finalized_summary")
+if _pending_summary and _pending_summary["client_name"] == client_name:
+    st.divider()
+    st.subheader("Post to Jira")
+    _default_comment = (
+        f"Lead QA run for {_pending_summary['client_name']} — {_pending_summary['run_date']}\n"
+        f"{_pending_summary['leads_in']} leads in → {_pending_summary['valid']} valid, "
+        f"{_pending_summary['refund']} refunded"
+    )
+    st.text_area("Comment to post (edit if needed)", _default_comment, key="jira_comment_text", height=100)
+    if st.button(f"📋 Post summary to {_pending_summary['ticket_key']}", key="jira_post_button"):
+        jira_settings = get_jira_settings()
+        if not all([jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"]]):
+            st.error("Set up your Jira account (site URL, email, API token) in Client Setup first.")
+        else:
+            try:
+                jira_client.post_comment(
+                    jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"],
+                    _pending_summary["ticket_key"], st.session_state["jira_comment_text"],
+                )
+                st.success(f"Posted to {_pending_summary['ticket_key']}.")
+                del st.session_state["last_finalized_summary"]
+            except JiraError as exc:
+                st.error(f"Jira rejected the request: {exc}")
+            except requests.RequestException as exc:
+                st.error(f"Couldn't reach Jira: {exc}")
+    if st.button("Dismiss", key="jira_dismiss_button"):
+        del st.session_state["last_finalized_summary"]
+        st.rerun()
