@@ -70,5 +70,5 @@ def test_finalize_writes_refund_rows_with_reason(accumulated_copy):
 
     refund_after = read_sheet_as_dataframe(accumulated_copy, "Refund")
     assert len(refund_after) >= len(refund_indices)
-    assert "Reason" in refund_after.columns
+    assert "Refund Reason" in refund_after.columns
     assert backup_path != accumulated_copy

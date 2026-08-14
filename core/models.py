@@ -76,12 +76,25 @@ class DedupeListConfig:
 
 
 @dataclass
+class LeadTemplateTab:
+    sheet_name: str
+    cids: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ClientProfile:
     name: str
     accumulated_report_path: str
     accumulated_tab_name: str = "Accumulated"
     refund_tab_name: str = "Refund"
+    client_mode: str = "Lead QA"
+    lead_template_path: str = ""
+    lead_template_sheet_name: str = ""
+    lead_template_multi_tab: bool = False
+    lead_template_tabs: list[LeadTemplateTab] = field(default_factory=list)
     field_mapping: Optional[FieldMapping] = None
+    accumulated_field_mapping: Optional[FieldMapping] = None
+    lead_template_field_mapping: Optional[FieldMapping] = None
     duplicate: DuplicateConfig = field(default_factory=DuplicateConfig)
     leadcap: LeadcapConfig = field(default_factory=LeadcapConfig)
     exclusion: ExclusionConfig = field(default_factory=ExclusionConfig)

@@ -1,6 +1,9 @@
+import json
+import os
+
 from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
-    TalConfig, ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig,
+    TalConfig, ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, LeadTemplateTab,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
@@ -49,3 +52,74 @@ def test_list_profile_names(tmp_path):
     clients_dir = str(tmp_path / "clients")
     save_profile(_sample_profile(), clients_dir=clients_dir)
     assert list_profile_names(clients_dir=clients_dir) == ["Basware"]
+
+
+def test_client_mode_and_lead_template_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.client_mode = "Lead QA"
+    profile.lead_template_path = "sample_data/template.xlsx"
+    profile.lead_template_sheet_name = "Sheet1"
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+    assert loaded == profile
+
+
+def test_load_profile_defaults_client_mode_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldClient.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "OldClient",
+            "accumulated_report_path": "sample_data/x.xlsx",
+        }, f)
+
+    loaded = load_profile("OldClient", clients_dir=clients_dir)
+    assert loaded.client_mode == "Lead QA"
+    assert loaded.lead_template_path == ""
+    assert loaded.lead_template_sheet_name == ""
+    assert loaded.accumulated_field_mapping is None
+    assert loaded.lead_template_field_mapping is None
+
+
+def test_accumulated_and_lead_template_field_mapping_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.accumulated_field_mapping = FieldMapping(
+        email="Email Add.", first_name="Given Name", last_name="Surname", company="Org", cid="Campaign ID")
+    profile.lead_template_field_mapping = FieldMapping(
+        email="emailaddress", first_name="firstname", last_name="lastname", company="company", cid="CID")
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+    assert loaded == profile
+
+
+def test_lead_template_multi_tab_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.lead_template_path = "sample_data/template.xlsx"
+    profile.lead_template_multi_tab = True
+    profile.lead_template_tabs = [
+        LeadTemplateTab(sheet_name="APAC", cids=["119336", "119337"]),
+        LeadTemplateTab(sheet_name="EMEA", cids=["119338"]),
+    ]
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+    assert loaded == profile
+
+
+def test_load_profile_defaults_lead_template_tabs_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldClient2.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "OldClient2",
+            "accumulated_report_path": "sample_data/x.xlsx",
+        }, f)
+
+    loaded = load_profile("OldClient2", clients_dir=clients_dir)
+    assert loaded.lead_template_multi_tab is False
+    assert loaded.lead_template_tabs == []

@@ -5,7 +5,7 @@ import os
 from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
     TalConfig, ExclusionConfig, SuppressionConfig,
-    DuplicateConfig, DedupeListConfig, ReferenceSource,
+    DuplicateConfig, DedupeListConfig, ReferenceSource, LeadTemplateTab,
 )
 
 
@@ -29,6 +29,12 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
     fm = data.get("field_mapping")
     field_mapping = FieldMapping(**fm) if fm else None
 
+    acc_fm = data.get("accumulated_field_mapping")
+    accumulated_field_mapping = FieldMapping(**acc_fm) if acc_fm else None
+
+    tmpl_fm = data.get("lead_template_field_mapping")
+    lead_template_field_mapping = FieldMapping(**tmpl_fm) if tmpl_fm else None
+
     leadcap = data.get("leadcap") or {}
     leadcap["segments"] = [LeadcapSegment(**s) for s in leadcap.get("segments", [])]
 
@@ -44,12 +50,21 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
     dedupe_list = data.get("dedupe_list") or {}
     dedupe_list["sources"] = [ReferenceSource(**s) for s in dedupe_list.get("sources", [])]
 
+    lead_template_tabs = [LeadTemplateTab(**t) for t in data.get("lead_template_tabs", [])]
+
     return ClientProfile(
         name=data["name"],
         accumulated_report_path=data["accumulated_report_path"],
         accumulated_tab_name=data.get("accumulated_tab_name", "Accumulated"),
         refund_tab_name=data.get("refund_tab_name", "Refund"),
+        client_mode=data.get("client_mode", "Lead QA"),
+        lead_template_path=data.get("lead_template_path", ""),
+        lead_template_sheet_name=data.get("lead_template_sheet_name", ""),
+        lead_template_multi_tab=data.get("lead_template_multi_tab", False),
+        lead_template_tabs=lead_template_tabs,
         field_mapping=field_mapping,
+        accumulated_field_mapping=accumulated_field_mapping,
+        lead_template_field_mapping=lead_template_field_mapping,
         duplicate=DuplicateConfig(**(data.get("duplicate") or {})),
         leadcap=LeadcapConfig(**leadcap),
         exclusion=ExclusionConfig(**exclusion),
