@@ -7,3 +7,6 @@ sample_data/
 .venv/
 venv/
 .claude/
+build/
+dist/
+*.spec
