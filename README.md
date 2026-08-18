@@ -58,7 +58,9 @@ Each client is configured **once**, then reused every time you run a check for t
 - **Column mapping** — map the Accumulated Report's own column headers to Email,
   First Name, Last Name, Company, and CID once. Other columns are matched
   automatically by name when possible (see [Section 8](#8-header-matching--what-to-name-your-columns)).
-- **Jira ticket key** (optional) — e.g. `PROJ-1234`. Set this to enable a "Post
+- **Jira ticket key or link** (optional) — paste either `PROJ-1234` or the full
+  ticket URL (e.g. copied from your browser's address bar); both work; a pasted
+  link is automatically reduced to just the key. Set this to enable a "Post
   summary to Jira" button after Finalize — see [Section 13](#13-posting-a-run-summary-to-jira-optional).
 
 ### 3.2 Client Mode

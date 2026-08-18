@@ -2,7 +2,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from core.jira_client import post_comment, JiraError, _text_to_adf
+from core.jira_client import post_comment, JiraError, _text_to_adf, extract_ticket_key
 
 
 def test_text_to_adf_one_paragraph_per_line():
@@ -46,3 +46,27 @@ def test_post_comment_raises_jira_error_on_non_2xx():
 
     assert "401" in str(exc_info.value)
     assert "PROJ-1" in str(exc_info.value)
+
+
+def test_extract_ticket_key_passes_through_a_bare_key():
+    assert extract_ticket_key("PROJ-1234") == "PROJ-1234"
+
+
+def test_extract_ticket_key_lowercase_key_gets_uppercased():
+    assert extract_ticket_key("proj-1234") == "PROJ-1234"
+
+
+def test_extract_ticket_key_from_browse_url():
+    assert extract_ticket_key("https://yourteam.atlassian.net/browse/PROJ-1234") == "PROJ-1234"
+
+
+def test_extract_ticket_key_from_url_with_trailing_query_string():
+    assert extract_ticket_key("https://yourteam.atlassian.net/browse/PROJ-1234?filter=1") == "PROJ-1234"
+
+
+def test_extract_ticket_key_strips_surrounding_whitespace():
+    assert extract_ticket_key("  PROJ-1234  ") == "PROJ-1234"
+
+
+def test_extract_ticket_key_falls_back_to_input_when_unrecognized():
+    assert extract_ticket_key("not a ticket") == "not a ticket"

@@ -90,3 +90,26 @@ def test_migrated_aliases_do_not_pollute_client_list_in_shared_folder(tmp_path, 
     )
 
     assert list_profile_names(clients_dir=get_clients_dir()) == ["Real Client"]
+
+
+def test_saving_a_jira_ticket_link_normalizes_to_the_bare_key(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("Jira Link Test Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    next(t for t in at.text_input if t.label == "Jira ticket key or link (optional)").set_value(
+        "https://yourteam.atlassian.net/browse/PROJ-9876"
+    ).run()
+
+    save_button = next(b for b in at.button if "Save Client Profile" in b.label)
+    save_button.click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Jira Link Test Client", get_clients_dir())
+    assert loaded.jira_ticket_key == "PROJ-9876"

@@ -1,8 +1,25 @@
+import re
+
 import requests
 
 
 class JiraError(Exception):
     """A Jira API call failed — the response text is included for context."""
+
+
+_TICKET_KEY_RE = re.compile(r"([A-Z][A-Z0-9]+-\d+)")
+
+
+def extract_ticket_key(value: str) -> str:
+    """Accepts either a bare Jira ticket key ("PROJ-1234") or a full ticket
+    URL ("https://yourteam.atlassian.net/browse/PROJ-1234") and returns
+    just the key — the comment API only accepts the key, but a link is
+    usually what's actually on hand, copied straight from the browser's
+    address bar while looking at the ticket.
+    """
+    value = value.strip()
+    match = _TICKET_KEY_RE.search(value.upper())
+    return match.group(1) if match else value
 
 
 def _text_to_adf(text: str) -> dict:

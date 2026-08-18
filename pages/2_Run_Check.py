@@ -332,7 +332,7 @@ if "run_result" in st.session_state:
             if profile.jira_ticket_key:
                 st.session_state["last_finalized_summary"] = {
                     "client_name": client_name,
-                    "ticket_key": profile.jira_ticket_key,
+                    "ticket_key": jira_client.extract_ticket_key(profile.jira_ticket_key),
                     "run_date": run_date,
                     "leads_in": len(new_leads),
                     "valid": len(final_valid_indices),

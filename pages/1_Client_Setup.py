@@ -13,6 +13,7 @@ from core.app_settings import (
     load_app_settings, save_app_settings, save_jira_settings,
 )
 from core.file_browser import browse_for_file, browse_for_folder
+from core.jira_client import extract_ticket_key
 from core.models import (
     ClientProfile, DuplicateConfig, LeadcapConfig, LeadcapSegment,
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
@@ -402,9 +403,10 @@ with tab_basics:
                                          value=profile.refund_tab_name if profile else "Refund")
 
     jira_ticket_key = st.text_input(
-        "Jira ticket key (optional)", value=profile.jira_ticket_key if profile else "",
-        placeholder="e.g. PROJ-1234",
-        help="Enables a \"Post summary to Jira\" button on Run Check after Finalize. Leave blank to skip.",
+        "Jira ticket key or link (optional)", value=profile.jira_ticket_key if profile else "",
+        placeholder="e.g. PROJ-1234 or https://yourteam.atlassian.net/browse/PROJ-1234",
+        help="Paste either the ticket key or the full link — either works. Enables a \"Post summary "
+             "to Jira\" button on Run Check after Finalize. Leave blank to skip.",
     )
 
     accumulated_headers = _safe_read_headers(accumulated_path, accumulated_tab_name)
@@ -665,7 +667,7 @@ if st.button("💾 Save Client Profile", type="primary"):
             accumulated_report_path=accumulated_path,
             accumulated_tab_name=accumulated_tab_name or "Accumulated",
             refund_tab_name=refund_tab_name or "Refund",
-            jira_ticket_key=jira_ticket_key.strip(),
+            jira_ticket_key=extract_ticket_key(jira_ticket_key) if jira_ticket_key.strip() else "",
             client_mode=client_mode,
             lead_template_path=lead_template_path if client_mode == "Lead QA" else "",
             lead_template_sheet_name=(
