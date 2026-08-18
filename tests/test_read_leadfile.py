@@ -55,3 +55,23 @@ def test_read_leadfile_xlsx_still_works(tmp_path):
 
     assert list(df.columns) == ["Email", "First"]
     assert df.iloc[0]["Email"] == "abc@x.com"
+
+
+def test_read_leadfile_xlsx_skips_title_row_above_real_header(tmp_path):
+    # Regression test: a New Leads export with a title/instructions row
+    # above the real header previously got read with header=0, so pandas
+    # generated "Unnamed: 0"/"Unnamed: 1" column names from that blank title
+    # row instead of the real "Email"/"First Name"/... headers below it.
+    path = tmp_path / "leads.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Lead Report - Generated 2026-08-18"])
+    ws.append(["Email", "First Name", "Last Name", "Company", "CID"])
+    ws.append(["abc@x.com", "Bob", "Smith", "Acme", "12345"])
+    wb.save(path)
+
+    with open(path, "rb") as fh:
+        df = read_leadfile(_upload("leads.xlsx", fh.read()))
+
+    assert list(df.columns) == ["Email", "First Name", "Last Name", "Company", "CID"]
+    assert df.iloc[0]["Email"] == "abc@x.com"

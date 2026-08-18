@@ -65,7 +65,22 @@ def read_leadfile(uploaded_file) -> pd.DataFrame:
     name = getattr(uploaded_file, "name", "") or ""
     if not name.lower().endswith(".csv"):
         uploaded_file.seek(0)
-        return pd.read_excel(uploaded_file)
+        raw = uploaded_file.read()
+
+        # New Leads files, like Lead Templates, sometimes carry a
+        # title/instruction row above the real header — reading with a fixed
+        # header=0 then reads that row as the header, leaving every blank
+        # cell in it as pandas' auto-generated "Unnamed: N". Detect the true
+        # header row the same way find_header_row() does for target sheets.
+        wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True)
+        try:
+            ws = wb[wb.sheetnames[0]]
+            rows = list(ws.iter_rows(min_row=1, max_row=min(ws.max_row, 20)))
+            header_row = _detect_header_row_from_rows(rows, set(_ALL_KNOWN_HEADER_MARKERS))
+        finally:
+            wb.close()
+
+        return pd.read_excel(io.BytesIO(raw), header=header_row - 1)
 
     uploaded_file.seek(0)
     raw = uploaded_file.read()
@@ -181,6 +196,27 @@ _ALL_KNOWN_HEADER_MARKERS = {_normalize_header_text(syn) for syns in _FIELD_SYNO
 _MIN_STRUCTURAL_HEADER_CELLS = 3
 
 
+def _detect_header_row_from_rows(rows: list, markers: set[str]) -> int:
+    """Shared two-tier header-row detection over a list of openpyxl rows
+    (1-based row numbers preserved on each cell). See find_header_row for
+    the detection strategy this implements.
+    """
+    for row in rows:
+        for cell in row:
+            if isinstance(cell.value, str) and _normalize_header_text(cell.value) in markers:
+                return cell.row
+
+    best_offset, best_count = None, 0
+    for offset, row in enumerate(rows):
+        non_empty = sum(1 for cell in row if cell.value is not None and str(cell.value).strip() != "")
+        if non_empty >= _MIN_STRUCTURAL_HEADER_CELLS and non_empty > best_count:
+            best_offset, best_count = offset, non_empty
+    if best_offset is not None:
+        return best_offset + 1
+
+    return 1
+
+
 def find_header_row(path: str, sheet_name: str, expected_headers: list | None = None,
                      max_scan_rows: int = 20) -> int:
     """Detect which row holds the real column headers.
@@ -213,21 +249,7 @@ def find_header_row(path: str, sheet_name: str, expected_headers: list | None = 
     try:
         ws = wb[sheet_name]
         rows = list(ws.iter_rows(min_row=1, max_row=min(ws.max_row, max_scan_rows)))
-
-        for row in rows:
-            for cell in row:
-                if isinstance(cell.value, str) and _normalize_header_text(cell.value) in markers:
-                    return cell.row
-
-        best_offset, best_count = None, 0
-        for offset, row in enumerate(rows):
-            non_empty = sum(1 for cell in row if cell.value is not None and str(cell.value).strip() != "")
-            if non_empty >= _MIN_STRUCTURAL_HEADER_CELLS and non_empty > best_count:
-                best_offset, best_count = offset, non_empty
-        if best_offset is not None:
-            return best_offset + 1
-
-        return 1
+        return _detect_header_row_from_rows(rows, markers)
     finally:
         wb.close()
 
