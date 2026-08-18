@@ -67,20 +67,29 @@ def read_leadfile(uploaded_file) -> pd.DataFrame:
         uploaded_file.seek(0)
         raw = uploaded_file.read()
 
-        # New Leads files, like Lead Templates, sometimes carry a
-        # title/instruction row above the real header — reading with a fixed
-        # header=0 then reads that row as the header, leaving every blank
-        # cell in it as pandas' auto-generated "Unnamed: N". Detect the true
-        # header row the same way find_header_row() does for target sheets.
+        # Two independent problems, both producing the same "Unnamed: N"
+        # symptom: (1) a workbook can have multiple sheets where the real
+        # leads live on whichever sheet was active when the file was last
+        # saved, not necessarily the first one by position — e.g. a pivot
+        # summary sheet sitting before the real data sheet. wb.active is
+        # openpyxl's read of that "last viewed" sheet, same as Excel shows
+        # you on open; pd.read_excel's default sheet_name=0 has no such
+        # concept and just takes the first by position, so it was reading
+        # the wrong sheet entirely. (2) New Leads files, like Lead
+        # Templates, sometimes carry a title/instruction row above the real
+        # header, which a fixed header=0 reads as the header — detect the
+        # true header row the same way find_header_row() does for target
+        # sheets.
         wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True)
         try:
-            ws = wb[wb.sheetnames[0]]
+            sheet_name = wb.active.title
+            ws = wb[sheet_name]
             rows = list(ws.iter_rows(min_row=1, max_row=min(ws.max_row, 20)))
             header_row = _detect_header_row_from_rows(rows, set(_ALL_KNOWN_HEADER_MARKERS))
         finally:
             wb.close()
 
-        return pd.read_excel(io.BytesIO(raw), header=header_row - 1)
+        return pd.read_excel(io.BytesIO(raw), sheet_name=sheet_name, header=header_row - 1)
 
     uploaded_file.seek(0)
     raw = uploaded_file.read()
