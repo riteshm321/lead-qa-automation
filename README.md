@@ -65,14 +65,27 @@ Each client is configured **once**, then reused every time you run a check for t
 
 ### 3.2 Client Mode
 
-- **Lead QA** — leads only go into the Accumulated Report.
-- **Lead QA & Upload** — leads also get appended to a separate **Lead Template**
-  file (e.g. for uploading to a client's own portal). Configure:
+- **Lead QA** — leads also get appended to a separate **Lead Template** file (e.g.
+  for uploading to a client's own portal), configured as below. Despite the name,
+  this is the mode *with* Lead Template support.
+- **Lead QA & Upload** — leads only go into the Accumulated Report; no Lead
+  Template section is shown at all (reserved for a future direct-upload
+  mechanism that isn't file-based).
+
+When mode is **Lead QA**, configure:
   - **Lead Template path** and its **sheet name** (single-tab), or
   - **multi-tab routing**: tick "This Lead Template has multiple tabs (routed by
     CID)" and list each tab's sheet name plus which CIDs belong to it. A lead's CID
     decides which tab it lands in; a CID that matches no tab still goes to the
     Accumulated Report, just not the Lead Template.
+    - Each tab can optionally point at its **own file** — leave it blank to use
+      the shared Lead Template path above, or set it when that CID group's leads
+      actually belong in a completely separate workbook, not just another tab.
+  - **Clear existing leads before adding new ones** — off by default (leads
+    accumulate below whatever's already there, like the Accumulated Report). Turn
+    this on for a Lead Report that gets re-sent fresh each time rather than
+    accumulated: it removes all existing data rows (keeping the header and its
+    formatting, which is reused for the new rows) before pasting this run's leads.
   - The Lead Template's header row doesn't have to be row 1 — the tool scans the
     first 20 rows for one that looks like a real header row.
 
@@ -267,7 +280,7 @@ a "Post summary to Jira" prompt appears, pre-filled and ready to review:
 - **Opening message** (editable) — a "Hi `<reporter name>`" greeting (if you set one),
   the run date, and the leads-in/valid/refunded counts.
 - **File links** — checkboxes to include the Accumulated Report and (for
-  "Lead QA & Upload" clients) the Lead Template as clickable links in the comment.
+  "Lead QA" clients with a Lead Template configured) the Lead Report as clickable links in the comment.
   These open the file when clicked, but **only on a machine where that exact file
   path exists** (typically your own machine, or a teammate syncing the identical
   shared folder) — not a universal link a client could open from anywhere.

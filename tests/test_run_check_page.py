@@ -6,7 +6,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_jira_settings
-from core.models import ClientProfile, FieldMapping, DuplicateConfig
+from core.models import ClientProfile, FieldMapping, DuplicateConfig, LeadTemplateTab
 from core.pipeline import PipelineResult
 from core.profile_store import save_profile
 
@@ -330,3 +330,151 @@ def test_post_summary_to_jira_includes_pacing_overview_as_native_table(tmp_path,
     assert header_texts == ["SR No", "CID", "Campaign Segment"]
     data_row_1 = table_nodes[0]["content"][1]
     assert data_row_1["content"][1]["content"][0]["content"][0]["text"] == "118118"
+
+
+def test_jira_summary_includes_lead_report_link_for_lead_qa_mode_with_template(tmp_path, monkeypatch):
+    # Regression test: the "Lead Report" file link must key off client_mode
+    # == "Lead QA" (the mode that actually has lead_template_path set —
+    # counterintuitively, "Lead QA & Upload" mode has no Lead Template at
+    # all), not "Lead QA & Upload".
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    template_path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "CID"])
+    wb.save(template_path)
+    save_jira_settings("https://example.atlassian.net", "me@example.com", "token123")
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        duplicate=DuplicateConfig(enabled=True),
+        jira_ticket_key="PROJ-1234",
+        client_mode="Lead QA",
+        lead_template_path=template_path,
+        lead_template_sheet_name="Sheet",
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    assert any(c.key == "jira_link_Lead Report" for c in at.checkbox)
+
+
+def test_jira_summary_omits_lead_report_link_for_lead_qa_and_upload_mode(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    save_jira_settings("https://example.atlassian.net", "me@example.com", "token123")
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        duplicate=DuplicateConfig(enabled=True),
+        jira_ticket_key="PROJ-1234",
+        client_mode="Lead QA & Upload",
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    assert not any(c.key == "jira_link_Lead Report" for c in at.checkbox)
+    assert any(c.key == "jira_link_Accumulated File" for c in at.checkbox)
+
+
+def test_multi_tab_routes_different_cids_to_completely_different_files(tmp_path, monkeypatch):
+    # End-to-end regression test for per-CID Lead Template files: some CID
+    # groups go to a totally different workbook, not just another tab in
+    # the same one.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    shared_path = str(tmp_path / "shared_template.xlsx")
+    wb = openpyxl.Workbook()
+    apac = wb.active
+    apac.title = "APAC"
+    apac.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "CID"])
+    wb.save(shared_path)
+
+    emea_only_path = str(tmp_path / "emea_only.xlsx")
+    wb2 = openpyxl.Workbook()
+    emea = wb2.active
+    emea.title = "EMEA"
+    emea.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "CID"])
+    wb2.save(emea_only_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        client_mode="Lead QA",
+        lead_template_path=shared_path,
+        lead_template_multi_tab=True,
+        lead_template_tabs=[
+            LeadTemplateTab(sheet_name="APAC", cids=["1"]),  # blank file_path -> shared_path
+            LeadTemplateTab(sheet_name="EMEA", cids=["2"], file_path=emea_only_path),
+        ],
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "apac@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+        {"Email_Address": "emea@x.com", "First_Name": "E", "Last_Name": "Two", "Company_Name": "X", "CID": "2"},
+    ])
+    result = PipelineResult(valid_indices=[0, 1], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    wb_shared = openpyxl.load_workbook(shared_path)
+    assert wb_shared["APAC"].cell(row=2, column=1).value == "apac@x.com"
+
+    wb_emea = openpyxl.load_workbook(emea_only_path)
+    assert wb_emea["EMEA"].cell(row=2, column=1).value == "emea@x.com"
+
+    # The EMEA-only file must not have gained an APAC lead, and vice versa.
+    assert wb_shared["APAC"].max_row == 2
+    assert wb_emea["EMEA"].max_row == 2
