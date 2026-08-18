@@ -2,7 +2,10 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from core.jira_client import post_comment, JiraError, _text_to_adf, extract_ticket_key
+from core.jira_client import (
+    post_comment, post_comment_body, JiraError, _text_to_adf, extract_ticket_key,
+    build_comment_body, path_to_link_href,
+)
 
 
 def test_text_to_adf_one_paragraph_per_line():
@@ -70,3 +73,81 @@ def test_extract_ticket_key_strips_surrounding_whitespace():
 
 def test_extract_ticket_key_falls_back_to_input_when_unrecognized():
     assert extract_ticket_key("not a ticket") == "not a ticket"
+
+
+def test_path_to_link_href_produces_a_file_uri(tmp_path):
+    f = tmp_path / "report.xlsx"
+    f.write_text("x")
+    href = path_to_link_href(str(f))
+    assert href.startswith("file:///")
+    assert "report.xlsx" in href
+
+
+def test_path_to_link_href_falls_back_to_plain_path_on_relative_path():
+    # Path.resolve() shouldn't raise for a relative path (it resolves
+    # against cwd), but as_uri() requires an absolute path — cover the
+    # defensive fallback regardless of exactly which step could fail.
+    with patch("core.jira_client.Path") as mock_path_cls:
+        mock_path_cls.side_effect = ValueError("boom")
+        assert path_to_link_href("some/relative/path.xlsx") == "some/relative/path.xlsx"
+
+
+def test_build_comment_body_basic_structure():
+    doc = build_comment_body(opening_text="Hi there", closing_text="Thanks")
+    assert doc["type"] == "doc"
+    texts = [n["content"][0]["text"] for n in doc["content"] if n["type"] == "paragraph" and n["content"]]
+    assert texts == ["Hi there", "Thanks"]
+
+
+def test_build_comment_body_includes_file_links_as_ordered_list_with_link_marks():
+    doc = build_comment_body(
+        opening_text="Hi",
+        file_links=[("Accumulated File", "file:///C:/acc.xlsx"), ("Lead Report", "file:///C:/lead.xlsx")],
+    )
+    list_nodes = [n for n in doc["content"] if n["type"] == "orderedList"]
+    assert len(list_nodes) == 1
+    items = list_nodes[0]["content"]
+    assert len(items) == 2
+    first_text_node = items[0]["content"][0]["content"][0]
+    assert first_text_node["text"] == "Accumulated File"
+    assert first_text_node["marks"][0]["attrs"]["href"] == "file:///C:/acc.xlsx"
+
+
+def test_build_comment_body_includes_native_table():
+    doc = build_comment_body(
+        opening_text="Hi",
+        table_headers=["CID", "Campaign"],
+        table_rows=[["118118", "APAC Q3"], ["118119", "EMEA Q3"]],
+    )
+    table_nodes = [n for n in doc["content"] if n["type"] == "table"]
+    assert len(table_nodes) == 1
+    rows = table_nodes[0]["content"]
+    assert len(rows) == 3  # header + 2 data rows
+    assert rows[0]["content"][0]["type"] == "tableHeader"
+    assert rows[1]["content"][0]["content"][0]["content"][0]["text"] == "118118"
+
+
+def test_build_comment_body_omits_table_when_rows_not_provided():
+    doc = build_comment_body(opening_text="Hi", table_headers=["CID"])
+    assert not any(n["type"] == "table" for n in doc["content"])
+
+
+def test_build_comment_body_orders_opening_links_table_closing():
+    doc = build_comment_body(
+        opening_text="Open",
+        closing_text="Close",
+        file_links=[("A", "file:///a")],
+        table_headers=["H"],
+        table_rows=[["v"]],
+    )
+    types_in_order = [n["type"] for n in doc["content"]]
+    assert types_in_order == ["paragraph", "orderedList", "table", "paragraph"]
+
+
+def test_post_comment_body_sends_prebuilt_adf_unmodified():
+    mock_response = MagicMock(status_code=201, text="")
+    adf = {"type": "doc", "version": 1, "content": []}
+    with patch("core.jira_client.requests.post", return_value=mock_response) as mock_post:
+        post_comment_body("https://example.atlassian.net", "me@example.com", "token123", "PROJ-1", adf)
+
+    assert mock_post.call_args[1]["json"]["body"] is adf

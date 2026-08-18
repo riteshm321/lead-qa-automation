@@ -402,12 +402,21 @@ with tab_basics:
         refund_tab_name = st.text_input("Refund tab name",
                                          value=profile.refund_tab_name if profile else "Refund")
 
-    jira_ticket_key = st.text_input(
-        "Jira ticket key or link (optional)", value=profile.jira_ticket_key if profile else "",
-        placeholder="e.g. PROJ-1234 or https://yourteam.atlassian.net/browse/PROJ-1234",
-        help="Paste either the ticket key or the full link — either works. Enables a \"Post summary "
-             "to Jira\" button on Run Check after Finalize. Leave blank to skip.",
-    )
+    col_jira_ticket, col_jira_reporter = st.columns(2)
+    with col_jira_ticket:
+        jira_ticket_key = st.text_input(
+            "Jira ticket key or link (optional)", value=profile.jira_ticket_key if profile else "",
+            placeholder="e.g. PROJ-1234 or https://yourteam.atlassian.net/browse/PROJ-1234",
+            help="Paste either the ticket key or the full link — either works. Enables a \"Post summary "
+                 "to Jira\" button on Run Check after Finalize. Leave blank to skip. The same ticket "
+                 "usually covers a whole campaign — come back here and update it if that ever changes.",
+        )
+    with col_jira_reporter:
+        jira_reporter_name = st.text_input(
+            "Jira reporter's name (optional)", value=profile.jira_reporter_name if profile else "",
+            placeholder="e.g. Jane",
+            help="Used for the \"Hi <name>\" greeting in the posted summary.",
+        )
 
     accumulated_headers = _safe_read_headers(accumulated_path, accumulated_tab_name)
 
@@ -668,6 +677,7 @@ if st.button("💾 Save Client Profile", type="primary"):
             accumulated_tab_name=accumulated_tab_name or "Accumulated",
             refund_tab_name=refund_tab_name or "Refund",
             jira_ticket_key=extract_ticket_key(jira_ticket_key) if jira_ticket_key.strip() else "",
+            jira_reporter_name=jira_reporter_name.strip(),
             client_mode=client_mode,
             lead_template_path=lead_template_path if client_mode == "Lead QA" else "",
             lead_template_sheet_name=(

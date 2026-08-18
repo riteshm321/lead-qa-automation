@@ -504,3 +504,50 @@ def detect_cids_from_pacing_overview(
         return pairs
     finally:
         wb.close()
+
+
+def read_pacing_overview_table(accumulated_path: str, sheet_name: str = "Pacing Overview") -> pd.DataFrame:
+    """Read the Pacing Overview sheet as a full table (every column, not
+    just CID/Campaign), for embedding as a native table in a Jira summary
+    comment. Reuses the same header-row and stop-row rules as
+    detect_cids_from_pacing_overview (header row = the row with a "CID"
+    cell; stops at the first blank CID or a "Grand Total"/"Total" row).
+    """
+    wb = openpyxl.load_workbook(accumulated_path, read_only=True, data_only=True)
+    try:
+        if sheet_name not in wb.sheetnames:
+            raise ValueError(f"'{accumulated_path}' has no sheet named '{sheet_name}'")
+        ws = wb[sheet_name]
+
+        header_row_idx = None
+        cid_col_idx = None
+        for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 20)):
+            for cell in row:
+                if isinstance(cell.value, str) and cell.value.strip().lower() == "cid":
+                    header_row_idx = cell.row
+                    cid_col_idx = cell.column
+            if header_row_idx is not None:
+                break
+
+        if header_row_idx is None or cid_col_idx is None:
+            raise ValueError(f"Could not find a 'CID' column in '{accumulated_path}' [{sheet_name}]")
+
+        header_cells = next(ws.iter_rows(min_row=header_row_idx, max_row=header_row_idx))
+        col_indices = [c.column for c in header_cells if c.value is not None and str(c.value).strip() != ""]
+        headers = [str(ws.cell(row=header_row_idx, column=c).value).strip() for c in col_indices]
+
+        records: list[dict] = []
+        for row in ws.iter_rows(min_row=header_row_idx + 1, max_row=ws.max_row):
+            cid_cell = row[cid_col_idx - 1]
+            if cid_cell.value is None or str(cid_cell.value).strip() == "":
+                break
+            if str(cid_cell.value).strip().lower() in ("grand total", "total"):
+                break
+            records.append({
+                header: ("" if row[col - 1].value is None else row[col - 1].value)
+                for header, col in zip(headers, col_indices)
+            })
+
+        return pd.DataFrame.from_records(records, columns=headers)
+    finally:
+        wb.close()

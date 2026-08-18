@@ -57,6 +57,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         accumulated_tab_name=data.get("accumulated_tab_name", "Accumulated"),
         refund_tab_name=data.get("refund_tab_name", "Refund"),
         jira_ticket_key=data.get("jira_ticket_key", ""),
+        jira_reporter_name=data.get("jira_reporter_name", ""),
         client_mode=data.get("client_mode", "Lead QA"),
         lead_template_path=data.get("lead_template_path", ""),
         lead_template_sheet_name=data.get("lead_template_sheet_name", ""),

@@ -317,3 +317,71 @@ def test_detect_cids_from_pacing_overview_stops_at_first_blank_cid_row(tmp_path)
     pairs = detect_cids_from_pacing_overview(path)
 
     assert pairs == [("118118", "APAC Mgr+ Q3")]
+
+
+def test_read_pacing_overview_table_captures_every_column(tmp_path):
+    from core.excel_io import read_pacing_overview_table
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing Overview"
+    ws["B2"] = "Pacing Overview"
+    ws["B3"] = "SR No"
+    ws["C3"] = "CID"
+    ws["D3"] = "Campaign Segment"
+    ws["E3"] = "Target"
+    ws["F3"] = "Delivered"
+    ws["B4"] = 1
+    ws["C4"] = "118118"
+    ws["D4"] = "APAC Mgr+ Q3"
+    ws["E4"] = 100
+    ws["F4"] = 42
+    ws["B5"] = 2
+    ws["C5"] = "118119"
+    ws["D5"] = "EMEA Mgr+ Q3"
+    ws["E5"] = 80
+    ws["F5"] = 80
+    ws["C6"] = "Grand Total"
+    wb.save(path)
+
+    df = read_pacing_overview_table(path)
+
+    assert list(df.columns) == ["SR No", "CID", "Campaign Segment", "Target", "Delivered"]
+    assert df.iloc[0].tolist() == [1, "118118", "APAC Mgr+ Q3", 100, 42]
+    assert df.iloc[1].tolist() == [2, "118119", "EMEA Mgr+ Q3", 80, 80]
+    assert len(df) == 2  # Grand Total row excluded
+
+
+def test_read_pacing_overview_table_stops_at_blank_cid_row(tmp_path):
+    from core.excel_io import read_pacing_overview_table
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing Overview"
+    ws["C3"] = "CID"
+    ws["D3"] = "Campaign Segment"
+    ws["C4"] = "118118"
+    ws["D4"] = "APAC Mgr+ Q3"
+    ws["D5"] = "Blank CID row"
+    ws["C6"] = "999999"
+    ws["D6"] = "Should Not Appear"
+    wb.save(path)
+
+    df = read_pacing_overview_table(path)
+
+    assert len(df) == 1
+    assert df.iloc[0]["CID"] == "118118"
+
+
+def test_read_pacing_overview_table_raises_clear_error_when_sheet_missing(tmp_path):
+    from core.excel_io import read_pacing_overview_table
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "SomeOtherSheet"
+    wb.save(path)
+
+    with pytest.raises(ValueError, match="Pacing Overview"):
+        read_pacing_overview_table(path)

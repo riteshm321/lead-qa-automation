@@ -9,7 +9,7 @@ from core.checks.leadcap import validate_purchased_report_cids
 from core.errors import render_error
 from core.excel_io import (
     read_sheet_as_dataframe, append_leads, backup_file, require_columns, find_header_row, route_leads_by_cid,
-    read_leadfile,
+    read_leadfile, read_pacing_overview_table,
 )
 from core import jira_client
 from core.jira_client import JiraError
@@ -333,10 +333,16 @@ if "run_result" in st.session_state:
                 st.session_state["last_finalized_summary"] = {
                     "client_name": client_name,
                     "ticket_key": jira_client.extract_ticket_key(profile.jira_ticket_key),
-                    "run_date": run_date,
+                    "reporter_name": profile.jira_reporter_name,
+                    "run_date_display": datetime.date.today().strftime("%d-%m-%y"),
                     "leads_in": len(new_leads),
                     "valid": len(final_valid_indices),
                     "refund": len(final_refund_indices),
+                    "accumulated_report_path": profile.accumulated_report_path,
+                    "lead_template_path": (
+                        profile.lead_template_path
+                        if profile.client_mode == "Lead QA & Upload" and profile.lead_template_path else ""
+                    ),
                 }
             del st.session_state["run_result"]
             del st.session_state["run_new_leads"]
@@ -347,21 +353,57 @@ _pending_summary = st.session_state.get("last_finalized_summary")
 if _pending_summary and _pending_summary["client_name"] == client_name:
     st.divider()
     st.subheader("Post to Jira")
-    _default_comment = (
-        f"Lead QA run for {_pending_summary['client_name']} — {_pending_summary['run_date']}\n"
+    st.caption("Nothing is sent until you click Post below — review (and edit) everything first.")
+
+    _greeting = f"Hi {_pending_summary['reporter_name']}" if _pending_summary["reporter_name"] else "Hi"
+    _default_opening = (
+        f"{_greeting}\n"
+        f"PFB summary for the leads uploaded/processed dated {_pending_summary['run_date_display']}. "
+        f"Also, pfb the links for the relevant files.\n"
+        f"\n"
         f"{_pending_summary['leads_in']} leads in → {_pending_summary['valid']} valid, "
-        f"{_pending_summary['refund']} refunded"
+        f"{_pending_summary['refund']} refunded."
     )
-    st.text_area("Comment to post (edit if needed)", _default_comment, key="jira_comment_text", height=100)
+    st.text_area("Opening message", _default_opening, key="jira_comment_opening", height=140)
+
+    _available_links = [("Accumulated File", _pending_summary["accumulated_report_path"])]
+    if _pending_summary["lead_template_path"]:
+        _available_links.append(("Lead Report", _pending_summary["lead_template_path"]))
+    st.caption("File links to include (only open on a machine where this exact path exists):")
+    _selected_links = []
+    for _label, _path in _available_links:
+        if st.checkbox(f"{_label} — {_path}", value=True, key=f"jira_link_{_label}"):
+            _selected_links.append((_label, jira_client.path_to_link_href(_path)))
+
+    _pacing_df = None
+    try:
+        _pacing_df = read_pacing_overview_table(_pending_summary["accumulated_report_path"])
+    except Exception:
+        _pacing_df = None
+    _include_pacing = False
+    if _pacing_df is not None and not _pacing_df.empty:
+        _include_pacing = st.checkbox("Include Pacing Overview table", value=True, key="jira_include_pacing")
+        if _include_pacing:
+            st.dataframe(_pacing_df, hide_index=True)
+
+    st.text_area("Closing message", "Thanks", key="jira_comment_closing", height=60)
+
     if st.button(f"📋 Post summary to {_pending_summary['ticket_key']}", key="jira_post_button"):
         jira_settings = get_jira_settings()
         if not all([jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"]]):
             st.error("Set up your Jira account (site URL, email, API token) in Client Setup first.")
         else:
             try:
-                jira_client.post_comment(
+                adf_body = jira_client.build_comment_body(
+                    opening_text=st.session_state["jira_comment_opening"],
+                    closing_text=st.session_state["jira_comment_closing"],
+                    file_links=_selected_links,
+                    table_headers=list(_pacing_df.columns) if _include_pacing and _pacing_df is not None else None,
+                    table_rows=_pacing_df.values.tolist() if _include_pacing and _pacing_df is not None else None,
+                )
+                jira_client.post_comment_body(
                     jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"],
-                    _pending_summary["ticket_key"], st.session_state["jira_comment_text"],
+                    _pending_summary["ticket_key"], adf_body,
                 )
                 st.success(f"Posted to {_pending_summary['ticket_key']}.")
                 del st.session_state["last_finalized_summary"]
