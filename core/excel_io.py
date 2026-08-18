@@ -288,9 +288,12 @@ def _find_last_data_row(ws, first_data_row: int, headers: list) -> int | None:
         return None
     last = None
     num_cols = len(headers)
-    for row in ws.iter_rows(min_row=first_data_row, max_row=ws.max_row):
-        if any(cell.value is not None for cell in row[:num_cols]):
-            last = row[0].row
+    # values_only=True skips constructing full Cell wrapper objects (style
+    # refs, comments, hyperlinks) for every one of potentially tens of
+    # thousands of rows — this scan only needs the raw values.
+    for offset, row in enumerate(ws.iter_rows(min_row=first_data_row, max_row=ws.max_row, values_only=True)):
+        if any(v is not None for v in row[:num_cols]):
+            last = first_data_row + offset
     return last
 
 
@@ -446,6 +449,7 @@ def append_leads(
                 cell.value = lead_row.get(source_col, "") if source_col is not None else None
 
     wb.save(accumulated_path)
+    wb.close()
 
     if _original_external_links:
         _restore_external_link_parts(accumulated_path, _original_external_links)
