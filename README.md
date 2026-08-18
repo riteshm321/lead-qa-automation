@@ -262,10 +262,32 @@ with a timestamp. If something goes wrong, restore from there.
 ## 13. Posting a run summary to Jira (optional)
 
 After Finalize, if the client has a **Jira ticket key** set (Client Setup → Basics),
-a "Post summary to Jira" prompt appears with an editable, pre-filled summary — the
-client name, the date, and the leads-in/valid/refunded counts for that run.
+a "Post summary to Jira" prompt appears, pre-filled and ready to review:
 
-**One-time setup**, in Client Setup → **🔑 Jira account (private to this machine)**:
+- **Opening message** (editable) — a "Hi `<reporter name>`" greeting (if you set one),
+  the run date, and the leads-in/valid/refunded counts.
+- **File links** — checkboxes to include the Accumulated Report and (for
+  "Lead QA & Upload" clients) the Lead Template as clickable links in the comment.
+  These open the file when clicked, but **only on a machine where that exact file
+  path exists** (typically your own machine, or a teammate syncing the identical
+  shared folder) — not a universal link a client could open from anywhere.
+- **Pacing Overview table** (if the Accumulated Report has that sheet) — a live
+  preview of the table exactly as it'll post, as a real Jira table (not an image or
+  plain text). Untick to leave it out.
+- **Closing message** (editable) — defaults to "Thanks".
+
+Since not every run is a QA task — some are plain uploads — nothing here is
+hard-coded to always appear; the file links and table sections only show up when
+there's actually something to link or a Pacing Overview sheet to show.
+
+**Per-client setup** (Client Setup → Basics):
+
+- **Jira ticket key or link** — paste either form; a link is auto-reduced to the
+  key. The same ticket usually covers a client's whole campaign — come back and
+  update it here if that ever changes (e.g. a new campaign, a new ticket).
+- **Jira reporter's name** (optional) — used for the greeting.
+
+**One-time account setup**, in Client Setup → **🔑 Jira account (private to this machine)**:
 
 - **Jira site URL** — e.g. `https://yourcompany.atlassian.net`.
 - **Your Jira email** and **API token** — generate a token at
@@ -278,8 +300,8 @@ since an API token is a personal secret, not something to sync to a team folder.
 person who wants to use this button configures their own token once, on their own
 machine.
 
-Nothing is posted automatically — review (and edit, if you like) the summary text,
-then click the button to actually send it. Click **Dismiss** to skip posting for
-that run without sending anything.
+Nothing is posted automatically — review (and edit) everything first, then click the
+button to actually send it. Click **Dismiss** to skip posting for that run without
+sending anything.
 
 ---
