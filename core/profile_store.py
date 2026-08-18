@@ -63,6 +63,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         lead_template_sheet_name=data.get("lead_template_sheet_name", ""),
         lead_template_multi_tab=data.get("lead_template_multi_tab", False),
         lead_template_tabs=lead_template_tabs,
+        lead_template_clear_existing=data.get("lead_template_clear_existing", False),
         field_mapping=field_mapping,
         accumulated_field_mapping=accumulated_field_mapping,
         lead_template_field_mapping=lead_template_field_mapping,

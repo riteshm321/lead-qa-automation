@@ -296,28 +296,33 @@ if "run_result" in st.session_state:
                 if profile.lead_template_multi_tab:
                     valid_leads_df = new_leads.loc[final_valid_indices]
                     groups, unmatched = route_leads_by_cid(
-                        valid_leads_df, profile.field_mapping.cid, profile.lead_template_tabs)
-                    for sheet_name, tab_leads in groups.items():
-                        _tmpl_header_row = find_header_row(profile.lead_template_path, sheet_name, _tmpl_expected)
+                        valid_leads_df, profile.field_mapping.cid, profile.lead_template_tabs,
+                        default_file_path=profile.lead_template_path)
+                    _tmpl_files_used = set()
+                    for (_tmpl_file_path, sheet_name), tab_leads in groups.items():
+                        _tmpl_header_row = find_header_row(_tmpl_file_path, sheet_name, _tmpl_expected)
                         unmatched_headers.update(append_leads(
-                            profile.lead_template_path, sheet_name,
+                            _tmpl_file_path, sheet_name,
                             tab_leads, profile.field_mapping, run_date,
-                            target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row))
+                            target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
+                            clear_existing=profile.lead_template_clear_existing))
+                        _tmpl_files_used.add(_tmpl_file_path)
                     if not unmatched.empty:
                         unmatched_cids = sorted(set(unmatched[profile.field_mapping.cid].astype(str).str.strip()))
                         st.warning(f"⚠️ {len(unmatched)} valid lead(s) had a CID with no matching Lead Template "
                                    f"tab (CIDs: {', '.join(unmatched_cids)}) — skipped for the Lead Template "
                                    "step, but still added to the Accumulated Report.")
                     if groups:
-                        st.info(f"Valid leads also appended to their matching tab(s) in Lead Template at "
-                                f"{profile.lead_template_path}")
+                        st.info(f"Valid leads also appended to their matching tab(s) across "
+                                f"{len(_tmpl_files_used)} Lead Template file(s): {', '.join(sorted(_tmpl_files_used))}")
                 else:
                     _tmpl_header_row = find_header_row(
                         profile.lead_template_path, profile.lead_template_sheet_name, _tmpl_expected)
                     unmatched_headers.update(append_leads(
                         profile.lead_template_path, profile.lead_template_sheet_name,
                         new_leads.loc[final_valid_indices], profile.field_mapping, run_date,
-                        target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row))
+                        target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
+                        clear_existing=profile.lead_template_clear_existing))
                     st.info(f"Valid leads also appended to Lead Template at {profile.lead_template_path}")
 
             if unmatched_headers:
@@ -341,7 +346,7 @@ if "run_result" in st.session_state:
                     "accumulated_report_path": profile.accumulated_report_path,
                     "lead_template_path": (
                         profile.lead_template_path
-                        if profile.client_mode == "Lead QA & Upload" and profile.lead_template_path else ""
+                        if profile.client_mode == "Lead QA" and profile.lead_template_path else ""
                     ),
                 }
             del st.session_state["run_result"]

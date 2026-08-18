@@ -79,6 +79,10 @@ class DedupeListConfig:
 class LeadTemplateTab:
     sheet_name: str
     cids: list[str] = field(default_factory=list)
+    # Blank means "use the client's shared Lead Template path" — set this
+    # when this CID group's leads actually go to a completely different
+    # workbook rather than another tab in the same one.
+    file_path: str = ""
 
 
 @dataclass
@@ -94,6 +98,7 @@ class ClientProfile:
     lead_template_sheet_name: str = ""
     lead_template_multi_tab: bool = False
     lead_template_tabs: list[LeadTemplateTab] = field(default_factory=list)
+    lead_template_clear_existing: bool = False
     field_mapping: Optional[FieldMapping] = None
     accumulated_field_mapping: Optional[FieldMapping] = None
     lead_template_field_mapping: Optional[FieldMapping] = None

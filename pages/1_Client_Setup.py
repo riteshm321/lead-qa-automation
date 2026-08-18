@@ -137,34 +137,41 @@ def _path_input_with_browse(label: str, session_key: str, current_value: str, sh
 
 
 def _tabs_to_state(tabs: list[LeadTemplateTab]) -> list[dict]:
-    return [{"id": str(uuid.uuid4()), "sheet_name": t.sheet_name, "cids": ",".join(t.cids)} for t in tabs]
+    return [
+        {"id": str(uuid.uuid4()), "sheet_name": t.sheet_name, "cids": ",".join(t.cids), "file_path": t.file_path}
+        for t in tabs
+    ]
 
 
 def _render_lead_template_tabs(template_path: str) -> list[LeadTemplateTab]:
-    sheet_options: list[str] = []
-    if template_path:
-        try:
-            sheet_options = list_sheet_names(template_path)
-        except Exception:
-            sheet_options = []
-
     if not st.session_state["lead_template_tabs"]:
         st.caption("No tabs configured yet.")
     if st.button("➕ Add Tab", key="lead_template_tabs_add"):
-        st.session_state["lead_template_tabs"].append({"id": str(uuid.uuid4()), "sheet_name": "", "cids": ""})
+        st.session_state["lead_template_tabs"].append(
+            {"id": str(uuid.uuid4()), "sheet_name": "", "cids": "", "file_path": ""})
 
     result: list[LeadTemplateTab] = []
     remove_id = None
     for row in st.session_state["lead_template_tabs"]:
         row_id = row["id"]
         with st.container(border=True):
+            row["file_path"] = _path_input_with_browse(
+                "File for this tab (leave blank to use the Lead Template path above)",
+                f"tmpl_tab_filepath_{row_id}", row.get("file_path", ""))
+            effective_path = row["file_path"] or template_path
+            sheet_options: list[str] = []
+            if effective_path:
+                try:
+                    sheet_options = list_sheet_names(effective_path)
+                except Exception:
+                    sheet_options = []
             if sheet_options:
                 idx = sheet_options.index(row["sheet_name"]) if row["sheet_name"] in sheet_options else 0
                 row["sheet_name"] = st.selectbox("Tab (sheet) name", sheet_options, index=idx,
                                                   key=f"tmpl_tab_sheet_{row_id}")
             else:
                 row["sheet_name"] = st.text_input(
-                    "Tab (sheet) name (enter a valid Lead Template path above to pick from a list)",
+                    "Tab (sheet) name (enter a valid file path above to pick from a list)",
                     value=row["sheet_name"], key=f"tmpl_tab_sheet_text_{row_id}")
             row["cids"] = st.text_input("CIDs routed to this tab (comma-separated)",
                                          value=row["cids"], key=f"tmpl_tab_cids_{row_id}")
@@ -174,6 +181,7 @@ def _render_lead_template_tabs(template_path: str) -> list[LeadTemplateTab]:
         result.append(LeadTemplateTab(
             sheet_name=row["sheet_name"],
             cids=[c.strip() for c in row["cids"].split(",") if c.strip()],
+            file_path=row["file_path"],
         ))
 
     if remove_id is not None:
@@ -466,6 +474,15 @@ with tab_basics:
             "This Lead Template has multiple tabs (routed by CID)",
             value=profile.lead_template_multi_tab if profile else False)
 
+        lead_template_clear_existing = st.checkbox(
+            "Clear existing leads before adding new ones",
+            value=profile.lead_template_clear_existing if profile else False,
+            help="On: removes all existing data rows (keeping the header and its formatting, which is "
+                 "reused for the new rows) before pasting this run's leads — for a Lead Report that's "
+                 "re-sent fresh each time rather than accumulated. Off (default): new leads are appended "
+                 "below whatever's already there, like the Accumulated Report.",
+        )
+
         if lead_template_multi_tab:
             st.caption("Each tab below receives leads whose CID matches its list. A lead whose CID matches "
                        "no tab is skipped for the Lead Template step (with a warning) — it still goes to "
@@ -685,6 +702,8 @@ if st.button("💾 Save Client Profile", type="primary"):
             lead_template_multi_tab=lead_template_multi_tab if client_mode == "Lead QA" else False,
             lead_template_tabs=(
                 lead_template_tabs_result if client_mode == "Lead QA" and lead_template_multi_tab else []),
+            lead_template_clear_existing=(
+                lead_template_clear_existing if client_mode == "Lead QA" else False),
             field_mapping=profile.field_mapping if profile else None,
             accumulated_field_mapping=accumulated_field_mapping_result,
             lead_template_field_mapping=lead_template_field_mapping_result if client_mode == "Lead QA" else None,

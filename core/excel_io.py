@@ -248,8 +248,8 @@ def read_sheet_headers(path: str, sheet_name: str, header_row: int = 1) -> list:
 
 
 def route_leads_by_cid(
-    leads_df: pd.DataFrame, cid_column: str, tabs: list[LeadTemplateTab]
-) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+    leads_df: pd.DataFrame, cid_column: str, tabs: list[LeadTemplateTab], default_file_path: str = "",
+) -> tuple[dict[tuple[str, str], pd.DataFrame], pd.DataFrame]:
     """Split leads across a Lead Template's tabs by CID.
 
     Tabs are checked in order; a lead is assigned to the first tab whose
@@ -258,11 +258,14 @@ def route_leads_by_cid(
     tab always needs its CIDs explicitly configured). Leads that match no
     tab at all are returned separately as "unmatched" rather than dropped.
 
-    Returns (sheet_name -> matched leads for tabs with at least one match,
-    unmatched leads).
+    Returns ((file_path, sheet_name) -> matched leads for tabs with at least
+    one match, unmatched leads). A tab's own file_path is used when set —
+    some CID groups go to an entirely different workbook, not just another
+    tab in the same one — otherwise falling back to default_file_path (the
+    client's shared Lead Template path).
     """
     remaining = leads_df
-    groups: dict[str, pd.DataFrame] = {}
+    groups: dict[tuple[str, str], pd.DataFrame] = {}
     for tab in tabs:
         if not tab.cids or remaining.empty:
             continue
@@ -270,7 +273,8 @@ def route_leads_by_cid(
         matched = remaining[mask]
         remaining = remaining[~mask]
         if not matched.empty:
-            groups[tab.sheet_name] = matched
+            key = (tab.file_path or default_file_path, tab.sheet_name)
+            groups[key] = pd.concat([groups[key], matched]) if key in groups else matched
     return groups, remaining
 
 
@@ -353,6 +357,7 @@ def append_leads(
     reasons: dict[int, str] | None = None,
     target_field_mapping: FieldMapping | None = None,
     header_row: int = 1,
+    clear_existing: bool = False,
 ) -> list[str]:
     _original_external_links = _read_external_link_parts(accumulated_path)
 
@@ -385,6 +390,18 @@ def append_leads(
             if isinstance(cell.value, str) and cell.value.startswith("="):
                 formula_template[header] = (cell.value, cell.coordinate)
 
+    # clear_existing wipes old data rows (e.g. a Lead Report re-sent fresh
+    # each period rather than accumulated) — capture the formatting from
+    # the row about to be deleted first, since there'll be nothing left to
+    # sample it from afterward.
+    cleared_styles: dict[int, tuple] | None = None
+    if clear_existing and ws.max_row >= first_data_row:
+        cleared_styles = {}
+        for col_idx in range(1, len(headers) + 1):
+            src = ws.cell(row=first_data_row, column=col_idx)
+            cleared_styles[col_idx] = (src.font, src.fill, src.border, src.alignment, src.number_format)
+        ws.delete_rows(first_data_row, ws.max_row - first_data_row + 1)
+
     last_data_row = _find_last_data_row(ws, first_data_row, headers)
     has_existing_leads = last_data_row is not None
     style_template_row = (
@@ -392,7 +409,9 @@ def append_leads(
         else (first_data_row if ws.max_row >= first_data_row else None)
     )
     column_styles: dict[int, tuple] = {}
-    if style_template_row is not None:
+    if cleared_styles is not None:
+        column_styles = cleared_styles
+    elif style_template_row is not None:
         for col_idx in range(1, len(headers) + 1):
             src = ws.cell(row=style_template_row, column=col_idx)
             column_styles[col_idx] = (src.font, src.fill, src.border, src.alignment, src.number_format)

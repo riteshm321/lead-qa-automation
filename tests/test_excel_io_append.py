@@ -171,6 +171,79 @@ def test_append_leads_subsequent_batch_uses_last_row_formatting(tmp_path):
     assert ws.cell(row=3, column=1).font.color.rgb == "FF00FF00"
 
 
+def test_append_leads_clear_existing_removes_old_rows_but_keeps_formatting(tmp_path):
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company"])
+    existing_font = Font(bold=True, color="FF00FF00")
+    template.append([100, "old@x.com", "Old", "Lead", "X"])
+    template.append([101, "old2@x.com", "Old2", "Lead2", "X"])
+    for row in (2, 3):
+        for col in range(1, 6):
+            template.cell(row=row, column=col).font = existing_font
+    wb.save(path)
+
+    leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y"},
+    ])
+
+    append_leads(path, "Report", leads_df, _field_mapping(), run_date="2026-08-08", clear_existing=True)
+
+    wb2 = openpyxl.load_workbook(path)
+    ws = wb2["Report"]
+    assert ws.max_row == 2  # header + exactly the one new lead, old rows gone
+    assert ws.cell(row=2, column=2).value == "new@y.com"
+    # Formatting from the removed old row 2 is preserved on the new row.
+    assert ws.cell(row=2, column=1).font.bold is True
+    assert ws.cell(row=2, column=1).font.color.rgb == "FF00FF00"
+
+
+def test_append_leads_clear_existing_on_empty_sheet_is_a_no_op(tmp_path):
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y"},
+    ])
+
+    append_leads(path, "Report", leads_df, _field_mapping(), run_date="2026-08-08", clear_existing=True)
+
+    wb2 = openpyxl.load_workbook(path)
+    ws = wb2["Report"]
+    assert ws.max_row == 2
+    assert ws.cell(row=2, column=2).value == "new@y.com"
+
+
+def test_append_leads_without_clear_existing_still_accumulates(tmp_path):
+    # Sanity check: clear_existing defaults to False, preserving the
+    # existing accumulate-by-default behavior.
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company"])
+    template.append([100, "old@x.com", "Old", "Lead", "X"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y"},
+    ])
+
+    append_leads(path, "Report", leads_df, _field_mapping(), run_date="2026-08-08")
+
+    wb2 = openpyxl.load_workbook(path)
+    ws = wb2["Report"]
+    assert ws.max_row == 3
+    assert ws.cell(row=2, column=2).value == "old@x.com"
+    assert ws.cell(row=3, column=2).value == "new@y.com"
+
+
 def test_append_leads_to_template_with_reordered_and_extra_columns_appends_below_existing(tmp_path):
     # Simulates a real Lead Template: its own column order (different from the
     # leadfile's), extra leadfile columns beyond the 5 mapped fields (title,
@@ -447,10 +520,44 @@ def test_route_leads_by_cid_splits_into_matching_tabs_mutually_exclusively():
 
     groups, unmatched = route_leads_by_cid(leads, "CID", tabs)
 
-    assert set(groups.keys()) == {"APAC", "EMEA"}
-    assert list(groups["APAC"]["emailaddress"]) == ["a@x.com", "b@x.com"]
-    assert list(groups["EMEA"]["emailaddress"]) == ["c@x.com"]
+    assert set(groups.keys()) == {("", "APAC"), ("", "EMEA")}
+    assert list(groups[("", "APAC")]["emailaddress"]) == ["a@x.com", "b@x.com"]
+    assert list(groups[("", "EMEA")]["emailaddress"]) == ["c@x.com"]
     assert unmatched.empty
+
+
+def test_route_leads_by_cid_uses_tabs_own_file_path_when_set():
+    leads = pd.DataFrame([
+        {"CID": "119336", "emailaddress": "a@x.com"},
+        {"CID": "119338", "emailaddress": "c@x.com"},
+    ])
+    tabs = [
+        LeadTemplateTab(sheet_name="APAC", cids=["119336"]),  # falls back to default_file_path
+        LeadTemplateTab(sheet_name="EMEA", cids=["119338"], file_path="C:/EMEA_only.xlsx"),
+    ]
+
+    groups, unmatched = route_leads_by_cid(leads, "CID", tabs, default_file_path="C:/shared.xlsx")
+
+    assert set(groups.keys()) == {("C:/shared.xlsx", "APAC"), ("C:/EMEA_only.xlsx", "EMEA")}
+    assert unmatched.empty
+
+
+def test_route_leads_by_cid_merges_leads_routed_to_the_same_file_and_tab():
+    # Two different CID groups intentionally (or accidentally) pointed at
+    # the exact same destination must not silently drop one group's leads.
+    leads = pd.DataFrame([
+        {"CID": "1", "emailaddress": "a@x.com"},
+        {"CID": "2", "emailaddress": "b@x.com"},
+    ])
+    tabs = [
+        LeadTemplateTab(sheet_name="Shared", cids=["1"]),
+        LeadTemplateTab(sheet_name="Shared", cids=["2"]),
+    ]
+
+    groups, unmatched = route_leads_by_cid(leads, "CID", tabs)
+
+    assert set(groups.keys()) == {("", "Shared")}
+    assert list(groups[("", "Shared")]["emailaddress"]) == ["a@x.com", "b@x.com"]
 
 
 def test_route_leads_by_cid_returns_unmatched_leads_separately():
@@ -462,7 +569,7 @@ def test_route_leads_by_cid_returns_unmatched_leads_separately():
 
     groups, unmatched = route_leads_by_cid(leads, "CID", tabs)
 
-    assert set(groups.keys()) == {"APAC"}
+    assert set(groups.keys()) == {("", "APAC")}
     assert list(unmatched["emailaddress"]) == ["no-tab@x.com"]
 
 
@@ -498,8 +605,8 @@ def test_route_leads_by_cid_and_append_leads_write_to_correct_sheets(tmp_path):
     assert unmatched.empty
 
     fm = _field_mapping()
-    for sheet_name, tab_leads in groups.items():
-        append_leads(path, sheet_name, tab_leads, fm, run_date="2026-08-13")
+    for (file_path, sheet_name), tab_leads in groups.items():
+        append_leads(file_path or path, sheet_name, tab_leads, fm, run_date="2026-08-13")
 
     wb2 = openpyxl.load_workbook(path)
     assert wb2["APAC"].cell(row=2, column=2).value == "a@x.com"
