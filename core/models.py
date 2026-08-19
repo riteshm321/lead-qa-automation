@@ -83,6 +83,10 @@ class LeadTemplateTab:
     # when this CID group's leads actually go to a completely different
     # workbook rather than another tab in the same one.
     file_path: str = ""
+    # Blank means "use the client's shared Lead Template SharePoint link" —
+    # set this when file_path points at a different workbook, since that
+    # workbook lives at its own SharePoint location with its own share link.
+    link: str = ""
 
 
 @dataclass
@@ -93,6 +97,10 @@ class ClientProfile:
     refund_tab_name: str = "Refund"
     jira_ticket_key: str = ""
     jira_reporter_name: str = ""
+    # SharePoint share links used in Jira comments instead of a file:// path
+    # that only opens on the machine it was posted from.
+    accumulated_report_link: str = ""
+    lead_template_link: str = ""
     client_mode: str = "Lead QA"
     lead_template_path: str = ""
     lead_template_sheet_name: str = ""

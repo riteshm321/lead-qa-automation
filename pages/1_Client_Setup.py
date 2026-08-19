@@ -138,7 +138,8 @@ def _path_input_with_browse(label: str, session_key: str, current_value: str, sh
 
 def _tabs_to_state(tabs: list[LeadTemplateTab]) -> list[dict]:
     return [
-        {"id": str(uuid.uuid4()), "sheet_name": t.sheet_name, "cids": ",".join(t.cids), "file_path": t.file_path}
+        {"id": str(uuid.uuid4()), "sheet_name": t.sheet_name, "cids": ",".join(t.cids),
+         "file_path": t.file_path, "link": t.link}
         for t in tabs
     ]
 
@@ -148,7 +149,7 @@ def _render_lead_template_tabs(template_path: str) -> list[LeadTemplateTab]:
         st.caption("No tabs configured yet.")
     if st.button("➕ Add Tab", key="lead_template_tabs_add"):
         st.session_state["lead_template_tabs"].append(
-            {"id": str(uuid.uuid4()), "sheet_name": "", "cids": "", "file_path": ""})
+            {"id": str(uuid.uuid4()), "sheet_name": "", "cids": "", "file_path": "", "link": ""})
 
     result: list[LeadTemplateTab] = []
     remove_id = None
@@ -175,6 +176,11 @@ def _render_lead_template_tabs(template_path: str) -> list[LeadTemplateTab]:
                     value=row["sheet_name"], key=f"tmpl_tab_sheet_text_{row_id}")
             row["cids"] = st.text_input("CIDs routed to this tab (comma-separated)",
                                          value=row["cids"], key=f"tmpl_tab_cids_{row_id}")
+            row["link"] = st.text_input(
+                "SharePoint link for this tab's file (leave blank to use the Lead Template link above)",
+                value=row.get("link", ""), key=f"tmpl_tab_link_{row_id}",
+                placeholder="e.g. https://madlog.sharepoint.com/:x:/s/.../...",
+            )
             if st.button("🗑️ Remove this tab", key=f"tmpl_tab_remove_{row_id}"):
                 remove_id = row_id
 
@@ -182,6 +188,7 @@ def _render_lead_template_tabs(template_path: str) -> list[LeadTemplateTab]:
             sheet_name=row["sheet_name"],
             cids=[c.strip() for c in row["cids"].split(",") if c.strip()],
             file_path=row["file_path"],
+            link=row.get("link", ""),
         ))
 
     if remove_id is not None:
@@ -402,6 +409,13 @@ with tab_basics:
     accumulated_path = _path_input_with_browse(
         "Accumulated Report path", "accumulated_path_input",
         profile.accumulated_report_path if profile else "")
+    accumulated_report_link = st.text_input(
+        "Accumulated Report SharePoint link (optional)",
+        value=profile.accumulated_report_link if profile else "",
+        placeholder="e.g. https://madlog.sharepoint.com/:x:/s/.../...",
+        help="Used as the \"Accumulated File\" link when posting a summary to Jira, instead of a local "
+             "file path that only opens on your own machine. Leave blank to fall back to the local path.",
+    )
     col_acc, col_ref = st.columns(2)
     with col_acc:
         accumulated_tab_name = st.text_input("Accumulated tab name",
@@ -461,6 +475,7 @@ with tab_basics:
     client_mode = st.radio("Mode", _CLIENT_MODES, index=_CLIENT_MODES.index(_mode_default), horizontal=True)
 
     lead_template_path = ""
+    lead_template_link = ""
     lead_template_sheet_name = ""
     lead_template_multi_tab = False
     lead_template_tabs_result: list[LeadTemplateTab] = []
@@ -469,6 +484,14 @@ with tab_basics:
         lead_template_path = _path_input_with_browse(
             "Lead Template path", "lead_template_path_input",
             profile.lead_template_path if profile else "")
+        lead_template_link = st.text_input(
+            "Lead Template SharePoint link (optional)",
+            value=profile.lead_template_link if profile else "",
+            placeholder="e.g. https://madlog.sharepoint.com/:x:/s/.../...",
+            help="Used as the \"Lead Report\" link when posting a summary to Jira, instead of a local "
+                 "file path. This is the default for every tab below — a tab with its own file (and its "
+                 "own SharePoint link) can override it individually.",
+        )
 
         lead_template_multi_tab = st.checkbox(
             "This Lead Template has multiple tabs (routed by CID)",
@@ -695,6 +718,8 @@ if st.button("💾 Save Client Profile", type="primary"):
             refund_tab_name=refund_tab_name or "Refund",
             jira_ticket_key=extract_ticket_key(jira_ticket_key) if jira_ticket_key.strip() else "",
             jira_reporter_name=jira_reporter_name.strip(),
+            accumulated_report_link=accumulated_report_link.strip(),
+            lead_template_link=lead_template_link.strip() if client_mode == "Lead QA" else "",
             client_mode=client_mode,
             lead_template_path=lead_template_path if client_mode == "Lead QA" else "",
             lead_template_sheet_name=(

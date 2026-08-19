@@ -183,6 +183,44 @@ def test_lead_template_tab_file_path_and_clear_existing_round_trip(tmp_path):
     assert loaded.lead_template_tabs[1].file_path == "sample_data/emea_only.xlsx"
 
 
+def test_sharepoint_links_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.accumulated_report_link = "https://madlog.sharepoint.com/:x:/s/Team/AccumulatedLink"
+    profile.lead_template_path = "sample_data/shared_template.xlsx"
+    profile.lead_template_link = "https://madlog.sharepoint.com/:x:/s/Team/SharedTemplateLink"
+    profile.lead_template_multi_tab = True
+    profile.lead_template_tabs = [
+        LeadTemplateTab(sheet_name="APAC", cids=["119336"]),  # blank link -> shared link
+        LeadTemplateTab(sheet_name="EMEA", cids=["119338"], file_path="sample_data/emea_only.xlsx",
+                         link="https://madlog.sharepoint.com/:x:/s/Team/EmeaLink"),
+    ]
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+
+    assert loaded.accumulated_report_link == "https://madlog.sharepoint.com/:x:/s/Team/AccumulatedLink"
+    assert loaded.lead_template_link == "https://madlog.sharepoint.com/:x:/s/Team/SharedTemplateLink"
+    assert loaded.lead_template_tabs[0].link == ""
+    assert loaded.lead_template_tabs[1].link == "https://madlog.sharepoint.com/:x:/s/Team/EmeaLink"
+
+
+def test_load_profile_defaults_sharepoint_links_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldClient5.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "OldClient5",
+            "accumulated_report_path": "sample_data/x.xlsx",
+            "lead_template_tabs": [{"sheet_name": "APAC", "cids": ["1"]}],  # no "link" key at all
+        }, f)
+
+    loaded = load_profile("OldClient5", clients_dir=clients_dir)
+    assert loaded.accumulated_report_link == ""
+    assert loaded.lead_template_link == ""
+    assert loaded.lead_template_tabs[0].link == ""
+
+
 def test_load_profile_defaults_tab_file_path_and_clear_existing_for_old_schema_json(tmp_path):
     clients_dir = str(tmp_path / "clients")
     os.makedirs(clients_dir, exist_ok=True)

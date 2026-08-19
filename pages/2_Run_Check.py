@@ -211,22 +211,41 @@ if "run_result" in st.session_state:
         fm = profile.field_mapping
         refund_indices = list(result.refund_reasons.keys())
 
+        # Streamlit forbids writing a data_editor's own widget key via
+        # session_state directly, and once a key's per-cell edits exist it
+        # ignores a fresh default passed through `data=` — so "select all"
+        # instead bumps a nonce to force a brand-new, never-before-seen
+        # widget key, which Streamlit hydrates fresh from refund_table
+        # (built with the sticky "all approved" default below).
+        st.session_state.setdefault("refund_editor_nonce", 0)
+        st.session_state.setdefault("refund_all_approved_default", False)
         if st.button("Select all as valid", key="refund_select_all"):
-            for idx in refund_indices:
-                st.session_state[f"refund_approve_{idx}"] = True
+            st.session_state["refund_all_approved_default"] = True
+            st.session_state["refund_editor_nonce"] += 1
             st.rerun()
 
-        for idx in refund_indices:
-            reason = result.refund_reasons[idx]
-            lead = new_leads.loc[idx]
-            col_check, col_info = st.columns([1, 9])
-            with col_check:
-                checked = st.checkbox("Approve as valid", key=f"refund_approve_{idx}", label_visibility="collapsed")
-            with col_info:
-                st.write(f"Row {idx + 2}: {lead.get(fm.email, '')} · {lead.get(fm.company, '')} · "
-                         f"CID {lead.get(fm.cid, '')} — {reason}")
-            if checked:
-                approved_refund_indices.append(idx)
+        refund_table = pd.DataFrame([
+            {
+                "Approve as valid": st.session_state["refund_all_approved_default"],
+                "Row": idx + 2,
+                "Email": new_leads.loc[idx].get(fm.email, ""),
+                "Company": new_leads.loc[idx].get(fm.company, ""),
+                "CID": new_leads.loc[idx].get(fm.cid, ""),
+                "Reason": result.refund_reasons[idx],
+            }
+            for idx in refund_indices
+        ])
+        edited_refund_table = st.data_editor(
+            refund_table,
+            key=f"refund_editor_{st.session_state['refund_editor_nonce']}",
+            hide_index=True,
+            use_container_width=True,
+            disabled=["Row", "Email", "Company", "CID", "Reason"],
+            column_config={"Approve as valid": st.column_config.CheckboxColumn(required=True)},
+        )
+        approved_refund_indices = [
+            idx for idx, approved in zip(refund_indices, edited_refund_table["Approve as valid"]) if approved
+        ]
 
     if result.review_reasons:
         st.subheader("Needs Review")
@@ -287,6 +306,10 @@ if "run_result" in st.session_state:
                     new_leads.loc[final_refund_indices], profile.field_mapping, run_date,
                     reasons=final_refund_reasons, target_field_mapping=profile.accumulated_field_mapping))
 
+            # file_path -> SharePoint link for every Lead Template file this run actually
+            # wrote to — a multi-tab client can route different CIDs to entirely different
+            # workbooks, each with its own link, so this can't be a single value.
+            lead_template_links_used: dict[str, str] = {}
             if profile.client_mode == "Lead QA" and profile.lead_template_path and final_valid_indices:
                 _tmpl_fm = profile.lead_template_field_mapping
                 _tmpl_expected = [v for v in [
@@ -298,6 +321,10 @@ if "run_result" in st.session_state:
                     groups, unmatched = route_leads_by_cid(
                         valid_leads_df, profile.field_mapping.cid, profile.lead_template_tabs,
                         default_file_path=profile.lead_template_path)
+                    _tab_link_by_file = {
+                        (tab.file_path or profile.lead_template_path): (tab.link or profile.lead_template_link)
+                        for tab in profile.lead_template_tabs
+                    }
                     _tmpl_files_used = set()
                     for (_tmpl_file_path, sheet_name), tab_leads in groups.items():
                         _tmpl_header_row = find_header_row(_tmpl_file_path, sheet_name, _tmpl_expected)
@@ -307,6 +334,8 @@ if "run_result" in st.session_state:
                             target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
                             clear_existing=profile.lead_template_clear_existing))
                         _tmpl_files_used.add(_tmpl_file_path)
+                        lead_template_links_used[_tmpl_file_path] = _tab_link_by_file.get(
+                            _tmpl_file_path, profile.lead_template_link)
                     if not unmatched.empty:
                         unmatched_cids = sorted(set(unmatched[profile.field_mapping.cid].astype(str).str.strip()))
                         st.warning(f"⚠️ {len(unmatched)} valid lead(s) had a CID with no matching Lead Template "
@@ -324,6 +353,7 @@ if "run_result" in st.session_state:
                         target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
                         clear_existing=profile.lead_template_clear_existing))
                     st.info(f"Valid leads also appended to Lead Template at {profile.lead_template_path}")
+                    lead_template_links_used[profile.lead_template_path] = profile.lead_template_link
 
             if unmatched_headers:
                 st.warning(
@@ -344,10 +374,10 @@ if "run_result" in st.session_state:
                     "valid": len(final_valid_indices),
                     "refund": len(final_refund_indices),
                     "accumulated_report_path": profile.accumulated_report_path,
-                    "lead_template_path": (
-                        profile.lead_template_path
-                        if profile.client_mode == "Lead QA" and profile.lead_template_path else ""
-                    ),
+                    "accumulated_report_link": profile.accumulated_report_link,
+                    # (file_path, link) for every Lead Template file this run wrote to —
+                    # a multi-tab client can have more than one.
+                    "lead_template_files": sorted(lead_template_links_used.items()),
                 }
             del st.session_state["run_result"]
             del st.session_state["run_new_leads"]
@@ -371,14 +401,21 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
     )
     st.text_area("Opening message", _default_opening, key="jira_comment_opening", height=140)
 
-    _available_links = [("Accumulated File", _pending_summary["accumulated_report_path"])]
-    if _pending_summary["lead_template_path"]:
-        _available_links.append(("Lead Report", _pending_summary["lead_template_path"]))
-    st.caption("File links to include (only open on a machine where this exact path exists):")
+    _lead_template_files = _pending_summary["lead_template_files"]
+    _available_links = [("Accumulated File", _pending_summary["accumulated_report_path"],
+                          _pending_summary["accumulated_report_link"])]
+    for _tmpl_path, _tmpl_link in _lead_template_files:
+        # More than one Lead Template file used this run (per-CID routing) —
+        # disambiguate labels so each checkbox/link is identifiable.
+        _label = "Lead Report" if len(_lead_template_files) == 1 else f"Lead Report — {_tmpl_path}"
+        _available_links.append((_label, _tmpl_path, _tmpl_link))
+
+    st.caption("File links to include (a configured SharePoint link is used when set, otherwise a local "
+               "file path that only opens on a machine where that exact path exists):")
     _selected_links = []
-    for _label, _path in _available_links:
-        if st.checkbox(f"{_label} — {_path}", value=True, key=f"jira_link_{_label}"):
-            _selected_links.append((_label, jira_client.path_to_link_href(_path)))
+    for _label, _path, _link in _available_links:
+        if st.checkbox(f"{_label} — {_link or _path}", value=True, key=f"jira_link_{_label}"):
+            _selected_links.append((_label, _link or jira_client.path_to_link_href(_path)))
 
     _pacing_df = None
     try:

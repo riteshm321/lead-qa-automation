@@ -57,12 +57,18 @@ def test_approved_refund_lead_lands_in_accumulated_tab_not_just_refund(tmp_path,
     at.run()
     assert not at.exception
 
-    checkbox = next(c for c in at.checkbox if c.key == "refund_approve_1")
-    checkbox.set_value(True).run()
-    assert not at.exception
-
-    finalize_button = next(b for b in at.button if b.label == "Finalize")
-    finalize_button.click().run()
+    # AppTest has no widget accessor for st.data_editor (and Streamlit
+    # forbids writing a data_editor's own key via session_state directly),
+    # so simulate "the user ticked the one refund row's checkbox" by
+    # patching st.data_editor itself to return the edited table the real
+    # widget would have, for this one render.
+    edited_table = pd.DataFrame([{
+        "Approve as valid": True, "Row": 3, "Email": "existing@dup.com",
+        "Company": "DupCo", "CID": "1", "Reason": "Duplicate - exact email",
+    }])
+    with patch("streamlit.data_editor", return_value=edited_table):
+        finalize_button = next(b for b in at.button if b.label == "Finalize")
+        finalize_button.click().run()
     assert not at.exception
 
     wb = openpyxl.load_workbook(acc_path)
@@ -148,9 +154,6 @@ def test_select_all_as_valid_approves_every_refund_lead(tmp_path, monkeypatch):
     select_all = next(b for b in at.button if b.label == "Select all as valid")
     select_all.click().run()
     assert not at.exception
-
-    assert at.checkbox(key="refund_approve_0").value is True
-    assert at.checkbox(key="refund_approve_1").value is True
 
     finalize_button = next(b for b in at.button if b.label == "Finalize")
     finalize_button.click().run()
@@ -478,3 +481,70 @@ def test_multi_tab_routes_different_cids_to_completely_different_files(tmp_path,
     # The EMEA-only file must not have gained an APAC lead, and vice versa.
     assert wb_shared["APAC"].max_row == 2
     assert wb_emea["EMEA"].max_row == 2
+
+
+def test_jira_summary_uses_per_tab_sharepoint_links_for_multiple_lead_template_files(tmp_path, monkeypatch):
+    # Regression test: per-CID Lead Template file routing means a single
+    # run can write to more than one Lead Template workbook, each with its
+    # own SharePoint link — the Jira link picker must offer one "Lead
+    # Report" checkbox per distinct file, each pointing at that file's own
+    # configured link rather than a single shared one.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    save_jira_settings("https://example.atlassian.net", "me@example.com", "token123")
+
+    shared_path = str(tmp_path / "shared_template.xlsx")
+    wb = openpyxl.Workbook()
+    apac = wb.active
+    apac.title = "APAC"
+    apac.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "CID"])
+    wb.save(shared_path)
+
+    emea_only_path = str(tmp_path / "emea_only.xlsx")
+    wb2 = openpyxl.Workbook()
+    emea = wb2.active
+    emea.title = "EMEA"
+    emea.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "CID"])
+    wb2.save(emea_only_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        accumulated_report_link="https://madlog.sharepoint.com/:x:/s/Team/AccLink",
+        field_mapping=fm,
+        jira_ticket_key="PROJ-1234",
+        client_mode="Lead QA",
+        lead_template_path=shared_path,
+        lead_template_link="https://madlog.sharepoint.com/:x:/s/Team/SharedLink",
+        lead_template_multi_tab=True,
+        lead_template_tabs=[
+            LeadTemplateTab(sheet_name="APAC", cids=["1"]),  # blank link -> shared link
+            LeadTemplateTab(sheet_name="EMEA", cids=["2"], file_path=emea_only_path,
+                             link="https://madlog.sharepoint.com/:x:/s/Team/EmeaLink"),
+        ],
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "apac@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+        {"Email_Address": "emea@x.com", "First_Name": "E", "Last_Name": "Two", "Company_Name": "X", "CID": "2"},
+    ])
+    result = PipelineResult(valid_indices=[0, 1], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    checkbox_labels = [c.label for c in at.checkbox if c.key and c.key.startswith("jira_link_")]
+    assert any("AccLink" in label for label in checkbox_labels)
+    assert any("SharedLink" in label for label in checkbox_labels)
+    assert any("EmeaLink" in label for label in checkbox_labels)
