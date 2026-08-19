@@ -1,5 +1,7 @@
 # pages/2_Run_Check.py
 import datetime
+import os
+import shutil
 
 import pandas as pd
 import streamlit as st
@@ -11,6 +13,7 @@ from core.excel_io import (
     read_sheet_as_dataframe, append_leads, backup_file, require_columns, find_header_row, route_leads_by_cid,
     read_leadfile, read_pacing_overview_table,
 )
+from core.excel_recalc import recalculate_workbook
 from core import jira_client
 from core.jira_client import JiraError
 from core.matching import load_alias_groups, add_alias_pair
@@ -427,14 +430,27 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
             _selected_links.append((_label, _link or jira_client.path_to_link_href(_path)))
 
     _pacing_df = None
+    _pacing_path = _pending_summary["accumulated_report_path"]
+    _pacing_stale = True
     try:
-        _pacing_df = read_pacing_overview_table(_pending_summary["accumulated_report_path"])
+        with st.spinner("Recalculating Pacing Overview..."):
+            _recalculated_path = recalculate_workbook(_pacing_path)
+        _pacing_stale = _recalculated_path == _pacing_path
+        try:
+            _pacing_df = read_pacing_overview_table(_recalculated_path)
+        finally:
+            if _recalculated_path != _pacing_path:
+                shutil.rmtree(os.path.dirname(_recalculated_path), ignore_errors=True)
     except Exception:
         _pacing_df = None
     _include_pacing = False
     if _pacing_df is not None and not _pacing_df.empty:
         _include_pacing = st.checkbox("Include Pacing Overview table", value=True, key="jira_include_pacing")
         if _include_pacing:
+            if _pacing_stale:
+                st.caption("⚠️ Couldn't recalculate via Excel (not installed, or the attempt failed/timed "
+                           "out) — showing the file's last-saved values, which may not reflect this run's "
+                           "leads yet if any of these columns are formulas.")
             st.dataframe(_pacing_df, hide_index=True)
 
     st.text_area("Closing message", "Thanks", key="jira_comment_closing", height=60)

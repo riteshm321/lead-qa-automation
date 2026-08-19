@@ -301,6 +301,15 @@ a "Post summary to Jira" prompt appears, pre-filled and ready to review:
 - **Pacing Overview table** (if the Accumulated Report has that sheet) — a live
   preview of the table exactly as it'll post, as a real Jira table (not an image or
   plain text). Untick to leave it out.
+  - If any of that sheet's columns are **formulas** (e.g. Delivered/Remaining/
+    Pacing/date columns driven by `COUNTIFS`-style formulas), the tool briefly
+    opens a hidden copy of the file in Excel to force a fresh recalculation
+    before reading it — otherwise it would show whatever value Excel last
+    cached, which goes stale the moment this app appends new leads (it writes
+    via openpyxl, which never recalculates formulas). This requires **Excel to
+    be installed** on this machine; if it isn't (or the attempt fails), the
+    preview falls back to the file's last-saved values with an on-screen
+    warning, rather than blocking the Jira post entirely.
 - **Closing message** (editable) — defaults to "Thanks".
 
 Since not every run is a QA task — some are plain uploads — nothing here is
