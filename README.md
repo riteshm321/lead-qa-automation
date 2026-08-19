@@ -50,6 +50,9 @@ Each client is configured **once**, then reused every time you run a check for t
 - **Client name** — anything memorable; this is also the filename of its saved profile.
 - **Accumulated Report path** — the full path to that client's Accumulated Report
   `.xlsx` file. Use the **Browse...** button rather than typing it, to avoid typos.
+- **Accumulated Report SharePoint link** (optional) — used as the "Accumulated File"
+  link when posting a summary to Jira, instead of a local file path; see
+  [Section 13](#13-posting-a-run-summary-to-jira-optional).
 - **Accumulated tab name** / **Refund tab name** — the sheet names inside that workbook
   where valid leads and refunded leads get written. Defaults are `Accumulated` and
   `Refund`; change these if the client's file uses different sheet names. **These
@@ -73,14 +76,21 @@ Each client is configured **once**, then reused every time you run a check for t
   mechanism that isn't file-based).
 
 When mode is **Lead QA**, configure:
-  - **Lead Template path** and its **sheet name** (single-tab), or
-  - **multi-tab routing**: tick "This Lead Template has multiple tabs (routed by
-    CID)" and list each tab's sheet name plus which CIDs belong to it. A lead's CID
-    decides which tab it lands in; a CID that matches no tab still goes to the
-    Accumulated Report, just not the Lead Template.
+  - **Lead Template path** and its **sheet name** (single-tab). This can be left
+    blank if every CID group has its own separate file (see below) — a shared
+    default isn't required.
+  - **Lead Template SharePoint link** (optional) — used as the "Lead Report" link
+    when posting a summary to Jira, instead of a local file path; see
+    [Section 13](#13-posting-a-run-summary-to-jira-optional).
+  - **multi-tab/multi-file routing**: tick "Route different CIDs to different tabs
+    and/or separate files" and list each tab's sheet name plus which CIDs belong to
+    it. A lead's CID decides which tab it lands in; a CID that matches no tab still
+    goes to the Accumulated Report, just not the Lead Template.
     - Each tab can optionally point at its **own file** — leave it blank to use
       the shared Lead Template path above, or set it when that CID group's leads
       actually belong in a completely separate workbook, not just another tab.
+    - Each tab can also optionally set its **own SharePoint link**, for when its
+      file lives at a different location than the shared Lead Template link above.
   - **Clear existing leads before adding new ones** — off by default (leads
     accumulate below whatever's already there, like the Accumulated Report). Turn
     this on for a Lead Report that gets re-sent fresh each time rather than
@@ -158,7 +168,7 @@ Use **Clear** (top right) to discard the current upload/results and start over.
 By default, clients and aliases are private to your machine. To share them with a
 colleague:
 
-1. In Client Setup, open **⚙️ Shared team data location**.
+1. On the **⚙️ Settings** page, open **⚙️ Shared team data location**.
 2. Point **Shared team data folder** at a folder inside a OneDrive folder you both
    sync locally — e.g. `C:\Users\<you>\OneDrive - <Your Org>\Shared\LeadQA` (pick the
    folder itself, not a `clients` subfolder inside it; the app manages its own
@@ -280,10 +290,14 @@ a "Post summary to Jira" prompt appears, pre-filled and ready to review:
 - **Opening message** (editable) — a "Hi `<reporter name>`" greeting (if you set one),
   the run date, and the leads-in/valid/refunded counts.
 - **File links** — checkboxes to include the Accumulated Report and (for
-  "Lead QA" clients with a Lead Template configured) the Lead Report as clickable links in the comment.
-  These open the file when clicked, but **only on a machine where that exact file
-  path exists** (typically your own machine, or a teammate syncing the identical
-  shared folder) — not a universal link a client could open from anywhere.
+  "Lead QA" clients with a Lead Template configured) the Lead Report as clickable
+  links in the comment. If a SharePoint link is configured for that file (Client
+  Setup → Basics), that's what gets used — a universal link anyone can open. If
+  per-CID routing wrote to more than one Lead Template file this run, each file
+  gets its own labeled link. Without a configured SharePoint link, it falls back
+  to a local file path that only opens **on a machine where that exact path
+  exists** (typically your own machine, or a teammate syncing the identical
+  shared folder).
 - **Pacing Overview table** (if the Accumulated Report has that sheet) — a live
   preview of the table exactly as it'll post, as a real Jira table (not an image or
   plain text). Untick to leave it out.
@@ -300,7 +314,7 @@ there's actually something to link or a Pacing Overview sheet to show.
   update it here if that ever changes (e.g. a new campaign, a new ticket).
 - **Jira reporter's name** (optional) — used for the greeting.
 
-**One-time account setup**, in Client Setup → **🔑 Jira account (private to this machine)**:
+**One-time account setup**, on the **⚙️ Settings** page → **🔑 Jira account (private to this machine)**:
 
 - **Jira site URL** — e.g. `https://yourcompany.atlassian.net`.
 - **Your Jira email** and **API token** — generate a token at

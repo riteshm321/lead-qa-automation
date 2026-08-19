@@ -283,9 +283,18 @@ if "run_result" in st.session_state:
     final_valid_indices, final_refund_reasons = apply_refund_overrides(result, approved_refund_indices)
     final_refund_indices = list(final_refund_reasons.keys())
 
+    # A shared default Lead Template path isn't required when every tab
+    # routes to its own separate file — gating on lead_template_path alone
+    # would wrongly skip the whole Lead Template step (and its Jira link)
+    # for a client whose CID groups each go to a completely different file.
+    lead_template_configured = profile.client_mode == "Lead QA" and (
+        (profile.lead_template_multi_tab and profile.lead_template_tabs)
+        or (not profile.lead_template_multi_tab and profile.lead_template_path)
+    )
+
     if (result.refund_reasons or result.valid_indices) and not result.review_reasons:
         st.caption(f"On Finalize: {len(final_valid_indices)} lead(s) → Accumulated Report"
-                   + (" + Lead Template" if profile.client_mode == "Lead QA" and profile.lead_template_path else "")
+                   + (" + Lead Template" if lead_template_configured else "")
                    + f", {len(final_refund_indices)} lead(s) → Refund tab only.")
 
     if not result.review_reasons and st.button("Finalize"):
@@ -310,7 +319,7 @@ if "run_result" in st.session_state:
             # wrote to — a multi-tab client can route different CIDs to entirely different
             # workbooks, each with its own link, so this can't be a single value.
             lead_template_links_used: dict[str, str] = {}
-            if profile.client_mode == "Lead QA" and profile.lead_template_path and final_valid_indices:
+            if lead_template_configured and final_valid_indices:
                 _tmpl_fm = profile.lead_template_field_mapping
                 _tmpl_expected = [v for v in [
                     _tmpl_fm.email, _tmpl_fm.first_name, _tmpl_fm.last_name, _tmpl_fm.company, _tmpl_fm.cid,

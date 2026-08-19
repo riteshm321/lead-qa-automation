@@ -8,11 +8,8 @@ from core.excel_io import (
     list_sheet_names, read_sheet_as_dataframe, detect_cids_from_pacing_overview, guess_target_field_mapping,
     find_header_row, read_sheet_headers,
 )
-from core.app_settings import (
-    get_aliases_path, get_clients_dir, get_jira_settings, get_shared_root_dir,
-    load_app_settings, save_app_settings, save_jira_settings,
-)
-from core.file_browser import browse_for_file, browse_for_folder
+from core.app_settings import get_clients_dir
+from core.file_browser import browse_for_file
 from core.jira_client import extract_ticket_key
 from core.models import (
     ClientProfile, DuplicateConfig, LeadcapConfig, LeadcapSegment,
@@ -22,93 +19,7 @@ from core.models import (
 from core.profile_store import save_profile, load_profile, list_profile_names
 
 st.title("Client Setup")
-
-with st.expander("⚙️ Shared team data location"):
-    _clients_dir = get_clients_dir()
-    _aliases_path = get_aliases_path()
-    st.caption(f"Clients are currently stored at: `{os.path.abspath(_clients_dir)}`")
-    st.caption(f"Company aliases are currently stored at: `{os.path.abspath(_aliases_path)}`")
-    st.caption(
-        "By default both are private to this machine — a colleague using the exe on their own "
-        "laptop won't see these clients or learned aliases. To share them across a team, point this "
-        "at a folder inside a OneDrive folder you both sync locally (each person sets their own local "
-        "path to that same shared folder) — pick the folder itself, not a 'clients' subfolder inside "
-        "it; the app creates and manages its own `clients/` and `aliases/` subfolders under whatever "
-        "you select here, the same way it does for the private default. Any aliases you'd already "
-        "taught locally are copied over so nothing is lost. Note: OneDrive syncs file-by-file, not "
-        "instantly — if two people save the *same* client profile at the *same* moment, OneDrive may "
-        "create a conflicted copy instead of merging, so treat this as low-frequency shared config, "
-        "not simultaneous editing."
-    )
-    # Label rendered above (not inline in the text_input) so both columns
-    # start at the exact same vertical offset — keeps the Browse button
-    # aligned with the input box regardless of label text/theme font metrics,
-    # same as _path_input_with_browse below.
-    st.markdown("**Shared team data folder**")
-    col_input, col_browse = st.columns([5, 1])
-    # The Browse button's session_state write must run before the
-    # text_input with the same key is instantiated below — Streamlit
-    # forbids modifying a widget's session_state value after that widget
-    # has already been created in the same script run. Filling col_browse
-    # first (button) and col_input second (text_input) — both from this one
-    # st.columns() call, with no bare/unwrapped calls in between — keeps
-    # col_input rendering on the left regardless of that fill order, exactly
-    # like the proven pattern in _path_input_with_browse below.
-    with col_browse:
-        if st.button("📂 Browse...", key="clients_dir_browse", use_container_width=True):
-            chosen = browse_for_folder()
-            if chosen:
-                st.session_state["clients_dir_input"] = chosen
-                st.rerun()
-    with col_input:
-        _new_dir = st.text_input("Shared team data folder", value=get_shared_root_dir(),
-                                  placeholder="Leave blank for the private default", key="clients_dir_input",
-                                  label_visibility="collapsed")
-
-    col_save, col_reset = st.columns(2)
-    with col_save:
-        if st.button("Save", key="clients_dir_save", use_container_width=True):
-            new_root = _new_dir.strip()
-            if new_root:
-                os.makedirs(os.path.join(new_root, "clients"), exist_ok=True)
-                new_aliases_path = os.path.join(new_root, "aliases", "company_aliases.json")
-                old_aliases_path = get_aliases_path()
-                if not os.path.isfile(new_aliases_path) and os.path.isfile(old_aliases_path):
-                    import shutil
-                    os.makedirs(os.path.dirname(new_aliases_path), exist_ok=True)
-                    shutil.copy2(old_aliases_path, new_aliases_path)
-            updated_settings = {k: v for k, v in load_app_settings().items()
-                                if k not in ("clients_dir", "shared_root_dir")}
-            updated_settings["shared_root_dir"] = new_root
-            save_app_settings(updated_settings)
-            st.success("Saved. Reloading...")
-            st.rerun()
-    with col_reset:
-        if st.button("Reset to default", key="clients_dir_reset", use_container_width=True):
-            save_app_settings({
-                k: v for k, v in load_app_settings().items() if k not in ("clients_dir", "shared_root_dir")
-            })
-            st.rerun()
-
-with st.expander("🔑 Jira account (private to this machine)"):
-    st.caption(
-        "Used only for the \"Post summary to Jira\" button on the Run Check page, so a finalized run's "
-        "summary can be posted as a comment on that client's Jira ticket under your own account. "
-        "This is stored locally on this machine only — never inside the shared clients folder above, "
-        "since an API token is a secret tied to your Jira login."
-    )
-    _jira = get_jira_settings()
-    jira_base_url = st.text_input("Jira site URL", value=_jira["base_url"],
-                                   placeholder="https://yourcompany.atlassian.net", key="jira_base_url_input")
-    jira_email = st.text_input("Your Jira email", value=_jira["email"], key="jira_email_input")
-    jira_api_token = st.text_input(
-        "Your Jira API token", value=_jira["api_token"], type="password", key="jira_api_token_input",
-        help="Generate one at id.atlassian.com/manage-profile/security/api-tokens",
-    )
-    if st.button("Save Jira account", key="jira_settings_save"):
-        save_jira_settings(jira_base_url, jira_email, jira_api_token)
-        st.success("Saved.")
-        st.rerun()
+st.caption("Shared team data location and Jira account credentials moved to the ⚙️ Settings page.")
 
 
 def _path_input_with_browse(label: str, session_key: str, current_value: str, show_label: bool = True) -> str:
@@ -477,6 +388,8 @@ with tab_basics:
         lead_template_path = _path_input_with_browse(
             "Lead Template path", "lead_template_path_input",
             profile.lead_template_path if profile else "")
+        st.caption("The default/shared Lead Template file. Leave this blank if every CID group below has "
+                   "its own separate file — a shared default isn't required.")
         lead_template_link = st.text_input(
             "Lead Template SharePoint link (optional)",
             value=profile.lead_template_link if profile else "",
@@ -487,7 +400,7 @@ with tab_basics:
         )
 
         lead_template_multi_tab = st.checkbox(
-            "This Lead Template has multiple tabs (routed by CID)",
+            "Route different CIDs to different tabs and/or separate files",
             value=profile.lead_template_multi_tab if profile else False)
 
         lead_template_clear_existing = st.checkbox(
@@ -500,14 +413,27 @@ with tab_basics:
         )
 
         if lead_template_multi_tab:
-            st.caption("Each tab below receives leads whose CID matches its list. A lead whose CID matches "
-                       "no tab is skipped for the Lead Template step (with a warning) — it still goes to "
-                       "the Accumulated Report normally.")
+            st.info(
+                "Add one tab below for each group of CIDs. By default a tab writes into the shared Lead "
+                "Template file above, on the sheet you pick for it — set **\"File for this tab\"** only "
+                "when that CID group's leads go into a completely **different workbook** (its own "
+                "SharePoint file), not just a different sheet in the same file. A lead whose CID matches "
+                "no tab is skipped for the Lead Template step (with a warning) — it still goes to the "
+                "Accumulated Report normally."
+            )
             lead_template_tabs_result = _render_lead_template_tabs(lead_template_path)
             if not lead_template_tabs_result:
                 st.warning("Multi-tab is enabled but no tabs are configured — "
                            "no leads will be pasted into the Lead Template.")
             _header_source_sheet = lead_template_tabs_result[0].sheet_name if lead_template_tabs_result else ""
+            # A tab can point at a completely different workbook than the shared
+            # path above — the column-mapping preview must read from whichever
+            # file the first tab will actually write to, not always the shared
+            # default (which can legitimately be left blank).
+            _header_source_path = (
+                (lead_template_tabs_result[0].file_path or lead_template_path)
+                if lead_template_tabs_result else lead_template_path
+            )
         else:
             template_sheet_options: list[str] = []
             if lead_template_path:
@@ -528,8 +454,9 @@ with tab_basics:
                     "Lead Template sheet name (enter a valid file path above to pick from a list)",
                     value=profile.lead_template_sheet_name if profile else "", key="lead_template_sheet_text")
             _header_source_sheet = lead_template_sheet_name
+            _header_source_path = lead_template_path
 
-        _tmpl_file_identity = f"{lead_template_path}::{_header_source_sheet}"
+        _tmpl_file_identity = f"{_header_source_path}::{_header_source_sheet}"
         _tmpl_fm_match = (
             profile.lead_template_field_mapping
             if profile and profile.lead_template_path == lead_template_path
@@ -544,7 +471,7 @@ with tab_basics:
             _tmpl_fm_match.company, _tmpl_fm_match.cid,
         ] if v] if _tmpl_fm_match else None
         template_headers, template_headers_error = _safe_read_template_headers(
-            lead_template_path, _header_source_sheet, _tmpl_expected_for_detection)
+            _header_source_path, _header_source_sheet, _tmpl_expected_for_detection)
 
         # Same reset requirement as the Accumulated Report mapping above —
         # a keyed selectbox won't pick up a new default on its own when the
@@ -564,7 +491,9 @@ with tab_basics:
             if template_headers_error:
                 render_error(template_headers_error)
             elif not template_headers:
-                st.caption("Enter a valid Lead Template path and sheet above to map its columns.")
+                st.caption("Enter a valid Lead Template path and sheet above to map its columns — for "
+                           "multiple tabs/files, this reads from the first tab's own file if it has one, "
+                           "otherwise the shared Lead Template path.")
             else:
                 st.caption("Header row auto-detected — rows above it (titles, instructions) are left untouched.")
 
