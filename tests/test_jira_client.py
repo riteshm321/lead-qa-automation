@@ -127,6 +127,26 @@ def test_build_comment_body_includes_native_table():
     assert rows[1]["content"][0]["content"][0]["content"][0]["text"] == "118118"
 
 
+def test_build_comment_body_table_uses_full_width_layout_with_bold_headers():
+    # Regression test: the Pacing Overview table (7+ columns, growing by one
+    # every time a new date column is added) was posted with ADF's narrow
+    # "default" table layout, squeezing every column so tight that almost
+    # every cell wrapped word-by-word — unreadable compared to the source
+    # spreadsheet. "full-width" uses the whole comment pane instead.
+    doc = build_comment_body(
+        opening_text="Hi",
+        table_headers=["CID", "Campaign"],
+        table_rows=[["118118", "APAC Q3"]],
+    )
+    table_node = next(n for n in doc["content"] if n["type"] == "table")
+    assert table_node["attrs"]["layout"] == "full-width"
+
+    header_row = table_node["content"][0]
+    header_text_node = header_row["content"][0]["content"][0]["content"][0]
+    assert header_text_node["text"] == "CID"
+    assert {"type": "strong"} in header_text_node["marks"]
+
+
 def test_build_comment_body_omits_table_when_rows_not_provided():
     doc = build_comment_body(opening_text="Hi", table_headers=["CID"])
     assert not any(n["type"] == "table" for n in doc["content"])

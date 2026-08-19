@@ -68,14 +68,22 @@ def _links_to_adf_list(links: list[tuple[str, str]]) -> dict:
 def _table_to_adf(headers: list[str], rows: list[list]) -> dict:
     def _cell(value, is_header: bool) -> dict:
         text = "" if value is None else str(value)
-        paragraph = {"type": "paragraph", "content": [{"type": "text", "text": text}] if text else []}
+        marks = [{"type": "strong"}] if is_header and text else []
+        content = [{"type": "text", "text": text, "marks": marks}] if text else []
+        paragraph = {"type": "paragraph", "content": content}
         return {"type": "tableHeader" if is_header else "tableCell", "attrs": {}, "content": [paragraph]}
 
     header_row = {"type": "tableRow", "content": [_cell(h, True) for h in headers]}
     data_rows = [{"type": "tableRow", "content": [_cell(v, False) for v in row]} for row in rows]
     return {
         "type": "table",
-        "attrs": {"isNumberColumnEnabled": False, "layout": "default"},
+        # "full-width" uses the whole comment pane width instead of ADF's
+        # narrower "default" layout — with a wide Pacing Overview table
+        # (7+ columns, growing by one every time a new date is added),
+        # "default" squeezed every column so tight that nearly every cell
+        # wrapped word-by-word, which is what made the posted table
+        # unreadable compared to the source spreadsheet.
+        "attrs": {"isNumberColumnEnabled": False, "layout": "full-width"},
         "content": [header_row] + data_rows,
     }
 
