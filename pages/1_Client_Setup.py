@@ -310,15 +310,6 @@ def _find_source_name_problems(sources: list[ReferenceSource]) -> list[str]:
     return problems
 
 
-def _safe_read_headers(path: str, sheet_name: str) -> list[str]:
-    if not path or not sheet_name:
-        return []
-    try:
-        return list(read_sheet_as_dataframe(path, sheet_name).columns)
-    except Exception:
-        return []
-
-
 def _safe_read_template_headers(
     path: str, sheet_name: str, expected_headers: list | None = None
 ) -> tuple[list[str], Exception | None]:
@@ -440,7 +431,7 @@ with tab_basics:
             help="Used for the \"Hi <name>\" greeting in the posted summary.",
         )
 
-    accumulated_headers = _safe_read_headers(accumulated_path, accumulated_tab_name)
+    accumulated_headers, accumulated_headers_error = _safe_read_template_headers(accumulated_path, accumulated_tab_name)
 
     # Reset the mapping dropdowns whenever the actual file/tab changes —
     # a keyed selectbox ignores a fresh `index=` on later reruns and just
@@ -465,7 +456,9 @@ with tab_basics:
     with st.expander("🔗 Map Accumulated Report columns (optional)"):
         accumulated_field_mapping_result = _render_target_field_mapping(
             "Accumulated Report", "acc", accumulated_headers)
-        if not accumulated_headers:
+        if accumulated_headers_error is not None:
+            st.error(f"Couldn't read '{accumulated_path}' [{accumulated_tab_name}]: {accumulated_headers_error}")
+        elif not accumulated_headers:
             st.caption("Enter a valid Accumulated Report path and tab name above to map its columns.")
 
     st.divider()
