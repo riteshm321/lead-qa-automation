@@ -99,6 +99,28 @@ def test_same_name_blank_existing_company_passes():
     assert outcome.review == {}
 
 
+def test_exact_email_match_against_accumulated_with_different_headers_fails():
+    # Regression test: the Accumulated Report commonly uses different header
+    # text than the New Leads file (that's exactly what
+    # ClientProfile.accumulated_field_mapping exists for), but check_duplicates
+    # previously only accepted a single FieldMapping and used it to read both
+    # sides — so a lead already in the Accumulated Report under headers like
+    # "Email Add." never matched anything, since fm.email ("emailaddress")
+    # doesn't exist as a column there at all and .get() silently returned "".
+    acc_fm = FieldMapping(email="Email Add.", first_name="Given Name", last_name="Surname",
+                           company="Org", cid="Campaign ID")
+    new_leads = pd.DataFrame([
+        {"emailaddress": "andy@google.com", "firstname": "Andy", "lastname": "Jones", "company": "Google", "CID": 1},
+    ])
+    accumulated = pd.DataFrame([
+        {"Email Add.": "andy@google.com", "Given Name": "Andy", "Surname": "Jones", "Org": "Google", "Campaign ID": 1},
+    ])
+
+    outcome = check_duplicates(new_leads, accumulated, FM, accumulated_field_mapping=acc_fm)
+
+    assert outcome.fail[0] == "Duplicate - exact email"
+
+
 def test_no_match_for_distinct_leads():
     new_leads = pd.DataFrame([
         {"emailaddress": "ida@scania.com", "firstname": "Ida", "lastname": "Ekendahl", "company": "Scania", "CID": 1},

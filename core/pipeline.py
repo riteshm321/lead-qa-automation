@@ -32,7 +32,7 @@ def run_pipeline(
             review.setdefault(idx, []).append(reason)
 
     if profile.duplicate.enabled:
-        merge(duplicate.check_duplicates(new_leads, accumulated_leads, fm))
+        merge(duplicate.check_duplicates(new_leads, accumulated_leads, fm, profile.accumulated_field_mapping))
 
     if profile.leadcap.enabled:
         merge(leadcap.check_leadcap(new_leads, fm, profile.leadcap, reference_data.get("purchased_reports", {})))
