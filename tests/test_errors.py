@@ -26,6 +26,20 @@ def test_friendly_error_key_error():
     assert fix
 
 
+def test_friendly_error_old_xls_format():
+    # Real openpyxl exception when a client's Lead Template/Accumulated
+    # Report path points at a legacy .xls file — this tool only reads/writes
+    # .xlsx, since append_leads relies on openpyxl throughout (style/formula
+    # preservation) which can't open .xls at all.
+    exc = ValueError(
+        "openpyxl does not support the old .xls file format, please use xlrd to read this file, "
+        "or convert it to the more recent .xlsx file format."
+    )
+    message, fix = friendly_error(exc)
+    assert ".xls" in message
+    assert "Save As" in fix and ".xlsx" in fix
+
+
 def test_friendly_error_win_error_3_path_too_long():
     exc = FileNotFoundError("[WinError 3] The system cannot find the path specified: 'C:\\\\very\\\\long\\\\path.xlsx'")
     message, fix = friendly_error(exc)

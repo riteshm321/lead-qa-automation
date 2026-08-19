@@ -9,6 +9,11 @@ def friendly_error(exc: Exception) -> tuple[str, str]:
     """
     text = str(exc)
 
+    if "does not support the old .xls file format" in text:
+        return ("This file is in the old .xls format, which this tool can't read or write.",
+                "Open it in Excel, then File → Save As → pick \"Excel Workbook (*.xlsx)\", and update the "
+                "path in Client Setup to point at the new .xlsx file.")
+
     if "WinError 3" in text:
         return ("Windows couldn't find part of that file path.",
                 "This usually means the full path is too long (Windows has a ~260-character limit) — "
