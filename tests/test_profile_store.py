@@ -4,6 +4,7 @@ import os
 from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
     TalConfig, ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, LeadTemplateTab,
+    ComplexAccountConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
@@ -234,3 +235,31 @@ def test_load_profile_defaults_tab_file_path_and_clear_existing_for_old_schema_j
     loaded = load_profile("OldClient4", clients_dir=clients_dir)
     assert loaded.lead_template_clear_existing is False
     assert loaded.lead_template_tabs[0].file_path == ""
+
+
+def test_complex_account_config_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.complex_account = ComplexAccountConfig(
+        enabled=True, tal_path="sample_data/TAL.csv",
+        specifications_path="sample_data/Specifications Campaigns - BANT NTQ & EHS.xlsx",
+    )
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+
+    assert loaded.complex_account.enabled is True
+    assert loaded.complex_account.tal_path == "sample_data/TAL.csv"
+    assert loaded.complex_account.specifications_path == \
+        "sample_data/Specifications Campaigns - BANT NTQ & EHS.xlsx"
+
+
+def test_load_profile_defaults_complex_account_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldClient6.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "OldClient6", "accumulated_report_path": "sample_data/x.xlsx"}, f)
+
+    loaded = load_profile("OldClient6", clients_dir=clients_dir)
+    assert loaded.complex_account.enabled is False
+    assert loaded.complex_account.tal_path == ""

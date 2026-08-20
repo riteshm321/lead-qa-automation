@@ -14,7 +14,7 @@ from core.jira_client import extract_ticket_key
 from core.models import (
     ClientProfile, DuplicateConfig, LeadcapConfig, LeadcapSegment,
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
-    LeadTemplateTab,
+    LeadTemplateTab, ComplexAccountConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
@@ -302,8 +302,9 @@ client_name = st.text_input("Client name", value=profile.name if profile else ""
 
 st.divider()
 
-tab_basics, tab_leadcap, tab_exclusion, tab_tal, tab_suppression, tab_dedupe = st.tabs([
+tab_basics, tab_leadcap, tab_exclusion, tab_tal, tab_suppression, tab_dedupe, tab_complex = st.tabs([
     "🗂️ Basics", "🧮 Leadcap", "🚫 Exclusion", "🎯 TAL", "🔕 Suppression", "🧹 Dedupe & Duplicate",
+    "🧩 Complex Account",
 ])
 
 with tab_basics:
@@ -594,6 +595,35 @@ with tab_dedupe:
     else:
         st.caption("Dedupe list check is disabled.")
 
+with tab_complex:
+    st.subheader("Complex Account")
+    st.caption(
+        "For accounts that need extra, highly specific enrichment rules beyond the standard checks — "
+        "TAL account-ID/company mapping, per-CID Installed Technologies and Predictive Buying Stage "
+        "lookups, Capture Date/Email Opt-in/phone cleanup, and asset metadata auto-correction. These "
+        "rules are hardcoded (not configurable per field) since they're currently built for one client's "
+        "exact file layout — see core/complex_account.py."
+    )
+    complex_account_enabled = st.checkbox(
+        "This is a complex account", value=profile.complex_account.enabled if profile else False)
+    complex_account_tal_path = ""
+    complex_account_specifications_path = ""
+    if complex_account_enabled:
+        complex_account_tal_path = _path_input_with_browse(
+            "TAL file path", "complex_account_tal_path_input",
+            profile.complex_account.tal_path if profile else "")
+        st.caption("Account ID / company-name reference — matched by domain, with Country as a tie-breaker "
+                   "when a domain maps to more than one account.")
+        complex_account_specifications_path = _path_input_with_browse(
+            "Specifications file path (\"...BANT NTQ & EHS\")", "complex_account_specs_path_input",
+            profile.complex_account.specifications_path if profile else "")
+        st.caption("Asset Name → URN / Asset URL 1 & 2 / Dell URL reference, used to auto-correct those "
+                   "columns for each lead's Asset Title.")
+        st.caption("The Installed Technologies and Predictive Buying Stage files are uploaded fresh on "
+                   "the Run Check page each time, like the Purchased Lead Report — not configured here.")
+    else:
+        st.caption("Complex Account rules are disabled for this client.")
+
 st.divider()
 
 _enabled_summary = ", ".join(
@@ -671,6 +701,11 @@ if st.button("💾 Save Client Profile", type="primary"):
                                                profile.suppression.sources if profile else [])),
             dedupe_list=DedupeListConfig(enabled=dedupe_enabled, sources=dedupe_sources_result if dedupe_enabled else (
                 profile.dedupe_list.sources if profile else [])),
+            complex_account=ComplexAccountConfig(
+                enabled=complex_account_enabled,
+                tal_path=complex_account_tal_path if complex_account_enabled else "",
+                specifications_path=complex_account_specifications_path if complex_account_enabled else "",
+            ),
         )
         saved_path = save_profile(new_profile, get_clients_dir())
         st.success(f"Saved profile to {saved_path}")

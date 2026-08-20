@@ -341,3 +341,49 @@ button to actually send it. Click **Dismiss** to skip posting for that run witho
 sending anything.
 
 ---
+
+## 14. Complex Accounts (optional)
+
+Some accounts need extra, highly specific enrichment rules on top of the standard
+checks — currently built for one client, **Dell APAC** — rather than a generic,
+configurable feature. See `core/complex_account.py` for the actual rule logic; column
+names are hardcoded there, not configurable per client.
+
+**One-time setup** (Client Setup → **🧩 Complex Account**):
+
+- Tick **"This is a complex account"**.
+- **TAL file path** — the account-ID/company-name reference (large CSV). Matched by
+  the lead's email domain; when a domain maps to more than one account, the one whose
+  country matches the lead's own `Country` column wins.
+- **Specifications file path** (the "...BANT NTQ & EHS" workbook) — Asset Name → URN /
+  Asset URL 1 & 2 / Dell URL, used to auto-correct those columns.
+
+**Every run** (Run Check page, only shown for a complex-account client): upload that
+run's **Installed Technologies** and **Predictive Buying Stage** files — one pair per
+CID, like the Purchased Lead Report. The CID is read from each filename (e.g.
+`...(139849)...`); a CID with no file uploaded this run has its corresponding column
+cleared rather than left with stale data.
+
+**What gets applied**, to every valid lead before Finalize:
+
+1. **TAL mapping** — `Account ID` and `Company` filled from the TAL by domain (no
+   match → blank Account ID, `Company` left as-is).
+2. **Installed Technologies** / **Predictive Buying Stage** — looked up by domain in
+   that lead's CID's uploaded file, written as `"Installed Technologies: {value}"` /
+   `"Predictive Buying Stage: {value}"`, replacing whatever was there.
+3. The first "Additional Data Point" column keeps its existing value, prefixed with
+   `"Top Trending Topics: "`.
+4. **Capture Date** reformatted to `mm/dd/yyyy` (parsed flexibly, not just already
+   the right format).
+5. **Email Opt-in** collapsed to a bare `"Yes"`/`"No"`.
+6. **Asset download day/month/year** derived from the (now-clean) Capture Date — day
+   as 2 digits, month as its full name, year hardcoded `"2026"`.
+7. **Phone** — every non-digit character stripped, then a space inserted after the
+   first 2 digits.
+8. **Asset URN / Dell Asset URL / Form URL** auto-corrected from the specifications
+   file by matching Asset Title (unrecognized asset → left untouched).
+
+A lead with a blank/unparseable Capture Date, or an Email Opt-in value that isn't
+clearly "Yes" or "No", is sent to **Needs Review** instead of being auto-decided.
+
+---

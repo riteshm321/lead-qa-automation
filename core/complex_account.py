@@ -1,0 +1,371 @@
+import datetime
+import io
+import re
+
+import openpyxl
+import pandas as pd
+
+from core.check_result import ReviewDetail
+from core.matching import extract_domain
+
+# Hardcoded to Dell APAC's actual column names (per design decision: not
+# worth a full mapping UI for a single client). If a future complex account
+# needs different names, add configurability then.
+COUNTRY_COLUMN = "Country"
+ACCOUNT_ID_COLUMN = "Account ID"
+COMPANY_COLUMN = "Company"
+CAPTURE_DATE_COLUMN = "Capture Date"
+EMAIL_OPTIN_COLUMN = "Email Opt-in"
+PHONE_COLUMN = "Business Phone"
+ASSET_TITLE_COLUMN = "Asset Title"
+ASSET_URN_COLUMN = "Asset URN"
+FORM_URL_COLUMN = "Form URL"
+DELL_ASSET_URL_COLUMN = "Dell Asset URL"
+TOP_TOPICS_COLUMN = "Additional Data Point (poll questions, dynamic data, etc)  1"
+INSTALLED_TECH_COLUMN = "Additional Data Point (poll questions, dynamic data, etc)  2"
+PBS_COLUMN = "Additional Data Point (poll questions, dynamic data, etc)  3"
+DOWNLOAD_DAY_COLUMN = "Asset download day"
+DOWNLOAD_MONTH_COLUMN = "Asset download month"
+DOWNLOAD_YEAR_COLUMN = "Asset download year"
+DOWNLOAD_YEAR_VALUE = "2026"
+
+_CID_FROM_FILENAME_RE = re.compile(r"\((\d+)\)")
+
+
+def extract_cid_from_filename(filename: str) -> str | None:
+    """Pulls the CID out of a Madison Logic export filename, e.g.
+    "Installed Technologies_Report_Dell APAC_(139849)_2026-08-16_2026-08-20.csv"
+    -> "139849". Returns None if the filename doesn't contain a
+    parenthesized number.
+    """
+    match = _CID_FROM_FILENAME_RE.search(filename or "")
+    return match.group(1) if match else None
+
+
+def _norm_domain(value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip().lower()
+    return "" if text in ("", "nan") else text
+
+
+def load_tal_index(tal_path: str) -> dict[str, list[dict]]:
+    """Loads the (large, ~500k+ row) TAL reference file into a
+    domain -> [{"account_id", "account_name", "country_code"}, ...] index,
+    reading only the 4 columns actually needed to keep memory/load time
+    reasonable. More than one TAL row can share the same domain (different,
+    genuinely distinct accounts, not just duplicate rows) — match_tal_account
+    resolves that ambiguity per lead using the lead's own country.
+    """
+    df = pd.read_csv(tal_path, usecols=["web_domain", "account_id", "account_name", "country_code"])
+    index: dict[str, list[dict]] = {}
+    for row in df.itertuples(index=False):
+        domain = _norm_domain(row.web_domain)
+        if not domain:
+            continue
+        index.setdefault(domain, []).append({
+            "account_id": row.account_id,
+            "account_name": row.account_name,
+            "country_code": str(row.country_code or "").strip().upper(),
+        })
+    return index
+
+
+def match_tal_account(domain: str, country: str, tal_index: dict[str, list[dict]]) -> tuple[str | None, str | None]:
+    """Returns (account_id, account_name) for the given domain, or (None, None)
+    if the domain isn't in the TAL at all. When a domain maps to more than one
+    distinct account, prefers one whose country_code matches the lead's own
+    Country — if that still doesn't resolve it, returns the first candidate
+    rather than leaving it blank (a real client-facing report should never
+    show an empty Account ID just because two TAL rows share a domain).
+    """
+    candidates = tal_index.get(_norm_domain(domain))
+    if not candidates:
+        return None, None
+    if len(candidates) > 1:
+        country_norm = str(country or "").strip().upper()
+        if country_norm:
+            for candidate in candidates:
+                if candidate["country_code"] == country_norm:
+                    return candidate["account_id"], candidate["account_name"]
+    chosen = candidates[0]
+    return chosen["account_id"], chosen["account_name"]
+
+
+def apply_tal_mapping(
+    leads_df: pd.DataFrame, email_column: str, country_column: str,
+    account_id_column: str, company_column: str, tal_index: dict[str, list[dict]],
+) -> pd.DataFrame:
+    """Fills account_id_column from the TAL for every lead whose email
+    domain matches, replacing company_column with the TAL's own company
+    name for those leads. A lead with no TAL match gets a blank account id
+    and keeps its original company name untouched.
+    """
+    df = leads_df.copy()
+    account_ids = []
+    companies = list(df[company_column]) if company_column in df.columns else [""] * len(df)
+    for i, (_, row) in enumerate(df.iterrows()):
+        domain = extract_domain(row.get(email_column))
+        account_id, account_name = match_tal_account(domain, row.get(country_column), tal_index)
+        account_ids.append(account_id or "")
+        if account_name:
+            companies[i] = account_name
+    df[account_id_column] = account_ids
+    df[company_column] = companies
+    return df
+
+
+def _find_csv_header_row(text: str, required_column: str, max_scan: int = 15) -> int:
+    # These exports carry a couple of "Client:"/"Program:" metadata lines
+    # (and a blank line) above the real header row.
+    required_norm = required_column.strip().lower()
+    for i, line in enumerate(text.splitlines()[:max_scan]):
+        if required_norm in line.strip().lower():
+            return i
+    return 0
+
+
+def load_domain_value_map(file_obj, domain_column: str, value_column: str) -> dict[str, str]:
+    """Reads a CID-specific reference export (Installed Technologies or
+    Predictive Buying Stage) into a domain -> value dict. file_obj is
+    anything with .read() returning bytes (a Streamlit UploadedFile or a
+    plain open file).
+    """
+    raw = file_obj.read()
+    if isinstance(raw, bytes):
+        text = raw.decode("utf-8-sig", errors="replace")
+    else:
+        text = raw
+    header_row = _find_csv_header_row(text, domain_column)
+    df = pd.read_csv(io.StringIO(text), skiprows=header_row)
+
+    mapping: dict[str, str] = {}
+    for _, row in df.iterrows():
+        domain = _norm_domain(row.get(domain_column))
+        if not domain:
+            continue
+        value = row.get(value_column)
+        if value is not None and str(value).strip() and str(value).strip().lower() != "nan":
+            mapping[domain] = str(value).strip()
+    return mapping
+
+
+_DATE_FORMATS = (
+    "%m/%d/%Y", "%m/%d/%y", "%d-%b-%Y", "%d-%B-%Y",
+    "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%Y-%m-%d",
+)
+
+
+def reformat_capture_date(value) -> str | None:
+    """Returns the date as mm/dd/yyyy text, or None if value is blank or
+    couldn't be parsed as a date at all (caller flags that lead for review —
+    per instruction, this should never actually be blank in practice).
+    US-style m/d/y is tried first since that's this client's own convention
+    (and the ambiguous case, e.g. "03/04/2026", only has one sane reading
+    without more context).
+    """
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.strftime("%m/%d/%Y")
+    text = str(value).strip() if value is not None else ""
+    if not text or text.lower() == "nan":
+        return None
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.datetime.strptime(text, fmt).strftime("%m/%d/%Y")
+        except ValueError:
+            continue
+    try:
+        return pd.to_datetime(text).strftime("%m/%d/%Y")
+    except (ValueError, TypeError):
+        return None
+
+
+def clean_email_optin(value) -> str | None:
+    """Collapses a verbose opt-in value ("Yes, I would like Dell to contact
+    me by email...") down to a bare "Yes"/"No". Returns None if the value
+    doesn't clearly contain exactly one of "yes"/"no" (caller flags that
+    lead for review rather than guessing).
+    """
+    text = str(value).strip().lower() if value is not None else ""
+    has_yes = "yes" in text
+    has_no = "no" in text
+    if has_yes and not has_no:
+        return "Yes"
+    if has_no and not has_yes:
+        return "No"
+    return None
+
+
+def asset_download_parts(capture_date_mmddyyyy: str) -> tuple[str, str]:
+    """(2-digit day, full month name) from an already mm/dd/yyyy-formatted
+    Capture Date string."""
+    parsed = datetime.datetime.strptime(capture_date_mmddyyyy, "%m/%d/%Y")
+    return f"{parsed.day:02d}", parsed.strftime("%B")
+
+
+def format_phone(value) -> str:
+    """Strips every non-digit character, then inserts a single space after
+    the first 2 digits (e.g. "+91-92-929-29292" -> "91 9292929292")."""
+    digits = re.sub(r"\D", "", str(value)) if value is not None else ""
+    return digits if len(digits) <= 2 else f"{digits[:2]} {digits[2:]}"
+
+
+def load_asset_specifications(path: str) -> dict[str, dict]:
+    """Reads the "Specifications Campaigns - BANT NTQ & EHS" workbook into
+    normalized-Asset-Name -> {"urn", "url1", "url2", "dell_url"}."""
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws = wb[wb.sheetnames[0]]
+        header_cells = next(ws.iter_rows(min_row=1, max_row=1))
+        col_by_header = {
+            str(c.value).strip().lower(): i for i, c in enumerate(header_cells) if c.value is not None
+        }
+        name_i = col_by_header.get("asset name")
+        urn_i = col_by_header.get("urn")
+        url1_i = col_by_header.get("asset url 1")
+        url2_i = col_by_header.get("asset url 2")
+        dell_i = col_by_header.get("dell url")
+        if name_i is None:
+            raise ValueError(f"'{path}' has no 'Asset Name' column")
+
+        specs: dict[str, dict] = {}
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            name = row[name_i] if name_i < len(row) else None
+            if name is None or not str(name).strip():
+                continue
+            specs[str(name).strip().lower()] = {
+                "urn": row[urn_i] if urn_i is not None and urn_i < len(row) else "",
+                "url1": row[url1_i] if url1_i is not None and url1_i < len(row) else "",
+                "url2": row[url2_i] if url2_i is not None and url2_i < len(row) else "",
+                "dell_url": row[dell_i] if dell_i is not None and dell_i < len(row) else "",
+            }
+        return specs
+    finally:
+        wb.close()
+
+
+def autocorrect_asset_row(
+    asset_title, form_url, specs: dict[str, dict],
+) -> tuple[str, str, str] | tuple[None, None, None]:
+    """Looks up asset_title in specs (normalized, exact match). Returns
+    (urn, form_url, dell_url) to write, or (None, None, None) meaning
+    "leave this lead's asset fields untouched" (asset title not recognized
+    at all). form_url is left as given if it already equals Asset URL 1 or
+    2; otherwise it's corrected to Asset URL 1.
+    """
+    spec = specs.get(str(asset_title or "").strip().lower())
+    if spec is None:
+        return None, None, None
+    current_form_url = str(form_url or "").strip()
+    new_form_url = form_url if current_form_url in (spec["url1"], spec["url2"]) else spec["url1"]
+    return spec["urn"], new_form_url, spec["dell_url"]
+
+
+def apply_complex_account_rules(
+    leads_df: pd.DataFrame,
+    field_mapping,
+    tal_index: dict[str, list[dict]] | None,
+    cid_installed_tech_maps: dict[str, dict[str, str]],
+    cid_pbs_maps: dict[str, dict[str, str]],
+    asset_specs: dict[str, dict] | None,
+) -> tuple[pd.DataFrame, dict[int, list[ReviewDetail]]]:
+    """Applies every Complex Account rule to a copy of leads_df and returns
+    (enriched_df, review_reasons) — review_reasons only ever contains
+    entries for the two rules that can't safely auto-decide (Capture Date,
+    Email Opt-in); every other rule always produces a value (TAL: blank
+    Account ID on no match; Installed Technologies/Predictive Buying Stage:
+    blank on no file/no match; asset fields: left untouched on an
+    unrecognized Asset Title). Values are ReviewDetail objects, matching
+    the shape every other check in core/checks/ returns, so they render in
+    the same "Needs Review" UI unchanged.
+
+    cid_installed_tech_maps / cid_pbs_maps: {cid: {domain: value}} — a CID
+    missing from the dict (no file uploaded for it this run) gets that
+    lead's corresponding column cleared to blank, per design.
+    """
+    df = leads_df.copy()
+    review: dict[int, list[ReviewDetail]] = {}
+
+    if tal_index is not None:
+        df = apply_tal_mapping(df, field_mapping.email, COUNTRY_COLUMN, ACCOUNT_ID_COLUMN, COMPANY_COLUMN, tal_index)
+
+    for idx, row in df.iterrows():
+        cid = str(row.get(field_mapping.cid, "")).strip()
+        domain = _norm_domain(extract_domain(row.get(field_mapping.email)))
+
+        it_map = cid_installed_tech_maps.get(cid)
+        it_value = it_map.get(domain) if it_map else None
+        if INSTALLED_TECH_COLUMN in df.columns:
+            df.at[idx, INSTALLED_TECH_COLUMN] = f"Installed Technologies: {it_value}" if it_value else ""
+
+        pbs_map = cid_pbs_maps.get(cid)
+        pbs_value = pbs_map.get(domain) if pbs_map else None
+        if PBS_COLUMN in df.columns:
+            df.at[idx, PBS_COLUMN] = f"Predictive Buying Stage: {pbs_value}" if pbs_value else ""
+
+    if TOP_TOPICS_COLUMN in df.columns:
+        df[TOP_TOPICS_COLUMN] = df[TOP_TOPICS_COLUMN].apply(
+            lambda v: f"Top Trending Topics: {v}" if pd.notna(v) and str(v).strip() else v
+        )
+
+    capture_date_ok = pd.Series(True, index=df.index)
+    if CAPTURE_DATE_COLUMN in df.columns:
+        for idx, row in df.iterrows():
+            formatted = reformat_capture_date(row.get(CAPTURE_DATE_COLUMN))
+            if formatted is None:
+                review.setdefault(idx, []).append(ReviewDetail(
+                    check="Complex Account", message="Capture Date is blank or unparseable",
+                    lead_value=str(row.get(CAPTURE_DATE_COLUMN, "")),
+                ))
+                capture_date_ok[idx] = False
+            else:
+                df.at[idx, CAPTURE_DATE_COLUMN] = formatted
+
+    if EMAIL_OPTIN_COLUMN in df.columns:
+        for idx, row in df.iterrows():
+            cleaned = clean_email_optin(row.get(EMAIL_OPTIN_COLUMN))
+            if cleaned is None:
+                review.setdefault(idx, []).append(ReviewDetail(
+                    check="Complex Account", message="Email Opt-in value is not clearly Yes/No",
+                    lead_value=str(row.get(EMAIL_OPTIN_COLUMN, "")),
+                ))
+            else:
+                df.at[idx, EMAIL_OPTIN_COLUMN] = cleaned
+
+    if CAPTURE_DATE_COLUMN in df.columns and DOWNLOAD_DAY_COLUMN in df.columns:
+        for idx, row in df.iterrows():
+            if not capture_date_ok[idx]:
+                continue
+            day, month = asset_download_parts(row.get(CAPTURE_DATE_COLUMN))
+            df.at[idx, DOWNLOAD_DAY_COLUMN] = day
+            df.at[idx, DOWNLOAD_MONTH_COLUMN] = month
+            df.at[idx, DOWNLOAD_YEAR_COLUMN] = DOWNLOAD_YEAR_VALUE
+
+    if PHONE_COLUMN in df.columns:
+        df[PHONE_COLUMN] = df[PHONE_COLUMN].apply(format_phone)
+
+    if asset_specs is not None and ASSET_TITLE_COLUMN in df.columns:
+        for idx, row in df.iterrows():
+            urn, new_form_url, dell_url = autocorrect_asset_row(
+                row.get(ASSET_TITLE_COLUMN), row.get(FORM_URL_COLUMN), asset_specs)
+            if urn is not None:
+                df.at[idx, ASSET_URN_COLUMN] = urn
+                df.at[idx, FORM_URL_COLUMN] = new_form_url
+                df.at[idx, DELL_ASSET_URL_COLUMN] = dell_url
+
+    return df, review
+
+
+def merge_complex_account_review(result, complex_review: dict[int, list[ReviewDetail]]) -> None:
+    """Merges Complex Account review flags into an existing PipelineResult
+    in place, respecting the same fail > review > valid priority
+    run_pipeline() itself uses — a lead already auto-refunded by one of the
+    standard checks stays refunded; anything else moves to (or stays in)
+    review.
+    """
+    for idx, reasons in complex_review.items():
+        if idx in result.refund_reasons:
+            continue
+        result.review_reasons.setdefault(idx, []).extend(reasons)
+        if idx in result.valid_indices:
+            result.valid_indices.remove(idx)

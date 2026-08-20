@@ -1,0 +1,298 @@
+import io
+
+import openpyxl
+import pandas as pd
+
+from core.complex_account import (
+    extract_cid_from_filename, load_tal_index, match_tal_account, apply_tal_mapping,
+    load_domain_value_map, reformat_capture_date, clean_email_optin, asset_download_parts,
+    format_phone, load_asset_specifications, autocorrect_asset_row, apply_complex_account_rules,
+    merge_complex_account_review,
+)
+from core.check_result import ReviewDetail
+from core.models import FieldMapping
+from core.pipeline import PipelineResult
+
+
+def _upload(name: str, text: str) -> io.BytesIO:
+    f = io.BytesIO(text.encode("utf-8"))
+    f.name = name
+    return f
+
+
+def test_extract_cid_from_filename():
+    assert extract_cid_from_filename(
+        "Installed Technologies_Report_Dell APAC_(139849)_2026-08-16_2026-08-20.csv") == "139849"
+    assert extract_cid_from_filename("no cid here.csv") is None
+
+
+def test_load_tal_index_and_match_unambiguous(tmp_path):
+    tal_path = str(tmp_path / "tal.csv")
+    pd.DataFrame([
+        {"web_domain": "wipro.com", "account_id": "P123", "account_name": "Wipro Ltd", "country_code": "IN"},
+        {"web_domain": "unrelated.com", "account_id": "P999", "account_name": "Unrelated Co", "country_code": "US"},
+    ]).to_csv(tal_path, index=False)
+
+    tal_index = load_tal_index(tal_path)
+    account_id, account_name = match_tal_account("wipro.com", "IN", tal_index)
+    assert account_id == "P123"
+    assert account_name == "Wipro Ltd"
+
+    assert match_tal_account("nomatch.com", "IN", tal_index) == (None, None)
+
+
+def test_match_tal_account_ambiguous_domain_prefers_country_match(tmp_path):
+    tal_path = str(tmp_path / "tal.csv")
+    pd.DataFrame([
+        {"web_domain": "shared.com", "account_id": "P_JP", "account_name": "Shared JP", "country_code": "JP"},
+        {"web_domain": "shared.com", "account_id": "P_IN", "account_name": "Shared IN", "country_code": "IN"},
+    ]).to_csv(tal_path, index=False)
+    tal_index = load_tal_index(tal_path)
+
+    account_id, account_name = match_tal_account("shared.com", "IN", tal_index)
+    assert account_id == "P_IN"
+    assert account_name == "Shared IN"
+
+
+def test_match_tal_account_ambiguous_domain_with_no_country_match_still_returns_one(tmp_path):
+    # Never leave it blank just because the tie can't be broken by country.
+    tal_path = str(tmp_path / "tal.csv")
+    pd.DataFrame([
+        {"web_domain": "shared.com", "account_id": "P_JP", "account_name": "Shared JP", "country_code": "JP"},
+        {"web_domain": "shared.com", "account_id": "P_AU", "account_name": "Shared AU", "country_code": "AU"},
+    ]).to_csv(tal_path, index=False)
+    tal_index = load_tal_index(tal_path)
+
+    account_id, account_name = match_tal_account("shared.com", "IN", tal_index)
+    assert account_id in ("P_JP", "P_AU")
+
+
+def test_apply_tal_mapping_leaves_company_untouched_and_account_id_blank_on_no_match():
+    tal_index = {"wipro.com": [{"account_id": "P123", "account_name": "Wipro Ltd", "country_code": "IN"}]}
+    leads = pd.DataFrame([
+        {"Email": "a@wipro.com", "Country": "IN", "Account ID": "Vlookup from TAL provided", "Company": "Wipro"},
+        {"Email": "b@unknown.com", "Country": "IN", "Account ID": "Vlookup from TAL provided", "Company": "Unknown Inc"},
+    ])
+    result = apply_tal_mapping(leads, "Email", "Country", "Account ID", "Company", tal_index)
+
+    assert result.loc[0, "Account ID"] == "P123"
+    assert result.loc[0, "Company"] == "Wipro Ltd"
+    assert result.loc[1, "Account ID"] == ""
+    assert result.loc[1, "Company"] == "Unknown Inc"  # untouched, not blanked
+
+
+def test_load_domain_value_map_skips_metadata_lines_and_blank_domains():
+    csv_text = (
+        "Client: Dell APAC\n"
+        '"Program: Dell APAC_Whitespace (ID: 139849)"\n'
+        "\n"
+        "Company,Domain,Category,Installed Technologies,Verified on Date\n"
+        "Wipro,wipro.com,Cloud,\"AWS, Azure\",2026-08-01\n"
+        "Blank Domain Co,,Cloud,Something,2026-08-01\n"
+    )
+    mapping = load_domain_value_map(_upload("it.csv", csv_text), "Domain", "Installed Technologies")
+
+    assert mapping == {"wipro.com": "AWS, Azure"}
+
+
+def test_load_domain_value_map_matches_real_pbs_column_layout():
+    # Real Predictive Buying Stage export: "Targeted Accounts" holds the
+    # domain despite its header text, confirmed against the actual file.
+    csv_text = (
+        "Client: Dell APAC\n"
+        '"Program: Dell APAC (ID: 139843)"\n'
+        "\n"
+        "Targeted Accounts,Trending,Reached,Engaged,Predictive Buying Stage\n"
+        "kelltontech.com,Yes,Yes,Yes,No Active Signals\n"
+        "emcure.com,Yes,Yes,Yes,Awareness\n"
+    )
+    mapping = load_domain_value_map(_upload("pbs.csv", csv_text), "Targeted Accounts", "Predictive Buying Stage")
+
+    assert mapping == {"kelltontech.com": "No Active Signals", "emcure.com": "Awareness"}
+
+
+def test_reformat_capture_date_handles_mmddyyyy_text():
+    assert reformat_capture_date("08/17/2026") == "08/17/2026"
+
+
+def test_reformat_capture_date_handles_other_text_formats():
+    assert reformat_capture_date("17-Aug-2026") == "08/17/2026"
+    assert reformat_capture_date("August 17, 2026") == "08/17/2026"
+
+
+def test_reformat_capture_date_returns_none_for_blank_or_unparseable():
+    assert reformat_capture_date(None) is None
+    assert reformat_capture_date("") is None
+    assert reformat_capture_date("not a date") is None
+
+
+def test_clean_email_optin_collapses_verbose_values():
+    assert clean_email_optin("Yes, Yes") == "Yes"
+    assert clean_email_optin("Yes, I would like Dell to contact me by email., Yes, I would like Dell to "
+                              "contact me by phone.") == "Yes"
+    assert clean_email_optin("No") == "No"
+
+
+def test_clean_email_optin_returns_none_when_ambiguous():
+    assert clean_email_optin("Maybe") is None
+    assert clean_email_optin("") is None
+    assert clean_email_optin(None) is None
+    assert clean_email_optin("Yes and No") is None
+
+
+def test_asset_download_parts():
+    day, month = asset_download_parts("08/17/2026")
+    assert day == "17"
+    assert month == "August"
+
+    day, month = asset_download_parts("08/05/2026")
+    assert day == "05"
+
+
+def test_format_phone_strips_punctuation_and_inserts_space():
+    assert format_phone("+91-98-197-19038") == "91 9819719038"
+    assert format_phone(919819719038) == "91 9819719038"
+    assert format_phone("91") == "91"
+    assert format_phone(None) == ""
+
+
+def test_load_asset_specifications_and_autocorrect(tmp_path):
+    path = str(tmp_path / "specs.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Asset Name", "URN ", "Asset URL 1", "Asset URL 2", "Dell URL"])
+    ws.append(["Fuel AI Innovation", "DT2503G0007_033", "https://a.com/1", "https://a.com/2", "https://dell.com/x"])
+    wb.save(path)
+
+    specs = load_asset_specifications(path)
+    assert "fuel ai innovation" in specs
+    assert specs["fuel ai innovation"]["urn"] == "DT2503G0007_033"
+
+    # Form URL already correct (matches url2) -> left as-is
+    urn, form_url, dell_url = autocorrect_asset_row("Fuel AI Innovation", "https://a.com/2", specs)
+    assert urn == "DT2503G0007_033"
+    assert form_url == "https://a.com/2"
+    assert dell_url == "https://dell.com/x"
+
+    # Form URL wrong -> corrected to Asset URL 1
+    urn, form_url, dell_url = autocorrect_asset_row("Fuel AI Innovation", "https://wrong.com", specs)
+    assert form_url == "https://a.com/1"
+
+    # Unknown asset -> untouched
+    assert autocorrect_asset_row("Some Unknown Asset", "https://whatever.com", specs) == (None, None, None)
+
+
+FM = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+
+
+def _base_leads_df() -> pd.DataFrame:
+    return pd.DataFrame([
+        {
+            "CID": "119414", "Email": "a@wipro.com", "First": "A", "Last": "One",
+            "Country": "IN", "Account ID": "Vlookup from TAL provided", "Company": "Wipro",
+            "Capture Date": "08/17/2026", "Email Opt-in": "Yes, Yes", "Business Phone": 919819719038,
+            "Asset Title": "Fuel AI Innovation", "Asset URN": "WRONG", "Form URL": "https://wrong.com",
+            "Dell Asset URL": "https://wrong-dell.com",
+            "Additional Data Point (poll questions, dynamic data, etc)  1": "AI, Cloud",
+            "Additional Data Point (poll questions, dynamic data, etc)  2": "stale placeholder",
+            "Additional Data Point (poll questions, dynamic data, etc)  3": "stale placeholder",
+            "Asset download day": " ", "Asset download month": " ", "Asset download year": " ",
+        },
+    ])
+
+
+def test_apply_complex_account_rules_end_to_end():
+    df = _base_leads_df()
+    tal_index = {"wipro.com": [{"account_id": "P123", "account_name": "Wipro Ltd", "country_code": "IN"}]}
+    it_maps = {"119414": {"wipro.com": "AWS, Azure"}}
+    pbs_maps = {"119414": {"wipro.com": "Awareness"}}
+    asset_specs = {
+        "fuel ai innovation": {"urn": "DT2503G0007_033", "url1": "https://a.com/1",
+                                "url2": "https://a.com/2", "dell_url": "https://dell.com/real"},
+    }
+
+    enriched, review = apply_complex_account_rules(df, FM, tal_index, it_maps, pbs_maps, asset_specs)
+
+    assert review == {}
+    row = enriched.iloc[0]
+    assert row["Account ID"] == "P123"
+    assert row["Company"] == "Wipro Ltd"
+    assert row["Additional Data Point (poll questions, dynamic data, etc)  1"] == "Top Trending Topics: AI, Cloud"
+    assert row["Additional Data Point (poll questions, dynamic data, etc)  2"] == "Installed Technologies: AWS, Azure"
+    assert row["Additional Data Point (poll questions, dynamic data, etc)  3"] == "Predictive Buying Stage: Awareness"
+    assert row["Capture Date"] == "08/17/2026"
+    assert row["Email Opt-in"] == "Yes"
+    assert row["Business Phone"] == "91 9819719038"
+    assert row["Asset URN"] == "DT2503G0007_033"
+    assert row["Form URL"] == "https://a.com/1"
+    assert row["Dell Asset URL"] == "https://dell.com/real"
+    assert row["Asset download day"] == "17"
+    assert row["Asset download month"] == "August"
+    assert row["Asset download year"] == "2026"
+
+
+def test_apply_complex_account_rules_flags_bad_capture_date_and_optin_for_review():
+    df = _base_leads_df()
+    df.loc[0, "Capture Date"] = "not a date"
+    df.loc[0, "Email Opt-in"] = "Maybe"
+
+    enriched, review = apply_complex_account_rules(df, FM, None, {}, {}, None)
+
+    assert 0 in review
+    assert all(isinstance(r, ReviewDetail) for r in review[0])
+    assert any("Capture Date" in str(r) for r in review[0])
+    assert any("Email Opt-in" in str(r) for r in review[0])
+    # Asset download parts must not be derived from an unparseable date.
+    assert enriched.loc[0, "Asset download day"] == " "
+
+
+def test_apply_complex_account_rules_leaves_blank_top_topics_cell_blank():
+    # Regression test: a genuinely blank cell in an Excel-sourced DataFrame
+    # reads as float NaN, not None or "" — the prefix logic must not treat
+    # that as "has content" and produce "Top Trending Topics: nan".
+    df = _base_leads_df()
+    df.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  1"] = float("nan")
+
+    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {}, None)
+
+    value = enriched.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  1"]
+    assert pd.isna(value)
+
+
+def test_apply_complex_account_rules_clears_columns_for_cid_with_no_uploaded_file():
+    df = _base_leads_df()
+    # No entry for CID "119414" in either map -> that CID's leads get
+    # column 2/3 cleared to blank rather than left with stale placeholder text.
+    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {}, None)
+
+    assert enriched.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  2"] == ""
+    assert enriched.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  3"] == ""
+
+
+_DATE_DETAIL = ReviewDetail(check="Complex Account", message="Capture Date is blank or unparseable")
+_OPTIN_DETAIL = ReviewDetail(check="Complex Account", message="Email Opt-in value is not clearly Yes/No")
+
+
+def test_merge_complex_account_review_moves_lead_from_valid_to_review():
+    result = PipelineResult(valid_indices=[0, 1], refund_reasons={}, review_reasons={})
+    merge_complex_account_review(result, {0: [_DATE_DETAIL]})
+
+    assert 0 not in result.valid_indices
+    assert 1 in result.valid_indices
+    assert result.review_reasons[0] == [_DATE_DETAIL]
+
+
+def test_merge_complex_account_review_extends_existing_review_reasons():
+    other_detail = ReviewDetail(check="Duplicate", message="Some other reason")
+    result = PipelineResult(valid_indices=[], refund_reasons={}, review_reasons={0: [other_detail]})
+    merge_complex_account_review(result, {0: [_OPTIN_DETAIL]})
+
+    assert result.review_reasons[0] == [other_detail, _OPTIN_DETAIL]
+
+
+def test_merge_complex_account_review_does_not_override_an_existing_refund():
+    result = PipelineResult(valid_indices=[], refund_reasons={0: "Duplicate - exact email"}, review_reasons={})
+    merge_complex_account_review(result, {0: [_DATE_DETAIL]})
+
+    assert 0 not in result.review_reasons
+    assert result.refund_reasons[0] == "Duplicate - exact email"

@@ -90,6 +90,18 @@ class LeadTemplateTab:
 
 
 @dataclass
+class ComplexAccountConfig:
+    # A "complex account" needs a batch of highly specific, largely
+    # non-transferable enrichment rules (TAL account-ID mapping, per-CID
+    # Installed Technologies/Predictive Buying Stage lookups, asset
+    # metadata auto-correction, etc.) on top of the normal QA pipeline —
+    # see core/complex_account.py for the actual rule implementations.
+    enabled: bool = False
+    tal_path: str = ""
+    specifications_path: str = ""
+
+
+@dataclass
 class ClientProfile:
     name: str
     accumulated_report_path: str
@@ -116,3 +128,4 @@ class ClientProfile:
     tal: TalConfig = field(default_factory=TalConfig)
     suppression: SuppressionConfig = field(default_factory=SuppressionConfig)
     dedupe_list: DedupeListConfig = field(default_factory=DedupeListConfig)
+    complex_account: ComplexAccountConfig = field(default_factory=ComplexAccountConfig)

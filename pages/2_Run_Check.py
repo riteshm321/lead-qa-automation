@@ -14,6 +14,10 @@ from core.excel_io import (
     read_leadfile, read_pacing_overview_table,
 )
 from core.excel_recalc import recalculate_workbook
+from core.complex_account import (
+    extract_cid_from_filename, load_tal_index, load_asset_specifications, load_domain_value_map,
+    apply_complex_account_rules, merge_complex_account_review,
+)
 from core import jira_client
 from core.jira_client import JiraError
 from core.matching import load_alias_groups, add_alias_pair
@@ -23,6 +27,17 @@ from core.profile_store import list_profile_names, load_profile, save_profile
 import requests
 
 st.title("▶️ Run Check")
+
+
+@st.cache_data(show_spinner="Loading TAL reference file (large file, first load can take ~15s)...")
+def _cached_tal_index(path: str, _mtime: float):
+    return load_tal_index(path)
+
+
+@st.cache_data(show_spinner="Loading asset specifications...")
+def _cached_asset_specs(path: str, _mtime: float):
+    return load_asset_specifications(path)
+
 
 profile_names = list_profile_names(get_clients_dir())
 if not profile_names:
@@ -136,6 +151,24 @@ if profile.leadcap.enabled:
         except ValueError as exc:
             render_error(exc)
 
+complex_it_files = []
+complex_pbs_files = []
+if profile.complex_account.enabled:
+    st.subheader("Complex Account: Installed Technologies & Predictive Buying Stage")
+    st.caption("Upload this run's per-CID reference files — the CID is read from each filename "
+               "(e.g. \"...(139849)...\"). A CID with no file here has its corresponding column cleared.")
+    complex_it_files = st.file_uploader(
+        "Installed Technologies files", type=["csv"], accept_multiple_files=True,
+        key=f"complex_it_files_{_upload_key_suffix}") or []
+    complex_pbs_files = st.file_uploader(
+        "Predictive Buying Stage files", type=["csv"], accept_multiple_files=True,
+        key=f"complex_pbs_files_{_upload_key_suffix}") or []
+    for _label, _files in (("Installed Technologies", complex_it_files), ("Predictive Buying Stage", complex_pbs_files)):
+        _unrecognized = [f.name for f in _files if not extract_cid_from_filename(f.name)]
+        if _unrecognized:
+            st.warning(f"Couldn't find a CID in the filename for {_label} file(s): "
+                       f"{', '.join(_unrecognized)} — these were skipped.")
+
 if st.button("Run Check") and new_leads_file:
     if not mapping_valid:
         st.error("Map the New Leads columns above before running the check.")
@@ -143,6 +176,32 @@ if st.button("Run Check") and new_leads_file:
     try:
         new_leads = new_leads_df
         accumulated_leads = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
+
+        complex_review = {}
+        if profile.complex_account.enabled:
+            tal_index = None
+            if profile.complex_account.tal_path:
+                tal_index = _cached_tal_index(
+                    profile.complex_account.tal_path, os.path.getmtime(profile.complex_account.tal_path))
+            asset_specs = None
+            if profile.complex_account.specifications_path:
+                asset_specs = _cached_asset_specs(
+                    profile.complex_account.specifications_path,
+                    os.path.getmtime(profile.complex_account.specifications_path))
+
+            cid_it_maps: dict[str, dict[str, str]] = {}
+            for f in complex_it_files:
+                cid = extract_cid_from_filename(f.name)
+                if cid:
+                    cid_it_maps[cid] = load_domain_value_map(f, "Domain", "Installed Technologies")
+            cid_pbs_maps: dict[str, dict[str, str]] = {}
+            for f in complex_pbs_files:
+                cid = extract_cid_from_filename(f.name)
+                if cid:
+                    cid_pbs_maps[cid] = load_domain_value_map(f, "Targeted Accounts", "Predictive Buying Stage")
+
+            new_leads, complex_review = apply_complex_account_rules(
+                new_leads, field_mapping, tal_index, cid_it_maps, cid_pbs_maps, asset_specs)
 
         reference_data: dict = {"purchased_reports": purchased_reports}
         if profile.exclusion.enabled:
@@ -190,6 +249,8 @@ if st.button("Run Check") and new_leads_file:
 
         alias_groups = load_alias_groups(get_aliases_path())
         result = run_pipeline(new_leads, profile, accumulated_leads, reference_data, alias_groups)
+        if complex_review:
+            merge_complex_account_review(result, complex_review)
 
         st.session_state["run_new_leads"] = new_leads
         st.session_state["run_result"] = result

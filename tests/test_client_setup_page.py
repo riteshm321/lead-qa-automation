@@ -67,3 +67,33 @@ def test_lead_template_mapping_reads_from_first_tabs_own_file_when_shared_path_i
 
     email_select = at.selectbox(key="tmpl_map_email")
     assert "Email_Address" in email_select.options
+
+
+def test_complex_account_checkbox_reveals_file_path_fields_and_saves(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    assert not any(t.label == "TAL file path" for t in at.text_input)
+
+    complex_checkbox = next(c for c in at.checkbox if c.label == "This is a complex account")
+    complex_checkbox.set_value(True).run()
+    assert not at.exception
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("Dell APAC").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="complex_account_tal_path_input").set_value(str(tmp_path / "TAL.csv")).run()
+    at.text_input(key="complex_account_specs_path_input").set_value(str(tmp_path / "specs.xlsx")).run()
+
+    save_button = next(b for b in at.button if "Save Client Profile" in b.label)
+    save_button.click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Dell APAC", get_clients_dir())
+    assert loaded.complex_account.enabled is True
+    assert loaded.complex_account.tal_path == str(tmp_path / "TAL.csv")
+    assert loaded.complex_account.specifications_path == str(tmp_path / "specs.xlsx")

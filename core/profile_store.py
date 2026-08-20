@@ -6,7 +6,7 @@ from core.atomic_io import atomic_write_json
 from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
     TalConfig, ExclusionConfig, SuppressionConfig,
-    DuplicateConfig, DedupeListConfig, ReferenceSource, LeadTemplateTab,
+    DuplicateConfig, DedupeListConfig, ReferenceSource, LeadTemplateTab, ComplexAccountConfig,
 )
 
 
@@ -75,6 +75,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         tal=TalConfig(**tal),
         suppression=SuppressionConfig(**suppression),
         dedupe_list=DedupeListConfig(**dedupe_list),
+        complex_account=ComplexAccountConfig(**(data.get("complex_account") or {})),
     )
 
 
