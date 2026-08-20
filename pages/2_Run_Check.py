@@ -15,7 +15,7 @@ from core.excel_io import (
 )
 from core.excel_recalc import recalculate_workbook
 from core.complex_account import (
-    extract_cid_from_filename, load_tal_index, load_asset_specifications, load_domain_value_map,
+    load_tal_index, load_asset_specifications, load_domain_value_map,
     apply_complex_account_rules, merge_complex_account_review, check_complex_account_conditions,
     ACCOUNT_ID_COLUMN, COMPANY_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
     CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN,
@@ -155,21 +155,31 @@ if profile.leadcap.enabled:
 
 complex_it_files = []
 complex_pbs_files = []
+complex_it_file_cids: dict[str, str] = {}
+complex_pbs_file_cids: dict[str, str] = {}
 if profile.complex_account.enabled:
     st.subheader("Complex Account: Installed Technologies & Predictive Buying Stage")
-    st.caption("Upload this run's per-CID reference files — the CID is read from each filename "
-               "(e.g. \"...(139849)...\"). A CID with no file here has its corresponding column cleared.")
+    st.caption("Upload this run's per-CID reference files, then pick which CID each one is for — "
+               "the filename doesn't reliably identify the CID, so it's not auto-detected.")
+
+    _leadfile_cids = []
+    if mapping_valid:
+        _leadfile_cids = sorted(set(new_leads_df[field_mapping.cid].dropna().astype(str).str.strip()) - {""})
+    _cid_options = _leadfile_cids or ["(upload a New Leads file first to see its CIDs)"]
+
     complex_it_files = st.file_uploader(
         "Installed Technologies files", type=["csv"], accept_multiple_files=True,
         key=f"complex_it_files_{_upload_key_suffix}") or []
+    for _f in complex_it_files:
+        complex_it_file_cids[_f.name] = st.selectbox(
+            f"CID for \"{_f.name}\"", _cid_options, key=f"complex_it_cid_{_upload_key_suffix}_{_f.name}")
+
     complex_pbs_files = st.file_uploader(
         "Predictive Buying Stage files", type=["csv"], accept_multiple_files=True,
         key=f"complex_pbs_files_{_upload_key_suffix}") or []
-    for _label, _files in (("Installed Technologies", complex_it_files), ("Predictive Buying Stage", complex_pbs_files)):
-        _unrecognized = [f.name for f in _files if not extract_cid_from_filename(f.name)]
-        if _unrecognized:
-            st.warning(f"Couldn't find a CID in the filename for {_label} file(s): "
-                       f"{', '.join(_unrecognized)} — these were skipped.")
+    for _f in complex_pbs_files:
+        complex_pbs_file_cids[_f.name] = st.selectbox(
+            f"CID for \"{_f.name}\"", _cid_options, key=f"complex_pbs_cid_{_upload_key_suffix}_{_f.name}")
 
 if st.button("Run Check") and new_leads_file:
     if not mapping_valid:
@@ -486,14 +496,14 @@ if "run_result" in st.session_state:
 
                 cid_it_maps: dict[str, dict[str, str]] = {}
                 for f in complex_it_files:
-                    cid = extract_cid_from_filename(f.name)
-                    if cid:
+                    cid = complex_it_file_cids.get(f.name)
+                    if cid and cid in _leadfile_cids:
                         f.seek(0)
                         cid_it_maps[cid] = load_domain_value_map(f, "Domain", "Installed Technologies")
                 cid_pbs_maps: dict[str, dict[str, str]] = {}
                 for f in complex_pbs_files:
-                    cid = extract_cid_from_filename(f.name)
-                    if cid:
+                    cid = complex_pbs_file_cids.get(f.name)
+                    if cid and cid in _leadfile_cids:
                         f.seek(0)
                         cid_pbs_maps[cid] = load_domain_value_map(f, "Targeted Accounts", "Predictive Buying Stage")
 

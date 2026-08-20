@@ -361,9 +361,11 @@ names are hardcoded there, not configurable per client.
 
 **Every run** (Run Check page, only shown for a complex-account client): upload that
 run's **Installed Technologies** and **Predictive Buying Stage** files — one pair per
-CID, like the Purchased Lead Report. The CID is read from each filename (e.g.
-`...(139849)...`); a CID with no file uploaded this run has its corresponding column
-cleared rather than left with stale data.
+CID, like the Purchased Lead Report. After uploading the New Leads file, a **CID
+dropdown appears under each uploaded file** — pick which of the leadfile's own CIDs
+that file belongs to (the filename doesn't reliably identify it, so it isn't
+auto-detected). A CID with no file assigned to it this run has its corresponding
+column cleared rather than left with stale data.
 
 **Run Check works in two extra stages for a complex-account client**, instead of a
 single Finalize:

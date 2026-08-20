@@ -29,19 +29,6 @@ DOWNLOAD_MONTH_COLUMN = "Asset download month"
 DOWNLOAD_YEAR_COLUMN = "Asset download year"
 DOWNLOAD_YEAR_VALUE = "2026"
 
-_CID_FROM_FILENAME_RE = re.compile(r"\((\d+)\)")
-
-
-def extract_cid_from_filename(filename: str) -> str | None:
-    """Pulls the CID out of a Madison Logic export filename, e.g.
-    "Installed Technologies_Report_Dell APAC_(139849)_2026-08-16_2026-08-20.csv"
-    -> "139849". Returns None if the filename doesn't contain a
-    parenthesized number.
-    """
-    match = _CID_FROM_FILENAME_RE.search(filename or "")
-    return match.group(1) if match else None
-
-
 def _norm_domain(value) -> str:
     if value is None:
         return ""
@@ -52,10 +39,10 @@ def _norm_domain(value) -> str:
 def _norm_cid(value) -> str:
     # A CID column with even one blank cell elsewhere gets silently upcast
     # by pandas from int64 to float64, turning every value from e.g. 119414
-    # into 119414.0 — while the CID parsed from an IT/PBS filename
-    # (extract_cid_from_filename) is always a clean digit string. Without
-    # this, that mismatch alone would make every lead in an otherwise
-    # perfectly good CID look like it has no matching file at all.
+    # into 119414.0 — while the CID chosen for a file via the Run Check
+    # page's CID dropdown is always a clean digit string. Without this,
+    # that mismatch alone would make every lead in an otherwise perfectly
+    # good CID look like it has no matching file at all.
     text = str(value).strip() if value is not None else ""
     if text.endswith(".0") and text[:-2].isdigit():
         return text[:-2]

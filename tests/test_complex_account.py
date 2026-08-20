@@ -4,7 +4,7 @@ import openpyxl
 import pandas as pd
 
 from core.complex_account import (
-    extract_cid_from_filename, load_tal_index, match_tal_account, apply_tal_mapping,
+    load_tal_index, match_tal_account, apply_tal_mapping,
     load_domain_value_map, reformat_capture_date, clean_email_optin, asset_download_parts,
     format_phone, load_asset_specifications, apply_complex_account_rules,
     merge_complex_account_review, check_complex_account_conditions, check_asset_url_mismatches,
@@ -18,12 +18,6 @@ def _upload(name: str, text: str) -> io.BytesIO:
     f = io.BytesIO(text.encode("utf-8"))
     f.name = name
     return f
-
-
-def test_extract_cid_from_filename():
-    assert extract_cid_from_filename(
-        "Installed Technologies_Report_Dell APAC_(139849)_2026-08-16_2026-08-20.csv") == "139849"
-    assert extract_cid_from_filename("no cid here.csv") is None
 
 
 def test_load_tal_index_and_match_unambiguous(tmp_path):
