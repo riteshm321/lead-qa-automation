@@ -356,7 +356,8 @@ names are hardcoded there, not configurable per client.
   the lead's email domain; when a domain maps to more than one account, the one whose
   country matches the lead's own `Country` column wins.
 - **Specifications file path** (the "...BANT NTQ & EHS" workbook) — Asset Name → URN /
-  Asset URL 1 & 2 / Dell URL, used to auto-correct those columns.
+  Asset URL 1 & 2 / Dell URL, used to check whether the leadfile's already-filled Asset
+  URN / Form URL / Dell Asset URL are correct for that Asset Title.
 
 **Every run** (Run Check page, only shown for a complex-account client): upload that
 run's **Installed Technologies** and **Predictive Buying Stage** files — one pair per
@@ -368,10 +369,13 @@ cleared rather than left with stale data.
 single Finalize:
 
 1. **Run Check** — the normal checks (Duplicate/Leadcap/Exclusion/TAL/Suppression/
-   Dedupe) and two Complex Account conditions run together on the raw leads: a
-   blank/unparseable **Capture Date**, or an **Email Opt-in** value that isn't clearly
-   "Yes"/"No", sends that lead to **Needs Review** exactly like any other check. Resolve
-   Refund Reasons/Needs Review as usual.
+   Dedupe) and three Complex Account conditions run together on the raw leads: a
+   blank/unparseable **Capture Date**, an **Email Opt-in** value that isn't clearly
+   "Yes"/"No", or an already-filled **Asset URN/Form URL/Dell Asset URL** that doesn't
+   match the specifications file for that lead's Asset Title — any of these sends that
+   lead to **Needs Review** exactly like any other check. Resolve Refund Reasons/Needs
+   Review as usual. The Summary also lists every enabled check (normal and Complex
+   Account) that ran, so it's clear what was actually applied to this batch.
 2. **Finalize (fill columns)** — runs the actual column-filling rules below on just the
    leads that ended up valid, and shows a **preview** of the filled columns. Nothing is
    written yet.
@@ -394,7 +398,9 @@ single Finalize:
    as 2 digits, month as its full name, year hardcoded `"2026"`.
 7. **Phone** — every non-digit character stripped, then a space inserted after the
    first 2 digits.
-8. **Asset URN / Dell Asset URL / Form URL** auto-corrected from the specifications
-   file by matching Asset Title (unrecognized asset → left untouched).
+
+The preview (and this list) never includes Asset URN/Form URL/Dell Asset URL — those
+are already filled in the leadfile and are only ever checked (step 1 above), never
+rewritten.
 
 ---

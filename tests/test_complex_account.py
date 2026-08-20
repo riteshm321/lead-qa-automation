@@ -6,8 +6,8 @@ import pandas as pd
 from core.complex_account import (
     extract_cid_from_filename, load_tal_index, match_tal_account, apply_tal_mapping,
     load_domain_value_map, reformat_capture_date, clean_email_optin, asset_download_parts,
-    format_phone, load_asset_specifications, autocorrect_asset_row, apply_complex_account_rules,
-    merge_complex_account_review, check_complex_account_conditions,
+    format_phone, load_asset_specifications, apply_complex_account_rules,
+    merge_complex_account_review, check_complex_account_conditions, check_asset_url_mismatches,
 )
 from core.check_result import ReviewDetail
 from core.models import FieldMapping
@@ -156,7 +156,7 @@ def test_format_phone_strips_punctuation_and_inserts_space():
     assert format_phone(None) == ""
 
 
-def test_load_asset_specifications_and_autocorrect(tmp_path):
+def test_load_asset_specifications(tmp_path):
     path = str(tmp_path / "specs.xlsx")
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -168,18 +168,56 @@ def test_load_asset_specifications_and_autocorrect(tmp_path):
     assert "fuel ai innovation" in specs
     assert specs["fuel ai innovation"]["urn"] == "DT2503G0007_033"
 
-    # Form URL already correct (matches url2) -> left as-is
-    urn, form_url, dell_url = autocorrect_asset_row("Fuel AI Innovation", "https://a.com/2", specs)
-    assert urn == "DT2503G0007_033"
-    assert form_url == "https://a.com/2"
-    assert dell_url == "https://dell.com/x"
 
-    # Form URL wrong -> corrected to Asset URL 1
-    urn, form_url, dell_url = autocorrect_asset_row("Fuel AI Innovation", "https://wrong.com", specs)
-    assert form_url == "https://a.com/1"
+_ASSET_SPECS = {
+    "fuel ai innovation": {"urn": "DT2503G0007_033", "url1": "https://a.com/1",
+                            "url2": "https://a.com/2", "dell_url": "https://dell.com/x"},
+}
 
-    # Unknown asset -> untouched
-    assert autocorrect_asset_row("Some Unknown Asset", "https://whatever.com", specs) == (None, None, None)
+
+def test_check_asset_url_mismatches_passes_when_everything_matches():
+    df = pd.DataFrame([{
+        "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
+        "Form URL": "https://a.com/2", "Dell Asset URL": "https://dell.com/x",
+    }])
+    assert check_asset_url_mismatches(df, _ASSET_SPECS) == {}
+
+
+def test_check_asset_url_mismatches_flags_wrong_urn_and_dell_url():
+    df = pd.DataFrame([{
+        "Asset Title": "Fuel AI Innovation", "Asset URN": "WRONG_URN",
+        "Form URL": "https://a.com/1", "Dell Asset URL": "https://wrong-dell.com",
+    }])
+    review = check_asset_url_mismatches(df, _ASSET_SPECS)
+
+    assert 0 in review
+    message = str(review[0][0])
+    assert "Asset URN/Form URL/Dell Asset URL" in message
+
+
+def test_check_asset_url_mismatches_accepts_either_asset_url():
+    df = pd.DataFrame([{
+        "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
+        "Form URL": "https://a.com/1",  # url1, not url2 — both are valid
+        "Dell Asset URL": "https://dell.com/x",
+    }])
+    assert check_asset_url_mismatches(df, _ASSET_SPECS) == {}
+
+
+def test_check_asset_url_mismatches_flags_wrong_form_url():
+    df = pd.DataFrame([{
+        "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
+        "Form URL": "https://neither-url.com", "Dell Asset URL": "https://dell.com/x",
+    }])
+    assert 0 in check_asset_url_mismatches(df, _ASSET_SPECS)
+
+
+def test_check_asset_url_mismatches_skips_unrecognized_asset_title():
+    df = pd.DataFrame([{
+        "Asset Title": "Some Unknown Asset", "Asset URN": "whatever",
+        "Form URL": "https://whatever.com", "Dell Asset URL": "https://whatever-dell.com",
+    }])
+    assert check_asset_url_mismatches(df, _ASSET_SPECS) == {}
 
 
 FM = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
@@ -226,12 +264,8 @@ def test_apply_complex_account_rules_end_to_end():
     tal_index = {"wipro.com": [{"account_id": "P123", "account_name": "Wipro Ltd", "country_code": "IN"}]}
     it_maps = {"119414": {"wipro.com": "AWS, Azure"}}
     pbs_maps = {"119414": {"wipro.com": "Awareness"}}
-    asset_specs = {
-        "fuel ai innovation": {"urn": "DT2503G0007_033", "url1": "https://a.com/1",
-                                "url2": "https://a.com/2", "dell_url": "https://dell.com/real"},
-    }
 
-    enriched, review = apply_complex_account_rules(df, FM, tal_index, it_maps, pbs_maps, asset_specs)
+    enriched, review = apply_complex_account_rules(df, FM, tal_index, it_maps, pbs_maps)
 
     assert review == {}
     row = enriched.iloc[0]
@@ -243,12 +277,34 @@ def test_apply_complex_account_rules_end_to_end():
     assert row["Capture Date"] == "08/17/2026"
     assert row["Email Opt-in"] == "Yes"
     assert row["Business Phone"] == "91 9819719038"
-    assert row["Asset URN"] == "DT2503G0007_033"
-    assert row["Form URL"] == "https://a.com/1"
-    assert row["Dell Asset URL"] == "https://dell.com/real"
+    # Asset URN/Form URL/Dell Asset URL are a check now (check_asset_url_mismatches),
+    # not a fill — apply_complex_account_rules must leave them untouched.
+    assert row["Asset URN"] == "WRONG"
+    assert row["Form URL"] == "https://wrong.com"
+    assert row["Dell Asset URL"] == "https://wrong-dell.com"
     assert row["Asset download day"] == "17"
     assert row["Asset download month"] == "August"
     assert row["Asset download year"] == "2026"
+
+
+def test_apply_complex_account_rules_matches_cid_when_column_upcast_to_float():
+    # Regression test for a real reported bug: a CID column with even one
+    # blank cell elsewhere gets silently upcast by pandas from int64 to
+    # float64, turning every value (e.g. 119414) into 119414.0 — while the
+    # CID parsed from an IT/PBS filename is always a clean digit string
+    # ("119414"). Without normalizing this, every lead's Installed
+    # Technologies/Predictive Buying Stage columns would go blank even
+    # though the uploaded file genuinely has that CID's data.
+    df = _base_leads_df()
+    df["CID"] = df["CID"].astype(float)  # simulates the float-upcast column
+    it_maps = {"119414": {"wipro.com": "AWS, Azure"}}
+    pbs_maps = {"119414": {"wipro.com": "Awareness"}}
+
+    enriched, _ = apply_complex_account_rules(df, FM, None, it_maps, pbs_maps)
+
+    row = enriched.iloc[0]
+    assert row["Additional Data Point (poll questions, dynamic data, etc)  2"] == "Installed Technologies: AWS, Azure"
+    assert row["Additional Data Point (poll questions, dynamic data, etc)  3"] == "Predictive Buying Stage: Awareness"
 
 
 def test_apply_complex_account_rules_flags_bad_capture_date_and_optin_for_review():
@@ -256,7 +312,7 @@ def test_apply_complex_account_rules_flags_bad_capture_date_and_optin_for_review
     df.loc[0, "Capture Date"] = "not a date"
     df.loc[0, "Email Opt-in"] = "Maybe"
 
-    enriched, review = apply_complex_account_rules(df, FM, None, {}, {}, None)
+    enriched, review = apply_complex_account_rules(df, FM, None, {}, {})
 
     assert 0 in review
     assert all(isinstance(r, ReviewDetail) for r in review[0])
@@ -273,7 +329,7 @@ def test_apply_complex_account_rules_leaves_blank_top_topics_cell_blank():
     df = _base_leads_df()
     df.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  1"] = float("nan")
 
-    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {}, None)
+    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     value = enriched.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  1"]
     assert pd.isna(value)
@@ -283,7 +339,7 @@ def test_apply_complex_account_rules_clears_columns_for_cid_with_no_uploaded_fil
     df = _base_leads_df()
     # No entry for CID "119414" in either map -> that CID's leads get
     # column 2/3 cleared to blank rather than left with stale placeholder text.
-    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {}, None)
+    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     assert enriched.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  2"] == ""
     assert enriched.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  3"] == ""

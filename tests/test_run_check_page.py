@@ -7,7 +7,7 @@ from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_jira_settings
 from core.models import ClientProfile, FieldMapping, DuplicateConfig, LeadTemplateTab, ComplexAccountConfig
-from core.pipeline import PipelineResult
+from core.pipeline import PipelineResult, run_pipeline
 from core.profile_store import save_profile
 
 _PAGE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pages", "2_Run_Check.py")
@@ -608,3 +608,81 @@ def test_complex_account_two_stage_finalize_previews_then_writes(tmp_path, monke
     assert written["Capture Date"] == "08/17/2026"
     assert written["Email Opt-in"] == "Yes"
     assert written["Business Phone"] == "91 9819719038"
+
+
+def test_completed_checks_status_shown_for_enabled_checks_only(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        duplicate=DuplicateConfig(enabled=True),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    assert not at.exception
+
+    status_captions = [c.value for c in at.caption if "completed" in c.value]
+    assert len(status_captions) == 1
+    assert "Duplicate" in status_captions[0]
+    assert "Leadcap" not in status_captions[0]  # not enabled for this client
+
+
+def test_complex_account_flags_asset_url_mismatch_for_review_not_autocorrect(tmp_path, monkeypatch):
+    # Regression test: Asset URN/Form URL/Dell Asset URL are already filled
+    # in the leadfile — the tool must only flag a mismatch against the
+    # specifications file for review, never silently rewrite them.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    specs_path = str(tmp_path / "specs.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Asset Name", "URN ", "Asset URL 1", "Asset URL 2", "Dell URL"])
+    ws.append(["Fuel AI Innovation", "DT2503G0007_033", "https://a.com/1", "https://a.com/2", "https://dell.com/x"])
+    wb.save(specs_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        complex_account=ComplexAccountConfig(enabled=True, specifications_path=specs_path),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1",
+         "Asset Title": "Fuel AI Innovation", "Asset URN": "WRONG_URN",
+         "Form URL": "https://a.com/1", "Dell Asset URL": "https://dell.com/x"},
+    ])
+
+    # This exercises the same functions pages/2_Run_Check.py's "Run Check"
+    # button calls: load the specs file, run the Complex Account checks
+    # alongside the normal pipeline, and merge the results together.
+    from core.complex_account import (
+        check_complex_account_conditions, merge_complex_account_review, load_asset_specifications,
+    )
+
+    accumulated_leads = pd.read_excel(acc_path, sheet_name="Accumulated")
+    asset_specs = load_asset_specifications(specs_path)
+    complex_review = check_complex_account_conditions(new_leads, asset_specs)
+    result = run_pipeline(new_leads, profile, accumulated_leads, {}, [])
+    merge_complex_account_review(result, complex_review)
+
+    assert 0 not in result.valid_indices
+    assert 0 in result.review_reasons
+    assert any("Asset URN" in str(d) for d in result.review_reasons[0])

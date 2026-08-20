@@ -49,6 +49,19 @@ def _norm_domain(value) -> str:
     return "" if text in ("", "nan") else text
 
 
+def _norm_cid(value) -> str:
+    # A CID column with even one blank cell elsewhere gets silently upcast
+    # by pandas from int64 to float64, turning every value from e.g. 119414
+    # into 119414.0 — while the CID parsed from an IT/PBS filename
+    # (extract_cid_from_filename) is always a clean digit string. Without
+    # this, that mismatch alone would make every lead in an otherwise
+    # perfectly good CID look like it has no matching file at all.
+    text = str(value).strip() if value is not None else ""
+    if text.endswith(".0") and text[:-2].isdigit():
+        return text[:-2]
+    return text
+
+
 def load_tal_index(tal_path: str) -> dict[str, list[dict]]:
     """Loads the (large, ~500k+ row) TAL reference file into a
     domain -> [{"account_id", "account_name", "country_code"}, ...] index,
@@ -244,35 +257,65 @@ def load_asset_specifications(path: str) -> dict[str, dict]:
         wb.close()
 
 
-def autocorrect_asset_row(
-    asset_title, form_url, specs: dict[str, dict],
-) -> tuple[str, str, str] | tuple[None, None, None]:
-    """Looks up asset_title in specs (normalized, exact match). Returns
-    (urn, form_url, dell_url) to write, or (None, None, None) meaning
-    "leave this lead's asset fields untouched" (asset title not recognized
-    at all). form_url is left as given if it already equals Asset URL 1 or
-    2; otherwise it's corrected to Asset URL 1.
+def check_asset_url_mismatches(
+    leads_df: pd.DataFrame, asset_specs: dict[str, dict],
+) -> dict[int, list[ReviewDetail]]:
+    """Flags leads whose already-filled Asset URN / Form URL / Dell Asset
+    URL don't match what the specifications file says for that Asset
+    Title — a check, not a fill: the leadfile already has these columns
+    populated, this just verifies they're correct. An Asset Title not
+    found in the specifications file at all is left unchecked (nothing to
+    compare against).
     """
-    spec = specs.get(str(asset_title or "").strip().lower())
-    if spec is None:
-        return None, None, None
-    current_form_url = str(form_url or "").strip()
-    new_form_url = form_url if current_form_url in (spec["url1"], spec["url2"]) else spec["url1"]
-    return spec["urn"], new_form_url, spec["dell_url"]
+    review: dict[int, list[ReviewDetail]] = {}
+    if ASSET_TITLE_COLUMN not in leads_df.columns:
+        return review
+    for idx, row in leads_df.iterrows():
+        spec = asset_specs.get(str(row.get(ASSET_TITLE_COLUMN, "") or "").strip().lower())
+        if spec is None:
+            continue
+        urn = str(row.get(ASSET_URN_COLUMN, "") or "").strip()
+        form_url = str(row.get(FORM_URL_COLUMN, "") or "").strip()
+        dell_url = str(row.get(DELL_ASSET_URL_COLUMN, "") or "").strip()
+        expected_urn = str(spec["urn"]).strip()
+        expected_url1 = str(spec["url1"]).strip()
+        expected_url2 = str(spec["url2"]).strip()
+        expected_dell_url = str(spec["dell_url"]).strip()
+
+        mismatches = []
+        if urn != expected_urn:
+            mismatches.append(f"Asset URN is \"{urn}\", expected \"{expected_urn}\"")
+        if form_url not in (expected_url1, expected_url2):
+            mismatches.append(f"Form URL \"{form_url}\" is neither Asset URL 1 nor Asset URL 2 for this asset")
+        if dell_url != expected_dell_url:
+            mismatches.append(f"Dell Asset URL is \"{dell_url}\", expected \"{expected_dell_url}\"")
+
+        if mismatches:
+            review.setdefault(idx, []).append(ReviewDetail(
+                check="Complex Account",
+                message="Asset URN/Form URL/Dell Asset URL don't match the specifications file",
+                lead_value="; ".join(mismatches),
+                candidate_context=f"specifications file entry for \"{row.get(ASSET_TITLE_COLUMN)}\"",
+            ))
+    return review
 
 
-def check_complex_account_conditions(leads_df: pd.DataFrame) -> dict[int, list[ReviewDetail]]:
-    """Evaluates only the two Complex Account conditions that can actually
-    flag a lead (a Capture Date that's blank/unparseable, or an Email
-    Opt-in value that isn't clearly Yes/No) — without touching any column.
+def check_complex_account_conditions(
+    leads_df: pd.DataFrame, asset_specs: dict[str, dict] | None = None,
+) -> dict[int, list[ReviewDetail]]:
+    """Evaluates the Complex Account conditions that can actually flag a
+    lead — a Capture Date that's blank/unparseable, an Email Opt-in value
+    that isn't clearly Yes/No, or an already-filled Asset URN/Form
+    URL/Dell Asset URL that doesn't match the specifications file for that
+    Asset Title — without touching any column.
 
     Used at Run Check time, before the valid/refund/review split, so these
     leads get resolved through the same Refund/Needs Review flow as every
-    other check. The full column-filling rules (TAL mapping, Installed
-    Technologies/Predictive Buying Stage, phone/date formatting, asset
-    auto-correction — see apply_complex_account_rules) are deliberately
-    deferred to a separate step run only on the leads that end up valid,
-    since there's no point enriching a lead that's about to be refunded.
+    other check. The column-filling rules (TAL mapping, Installed
+    Technologies/Predictive Buying Stage, phone/date formatting — see
+    apply_complex_account_rules) are deliberately deferred to a separate
+    step run only on the leads that end up valid, since there's no point
+    enriching a lead that's about to be refunded.
     """
     review: dict[int, list[ReviewDetail]] = {}
     if CAPTURE_DATE_COLUMN in leads_df.columns:
@@ -289,6 +332,9 @@ def check_complex_account_conditions(leads_df: pd.DataFrame) -> dict[int, list[R
                     check="Complex Account", message="Email Opt-in value is not clearly Yes/No",
                     lead_value=str(row.get(EMAIL_OPTIN_COLUMN, "")),
                 ))
+    if asset_specs is not None:
+        for idx, details in check_asset_url_mismatches(leads_df, asset_specs).items():
+            review.setdefault(idx, []).extend(details)
     return review
 
 
@@ -298,17 +344,21 @@ def apply_complex_account_rules(
     tal_index: dict[str, list[dict]] | None,
     cid_installed_tech_maps: dict[str, dict[str, str]],
     cid_pbs_maps: dict[str, dict[str, str]],
-    asset_specs: dict[str, dict] | None,
 ) -> tuple[pd.DataFrame, dict[int, list[ReviewDetail]]]:
-    """Applies every Complex Account rule to a copy of leads_df and returns
-    (enriched_df, review_reasons) — review_reasons only ever contains
-    entries for the two rules that can't safely auto-decide (Capture Date,
-    Email Opt-in); every other rule always produces a value (TAL: blank
-    Account ID on no match; Installed Technologies/Predictive Buying Stage:
-    blank on no file/no match; asset fields: left untouched on an
-    unrecognized Asset Title). Values are ReviewDetail objects, matching
-    the shape every other check in core/checks/ returns, so they render in
-    the same "Needs Review" UI unchanged.
+    """Applies every Complex Account column-filling rule to a copy of
+    leads_df and returns (enriched_df, review_reasons) — review_reasons
+    only ever contains entries for the two rules that can't safely
+    auto-decide (Capture Date, Email Opt-in); every other rule always
+    produces a value (TAL: blank Account ID on no match; Installed
+    Technologies/Predictive Buying Stage: blank on no file/no match).
+    Values are ReviewDetail objects, matching the shape every other check
+    in core/checks/ returns, so they render in the same "Needs Review" UI
+    unchanged.
+
+    The Asset URN/Form URL/Dell Asset URL check is deliberately not part
+    of this function — those columns are already filled in the leadfile,
+    so it's a check (see check_asset_url_mismatches), not a fill, and runs
+    at Run Check time instead.
 
     cid_installed_tech_maps / cid_pbs_maps: {cid: {domain: value}} — a CID
     missing from the dict (no file uploaded for it this run) gets that
@@ -321,7 +371,7 @@ def apply_complex_account_rules(
         df = apply_tal_mapping(df, field_mapping.email, COUNTRY_COLUMN, ACCOUNT_ID_COLUMN, COMPANY_COLUMN, tal_index)
 
     for idx, row in df.iterrows():
-        cid = str(row.get(field_mapping.cid, "")).strip()
+        cid = _norm_cid(row.get(field_mapping.cid, ""))
         domain = _norm_domain(extract_domain(row.get(field_mapping.email)))
 
         it_map = cid_installed_tech_maps.get(cid)
@@ -374,15 +424,6 @@ def apply_complex_account_rules(
 
     if PHONE_COLUMN in df.columns:
         df[PHONE_COLUMN] = df[PHONE_COLUMN].apply(format_phone)
-
-    if asset_specs is not None and ASSET_TITLE_COLUMN in df.columns:
-        for idx, row in df.iterrows():
-            urn, new_form_url, dell_url = autocorrect_asset_row(
-                row.get(ASSET_TITLE_COLUMN), row.get(FORM_URL_COLUMN), asset_specs)
-            if urn is not None:
-                df.at[idx, ASSET_URN_COLUMN] = urn
-                df.at[idx, FORM_URL_COLUMN] = new_form_url
-                df.at[idx, DELL_ASSET_URL_COLUMN] = dell_url
 
     return df, review
 

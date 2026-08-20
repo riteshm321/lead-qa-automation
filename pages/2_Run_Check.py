@@ -18,8 +18,7 @@ from core.complex_account import (
     extract_cid_from_filename, load_tal_index, load_asset_specifications, load_domain_value_map,
     apply_complex_account_rules, merge_complex_account_review, check_complex_account_conditions,
     ACCOUNT_ID_COLUMN, COMPANY_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
-    CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN, ASSET_URN_COLUMN, FORM_URL_COLUMN,
-    DELL_ASSET_URL_COLUMN,
+    CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN,
 )
 from core import jira_client
 from core.jira_client import JiraError
@@ -182,14 +181,21 @@ if st.button("Run Check") and new_leads_file:
 
         complex_review = {}
         if profile.complex_account.enabled:
-            # Only the two conditions that can actually flag a lead (bad
-            # Capture Date, ambiguous Email Opt-in) run here, so they go
-            # through the same Refund/Needs Review flow as every other
-            # check. The column-filling rules (TAL mapping, Installed
-            # Technologies/Predictive Buying Stage, phone/date formatting,
-            # asset auto-correction) run later, only on whichever leads end
-            # up valid — see the "Finalize (fill columns)" step below.
-            complex_review = check_complex_account_conditions(new_leads)
+            # Only the conditions that can actually flag a lead (bad
+            # Capture Date, ambiguous Email Opt-in, an already-filled Asset
+            # URN/Form URL/Dell Asset URL that doesn't match the
+            # specifications file) run here, so they go through the same
+            # Refund/Needs Review flow as every other check. The
+            # column-filling rules (TAL mapping, Installed Technologies/
+            # Predictive Buying Stage, phone/date formatting) run later,
+            # only on whichever leads end up valid — see the "Finalize
+            # (fill columns)" step below.
+            _check_asset_specs = None
+            if profile.complex_account.specifications_path:
+                _check_asset_specs = _cached_asset_specs(
+                    profile.complex_account.specifications_path,
+                    os.path.getmtime(profile.complex_account.specifications_path))
+            complex_review = check_complex_account_conditions(new_leads, _check_asset_specs)
 
         reference_data: dict = {"purchased_reports": purchased_reports}
         if profile.exclusion.enabled:
@@ -253,6 +259,20 @@ if "run_result" in st.session_state:
     st.subheader("Summary")
     st.write(f"{len(new_leads)} in → {len(result.valid_indices)} valid, "
              f"{len(result.refund_reasons)} refunded, {len(result.review_reasons)} needs review")
+
+    _completed_checks = [
+        label for label, on in [
+            ("Duplicate", profile.duplicate.enabled), ("Leadcap", profile.leadcap.enabled),
+            ("Exclusion", profile.exclusion.enabled), ("TAL", profile.tal.enabled),
+            ("Suppression", profile.suppression.enabled), ("Dedupe list", profile.dedupe_list.enabled),
+        ] if on
+    ]
+    if profile.complex_account.enabled:
+        _completed_checks += ["Complex Account: Capture Date", "Complex Account: Email Opt-in"]
+        if profile.complex_account.specifications_path:
+            _completed_checks.append("Complex Account: Asset URL match")
+    if _completed_checks:
+        st.caption("✅ " + "  ·  ✅ ".join(_completed_checks) + " — all completed")
 
     approved_refund_indices: list[int] = []
     if result.refund_reasons:
@@ -463,11 +483,6 @@ if "run_result" in st.session_state:
                 if profile.complex_account.tal_path:
                     tal_index = _cached_tal_index(
                         profile.complex_account.tal_path, os.path.getmtime(profile.complex_account.tal_path))
-                asset_specs = None
-                if profile.complex_account.specifications_path:
-                    asset_specs = _cached_asset_specs(
-                        profile.complex_account.specifications_path,
-                        os.path.getmtime(profile.complex_account.specifications_path))
 
                 cid_it_maps: dict[str, dict[str, str]] = {}
                 for f in complex_it_files:
@@ -484,7 +499,7 @@ if "run_result" in st.session_state:
 
                 enriched_valid, _ = apply_complex_account_rules(
                     new_leads.loc[final_valid_indices], field_mapping,
-                    tal_index, cid_it_maps, cid_pbs_maps, asset_specs)
+                    tal_index, cid_it_maps, cid_pbs_maps)
                 st.session_state["complex_enriched_leads"] = enriched_valid
                 st.session_state["complex_final_refund_reasons"] = final_refund_reasons
                 st.session_state["complex_final_refund_indices"] = final_refund_indices
@@ -496,10 +511,10 @@ if "run_result" in st.session_state:
             enriched_valid = st.session_state["complex_enriched_leads"]
             st.subheader("Preview: filled columns (nothing written yet)")
             _preview_cols = [c for c in [
+                field_mapping.cid, field_mapping.email, field_mapping.first_name, field_mapping.last_name,
                 ACCOUNT_ID_COLUMN, COMPANY_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
-                CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN, ASSET_URN_COLUMN, FORM_URL_COLUMN,
-                DELL_ASSET_URL_COLUMN,
-            ] if c in enriched_valid.columns]
+                CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN,
+            ] if c and c in enriched_valid.columns]
             st.dataframe(enriched_valid[_preview_cols], hide_index=True)
 
             col_write, col_discard = st.columns(2)
