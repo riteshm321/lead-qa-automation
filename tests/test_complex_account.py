@@ -7,7 +7,7 @@ from core.complex_account import (
     extract_cid_from_filename, load_tal_index, match_tal_account, apply_tal_mapping,
     load_domain_value_map, reformat_capture_date, clean_email_optin, asset_download_parts,
     format_phone, load_asset_specifications, autocorrect_asset_row, apply_complex_account_rules,
-    merge_complex_account_review,
+    merge_complex_account_review, check_complex_account_conditions,
 )
 from core.check_result import ReviewDetail
 from core.models import FieldMapping
@@ -199,6 +199,26 @@ def _base_leads_df() -> pd.DataFrame:
             "Asset download day": " ", "Asset download month": " ", "Asset download year": " ",
         },
     ])
+
+
+def test_check_complex_account_conditions_flags_bad_date_and_optin_without_mutating():
+    df = _base_leads_df()
+    df.loc[0, "Capture Date"] = "not a date"
+    df.loc[0, "Email Opt-in"] = "Maybe"
+
+    review = check_complex_account_conditions(df)
+
+    assert 0 in review
+    assert any("Capture Date" in str(r) for r in review[0])
+    assert any("Email Opt-in" in str(r) for r in review[0])
+    # Purely a check — the source DataFrame must be untouched.
+    assert df.loc[0, "Capture Date"] == "not a date"
+    assert df.loc[0, "Email Opt-in"] == "Maybe"
+
+
+def test_check_complex_account_conditions_passes_clean_leads():
+    df = _base_leads_df()
+    assert check_complex_account_conditions(df) == {}
 
 
 def test_apply_complex_account_rules_end_to_end():

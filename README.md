@@ -364,7 +364,21 @@ CID, like the Purchased Lead Report. The CID is read from each filename (e.g.
 `...(139849)...`); a CID with no file uploaded this run has its corresponding column
 cleared rather than left with stale data.
 
-**What gets applied**, to every valid lead before Finalize:
+**Run Check works in two extra stages for a complex-account client**, instead of a
+single Finalize:
+
+1. **Run Check** — the normal checks (Duplicate/Leadcap/Exclusion/TAL/Suppression/
+   Dedupe) and two Complex Account conditions run together on the raw leads: a
+   blank/unparseable **Capture Date**, or an **Email Opt-in** value that isn't clearly
+   "Yes"/"No", sends that lead to **Needs Review** exactly like any other check. Resolve
+   Refund Reasons/Needs Review as usual.
+2. **Finalize (fill columns)** — runs the actual column-filling rules below on just the
+   leads that ended up valid, and shows a **preview** of the filled columns. Nothing is
+   written yet.
+3. **Confirm & Write** — writes the previewed leads to the Accumulated Report and Lead
+   Template(s), same as the normal single-step Finalize.
+
+**Column-filling rules**, applied only to that valid-leads preview:
 
 1. **TAL mapping** — `Account ID` and `Company` filled from the TAL by domain (no
    match → blank Account ID, `Company` left as-is).
@@ -382,8 +396,5 @@ cleared rather than left with stale data.
    first 2 digits.
 8. **Asset URN / Dell Asset URL / Form URL** auto-corrected from the specifications
    file by matching Asset Title (unrecognized asset → left untouched).
-
-A lead with a blank/unparseable Capture Date, or an Email Opt-in value that isn't
-clearly "Yes" or "No", is sent to **Needs Review** instead of being auto-decided.
 
 ---

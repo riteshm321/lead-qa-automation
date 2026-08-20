@@ -16,7 +16,10 @@ from core.excel_io import (
 from core.excel_recalc import recalculate_workbook
 from core.complex_account import (
     extract_cid_from_filename, load_tal_index, load_asset_specifications, load_domain_value_map,
-    apply_complex_account_rules, merge_complex_account_review,
+    apply_complex_account_rules, merge_complex_account_review, check_complex_account_conditions,
+    ACCOUNT_ID_COLUMN, COMPANY_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
+    CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN, ASSET_URN_COLUMN, FORM_URL_COLUMN,
+    DELL_ASSET_URL_COLUMN,
 )
 from core import jira_client
 from core.jira_client import JiraError
@@ -179,29 +182,14 @@ if st.button("Run Check") and new_leads_file:
 
         complex_review = {}
         if profile.complex_account.enabled:
-            tal_index = None
-            if profile.complex_account.tal_path:
-                tal_index = _cached_tal_index(
-                    profile.complex_account.tal_path, os.path.getmtime(profile.complex_account.tal_path))
-            asset_specs = None
-            if profile.complex_account.specifications_path:
-                asset_specs = _cached_asset_specs(
-                    profile.complex_account.specifications_path,
-                    os.path.getmtime(profile.complex_account.specifications_path))
-
-            cid_it_maps: dict[str, dict[str, str]] = {}
-            for f in complex_it_files:
-                cid = extract_cid_from_filename(f.name)
-                if cid:
-                    cid_it_maps[cid] = load_domain_value_map(f, "Domain", "Installed Technologies")
-            cid_pbs_maps: dict[str, dict[str, str]] = {}
-            for f in complex_pbs_files:
-                cid = extract_cid_from_filename(f.name)
-                if cid:
-                    cid_pbs_maps[cid] = load_domain_value_map(f, "Targeted Accounts", "Predictive Buying Stage")
-
-            new_leads, complex_review = apply_complex_account_rules(
-                new_leads, field_mapping, tal_index, cid_it_maps, cid_pbs_maps, asset_specs)
+            # Only the two conditions that can actually flag a lead (bad
+            # Capture Date, ambiguous Email Opt-in) run here, so they go
+            # through the same Refund/Needs Review flow as every other
+            # check. The column-filling rules (TAL mapping, Installed
+            # Technologies/Predictive Buying Stage, phone/date formatting,
+            # asset auto-correction) run later, only on whichever leads end
+            # up valid — see the "Finalize (fill columns)" step below.
+            complex_review = check_complex_account_conditions(new_leads)
 
         reference_data: dict = {"purchased_reports": purchased_reports}
         if profile.exclusion.enabled:
@@ -359,99 +347,187 @@ if "run_result" in st.session_state:
     if (result.refund_reasons or result.valid_indices) and not result.review_reasons:
         st.caption(f"On Finalize: {len(final_valid_indices)} lead(s) → Accumulated Report"
                    + (" + Lead Template" if lead_template_configured else "")
-                   + f", {len(final_refund_indices)} lead(s) → Refund tab only.")
+                   + f", {len(final_refund_indices)} lead(s) → Refund tab only."
+                   + (" Complex Account: column filling runs first and shows a preview — nothing is "
+                      "written until you click Confirm & Write." if profile.complex_account.enabled else ""))
 
-    if not result.review_reasons and st.button("Finalize"):
-        try:
-            backup_path = backup_file(profile.accumulated_report_path)
-            st.info(f"Backed up Accumulated Report to {backup_path}")
+    def _finalize_write(valid_leads_df, refund_leads_df, refund_reasons):
+        """Backs up, writes valid_leads_df/refund_leads_df to the Accumulated
+        Report (and valid_leads_df to the Lead Template(s) if configured),
+        and returns (unmatched_headers, lead_template_links_used). Shared by
+        both the normal single-step Finalize and the Complex Account
+        fill-then-write flow — the two differ only in which DataFrame they
+        pass in as valid_leads_df (raw vs. column-filled)."""
+        backup_path = backup_file(profile.accumulated_report_path)
+        st.info(f"Backed up Accumulated Report to {backup_path}")
 
-            run_date = datetime.date.today().isoformat()
-            unmatched_headers: set[str] = set()
-            if final_valid_indices:
-                unmatched_headers.update(append_leads(
-                    profile.accumulated_report_path, profile.accumulated_tab_name,
-                    new_leads.loc[final_valid_indices], profile.field_mapping, run_date,
-                    target_field_mapping=profile.accumulated_field_mapping))
-            if final_refund_reasons:
-                unmatched_headers.update(append_leads(
-                    profile.accumulated_report_path, profile.refund_tab_name,
-                    new_leads.loc[final_refund_indices], profile.field_mapping, run_date,
-                    reasons=final_refund_reasons, target_field_mapping=profile.accumulated_field_mapping))
+        run_date = datetime.date.today().isoformat()
+        unmatched_headers: set[str] = set()
+        if not valid_leads_df.empty:
+            unmatched_headers.update(append_leads(
+                profile.accumulated_report_path, profile.accumulated_tab_name,
+                valid_leads_df, profile.field_mapping, run_date,
+                target_field_mapping=profile.accumulated_field_mapping))
+        if not refund_leads_df.empty:
+            unmatched_headers.update(append_leads(
+                profile.accumulated_report_path, profile.refund_tab_name,
+                refund_leads_df, profile.field_mapping, run_date,
+                reasons=refund_reasons, target_field_mapping=profile.accumulated_field_mapping))
 
-            # file_path -> SharePoint link for every Lead Template file this run actually
-            # wrote to — a multi-tab client can route different CIDs to entirely different
-            # workbooks, each with its own link, so this can't be a single value.
-            lead_template_links_used: dict[str, str] = {}
-            if lead_template_configured and final_valid_indices:
-                _tmpl_fm = profile.lead_template_field_mapping
-                _tmpl_expected = [v for v in [
-                    _tmpl_fm.email, _tmpl_fm.first_name, _tmpl_fm.last_name, _tmpl_fm.company, _tmpl_fm.cid,
-                ] if v] if _tmpl_fm else None
+        # file_path -> SharePoint link for every Lead Template file this run actually
+        # wrote to — a multi-tab client can route different CIDs to entirely different
+        # workbooks, each with its own link, so this can't be a single value.
+        lead_template_links_used: dict[str, str] = {}
+        if lead_template_configured and not valid_leads_df.empty:
+            _tmpl_fm = profile.lead_template_field_mapping
+            _tmpl_expected = [v for v in [
+                _tmpl_fm.email, _tmpl_fm.first_name, _tmpl_fm.last_name, _tmpl_fm.company, _tmpl_fm.cid,
+            ] if v] if _tmpl_fm else None
 
-                if profile.lead_template_multi_tab:
-                    valid_leads_df = new_leads.loc[final_valid_indices]
-                    groups, unmatched = route_leads_by_cid(
-                        valid_leads_df, profile.field_mapping.cid, profile.lead_template_tabs,
-                        default_file_path=profile.lead_template_path)
-                    _tab_link_by_file = {
-                        (tab.file_path or profile.lead_template_path): (tab.link or profile.lead_template_link)
-                        for tab in profile.lead_template_tabs
-                    }
-                    _tmpl_files_used = set()
-                    for (_tmpl_file_path, sheet_name), tab_leads in groups.items():
-                        _tmpl_header_row = find_header_row(_tmpl_file_path, sheet_name, _tmpl_expected)
-                        unmatched_headers.update(append_leads(
-                            _tmpl_file_path, sheet_name,
-                            tab_leads, profile.field_mapping, run_date,
-                            target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
-                            clear_existing=profile.lead_template_clear_existing))
-                        _tmpl_files_used.add(_tmpl_file_path)
-                        lead_template_links_used[_tmpl_file_path] = _tab_link_by_file.get(
-                            _tmpl_file_path, profile.lead_template_link)
-                    if not unmatched.empty:
-                        unmatched_cids = sorted(set(unmatched[profile.field_mapping.cid].astype(str).str.strip()))
-                        st.warning(f"⚠️ {len(unmatched)} valid lead(s) had a CID with no matching Lead Template "
-                                   f"tab (CIDs: {', '.join(unmatched_cids)}) — skipped for the Lead Template "
-                                   "step, but still added to the Accumulated Report.")
-                    if groups:
-                        st.info(f"Valid leads also appended to their matching tab(s) across "
-                                f"{len(_tmpl_files_used)} Lead Template file(s): {', '.join(sorted(_tmpl_files_used))}")
-                else:
-                    _tmpl_header_row = find_header_row(
-                        profile.lead_template_path, profile.lead_template_sheet_name, _tmpl_expected)
+            if profile.lead_template_multi_tab:
+                groups, unmatched = route_leads_by_cid(
+                    valid_leads_df, profile.field_mapping.cid, profile.lead_template_tabs,
+                    default_file_path=profile.lead_template_path)
+                _tab_link_by_file = {
+                    (tab.file_path or profile.lead_template_path): (tab.link or profile.lead_template_link)
+                    for tab in profile.lead_template_tabs
+                }
+                _tmpl_files_used = set()
+                for (_tmpl_file_path, sheet_name), tab_leads in groups.items():
+                    _tmpl_header_row = find_header_row(_tmpl_file_path, sheet_name, _tmpl_expected)
                     unmatched_headers.update(append_leads(
-                        profile.lead_template_path, profile.lead_template_sheet_name,
-                        new_leads.loc[final_valid_indices], profile.field_mapping, run_date,
+                        _tmpl_file_path, sheet_name,
+                        tab_leads, profile.field_mapping, run_date,
                         target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
                         clear_existing=profile.lead_template_clear_existing))
-                    st.info(f"Valid leads also appended to Lead Template at {profile.lead_template_path}")
-                    lead_template_links_used[profile.lead_template_path] = profile.lead_template_link
+                    _tmpl_files_used.add(_tmpl_file_path)
+                    lead_template_links_used[_tmpl_file_path] = _tab_link_by_file.get(
+                        _tmpl_file_path, profile.lead_template_link)
+                if not unmatched.empty:
+                    unmatched_cids = sorted(set(unmatched[profile.field_mapping.cid].astype(str).str.strip()))
+                    st.warning(f"⚠️ {len(unmatched)} valid lead(s) had a CID with no matching Lead Template "
+                               f"tab (CIDs: {', '.join(unmatched_cids)}) — skipped for the Lead Template "
+                               "step, but still added to the Accumulated Report.")
+                if groups:
+                    st.info(f"Valid leads also appended to their matching tab(s) across "
+                            f"{len(_tmpl_files_used)} Lead Template file(s): {', '.join(sorted(_tmpl_files_used))}")
+            else:
+                _tmpl_header_row = find_header_row(
+                    profile.lead_template_path, profile.lead_template_sheet_name, _tmpl_expected)
+                unmatched_headers.update(append_leads(
+                    profile.lead_template_path, profile.lead_template_sheet_name,
+                    valid_leads_df, profile.field_mapping, run_date,
+                    target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
+                    clear_existing=profile.lead_template_clear_existing))
+                st.info(f"Valid leads also appended to Lead Template at {profile.lead_template_path}")
+                lead_template_links_used[profile.lead_template_path] = profile.lead_template_link
 
-            if unmatched_headers:
-                st.warning(
-                    "⚠️ These columns had no matching leadfile column and were left blank: "
-                    f"{', '.join(sorted(unmatched_headers))}. If the leadfile does have this data under a "
-                    "different name, rename the leadfile column (or its header) to something closer to the "
-                    "target column name and re-run."
-                )
+        if unmatched_headers:
+            st.warning(
+                "⚠️ These columns had no matching leadfile column and were left blank: "
+                f"{', '.join(sorted(unmatched_headers))}. If the leadfile does have this data under a "
+                "different name, rename the leadfile column (or its header) to something closer to the "
+                "target column name and re-run."
+            )
+        st.success("Accumulated Report updated.")
+        return lead_template_links_used
 
-            st.success("Accumulated Report updated.")
-            if profile.jira_ticket_key:
-                st.session_state["last_finalized_summary"] = {
-                    "client_name": client_name,
-                    "ticket_key": jira_client.extract_ticket_key(profile.jira_ticket_key),
-                    "reporter_name": profile.jira_reporter_name,
-                    "run_date_display": datetime.date.today().strftime("%d-%m-%y"),
-                    "leads_in": len(new_leads),
-                    "valid": len(final_valid_indices),
-                    "refund": len(final_refund_indices),
-                    "accumulated_report_path": profile.accumulated_report_path,
-                    "accumulated_report_link": profile.accumulated_report_link,
-                    # (file_path, link) for every Lead Template file this run wrote to —
-                    # a multi-tab client can have more than one.
-                    "lead_template_files": sorted(lead_template_links_used.items()),
-                }
+    def _finalize_jira_summary(total_leads_in, valid_count, refund_count, lead_template_links_used):
+        if not profile.jira_ticket_key:
+            return
+        st.session_state["last_finalized_summary"] = {
+            "client_name": client_name,
+            "ticket_key": jira_client.extract_ticket_key(profile.jira_ticket_key),
+            "reporter_name": profile.jira_reporter_name,
+            "run_date_display": datetime.date.today().strftime("%d-%m-%y"),
+            "leads_in": total_leads_in,
+            "valid": valid_count,
+            "refund": refund_count,
+            "accumulated_report_path": profile.accumulated_report_path,
+            "accumulated_report_link": profile.accumulated_report_link,
+            # (file_path, link) for every Lead Template file this run wrote to —
+            # a multi-tab client can have more than one.
+            "lead_template_files": sorted(lead_template_links_used.items()),
+        }
+
+    if profile.complex_account.enabled:
+        # Two-step Finalize for Complex Account clients: "fill columns" runs
+        # the TAL/Installed-Technologies/Predictive-Buying-Stage/phone/date/
+        # asset-URL rules on just the leads that ended up valid and shows a
+        # preview — nothing is written to the Accumulated Report or Lead
+        # Template until "Confirm & Write" afterward.
+        if "complex_enriched_leads" not in st.session_state and not result.review_reasons and \
+                st.button("Finalize (fill columns)"):
+            try:
+                tal_index = None
+                if profile.complex_account.tal_path:
+                    tal_index = _cached_tal_index(
+                        profile.complex_account.tal_path, os.path.getmtime(profile.complex_account.tal_path))
+                asset_specs = None
+                if profile.complex_account.specifications_path:
+                    asset_specs = _cached_asset_specs(
+                        profile.complex_account.specifications_path,
+                        os.path.getmtime(profile.complex_account.specifications_path))
+
+                cid_it_maps: dict[str, dict[str, str]] = {}
+                for f in complex_it_files:
+                    cid = extract_cid_from_filename(f.name)
+                    if cid:
+                        f.seek(0)
+                        cid_it_maps[cid] = load_domain_value_map(f, "Domain", "Installed Technologies")
+                cid_pbs_maps: dict[str, dict[str, str]] = {}
+                for f in complex_pbs_files:
+                    cid = extract_cid_from_filename(f.name)
+                    if cid:
+                        f.seek(0)
+                        cid_pbs_maps[cid] = load_domain_value_map(f, "Targeted Accounts", "Predictive Buying Stage")
+
+                enriched_valid, _ = apply_complex_account_rules(
+                    new_leads.loc[final_valid_indices], field_mapping,
+                    tal_index, cid_it_maps, cid_pbs_maps, asset_specs)
+                st.session_state["complex_enriched_leads"] = enriched_valid
+                st.session_state["complex_final_refund_reasons"] = final_refund_reasons
+                st.session_state["complex_final_refund_indices"] = final_refund_indices
+                st.rerun()
+            except Exception as exc:
+                render_error(exc)
+
+        if "complex_enriched_leads" in st.session_state:
+            enriched_valid = st.session_state["complex_enriched_leads"]
+            st.subheader("Preview: filled columns (nothing written yet)")
+            _preview_cols = [c for c in [
+                ACCOUNT_ID_COLUMN, COMPANY_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
+                CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN, ASSET_URN_COLUMN, FORM_URL_COLUMN,
+                DELL_ASSET_URL_COLUMN,
+            ] if c in enriched_valid.columns]
+            st.dataframe(enriched_valid[_preview_cols], hide_index=True)
+
+            col_write, col_discard = st.columns(2)
+            if col_write.button("Confirm & Write", type="primary", use_container_width=True):
+                try:
+                    _refund_indices = st.session_state["complex_final_refund_indices"]
+                    _refund_reasons = st.session_state["complex_final_refund_reasons"]
+                    lead_template_links_used = _finalize_write(
+                        enriched_valid, new_leads.loc[_refund_indices], _refund_reasons)
+                    _finalize_jira_summary(
+                        len(new_leads), len(enriched_valid), len(_refund_indices), lead_template_links_used)
+                    for key in ("run_result", "run_new_leads", "complex_enriched_leads",
+                                "complex_final_refund_reasons", "complex_final_refund_indices"):
+                        st.session_state.pop(key, None)
+                    st.rerun()
+                except Exception as exc:
+                    render_error(exc)
+            if col_discard.button("Discard and re-fill", use_container_width=True):
+                for key in ("complex_enriched_leads", "complex_final_refund_reasons", "complex_final_refund_indices"):
+                    st.session_state.pop(key, None)
+                st.rerun()
+    elif not result.review_reasons and st.button("Finalize"):
+        try:
+            valid_leads_df = new_leads.loc[final_valid_indices]
+            refund_leads_df = new_leads.loc[final_refund_indices]
+            lead_template_links_used = _finalize_write(valid_leads_df, refund_leads_df, final_refund_reasons)
+            _finalize_jira_summary(
+                len(new_leads), len(final_valid_indices), len(final_refund_indices), lead_template_links_used)
             del st.session_state["run_result"]
             del st.session_state["run_new_leads"]
         except Exception as exc:

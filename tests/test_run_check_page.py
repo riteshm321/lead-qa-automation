@@ -6,7 +6,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_jira_settings
-from core.models import ClientProfile, FieldMapping, DuplicateConfig, LeadTemplateTab
+from core.models import ClientProfile, FieldMapping, DuplicateConfig, LeadTemplateTab, ComplexAccountConfig
 from core.pipeline import PipelineResult
 from core.profile_store import save_profile
 
@@ -548,3 +548,63 @@ def test_jira_summary_uses_per_tab_sharepoint_links_for_multiple_lead_template_f
     assert any("AccLink" in label for label in checkbox_labels)
     assert any("SharedLink" in label for label in checkbox_labels)
     assert any("EmeaLink" in label for label in checkbox_labels)
+
+
+def test_complex_account_two_stage_finalize_previews_then_writes(tmp_path, monkeypatch):
+    # End-to-end regression test for the Complex Account two-stage Finalize:
+    # "Finalize (fill columns)" must not write anything, only preview the
+    # column-filling rules on the valid leads — the Accumulated Report only
+    # actually gets updated after "Confirm & Write".
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email", "First", "Last", "Company", "CID", "Capture Date", "Email Opt-in", "Business Phone"])
+    wb.create_sheet("Refund").append(
+        ["Email", "First", "Last", "Company", "CID", "Capture Date", "Email Opt-in", "Business Phone"])
+    wb.save(acc_path)
+
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        complex_account=ComplexAccountConfig(enabled=True),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email": "a@wipro.com", "First": "A", "Last": "One", "Company": "Wipro", "CID": "1",
+         "Capture Date": "08/17/2026", "Email Opt-in": "Yes, Yes", "Business Phone": 919819719038},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    assert not at.exception
+
+    fill_button = next(b for b in at.button if b.label == "Finalize (fill columns)")
+    fill_button.click().run()
+    assert not at.exception
+
+    # Nothing written yet — the Accumulated tab must still be just the header row.
+    wb_after_fill = openpyxl.load_workbook(acc_path)
+    assert wb_after_fill["Accumulated"].max_row == 1
+
+    assert any("Preview: filled columns" in s.value for s in at.subheader)
+
+    confirm_button = next(b for b in at.button if b.label == "Confirm & Write")
+    confirm_button.click().run()
+    assert not at.exception
+
+    wb_final = openpyxl.load_workbook(acc_path)
+    row = next(wb_final["Accumulated"].iter_rows(min_row=2, max_row=2, values_only=True))
+    headers = next(wb_final["Accumulated"].iter_rows(min_row=1, max_row=1, values_only=True))
+    written = dict(zip(headers, row))
+    assert written["Capture Date"] == "08/17/2026"
+    assert written["Email Opt-in"] == "Yes"
+    assert written["Business Phone"] == "91 9819719038"

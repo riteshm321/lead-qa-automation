@@ -261,6 +261,37 @@ def autocorrect_asset_row(
     return spec["urn"], new_form_url, spec["dell_url"]
 
 
+def check_complex_account_conditions(leads_df: pd.DataFrame) -> dict[int, list[ReviewDetail]]:
+    """Evaluates only the two Complex Account conditions that can actually
+    flag a lead (a Capture Date that's blank/unparseable, or an Email
+    Opt-in value that isn't clearly Yes/No) — without touching any column.
+
+    Used at Run Check time, before the valid/refund/review split, so these
+    leads get resolved through the same Refund/Needs Review flow as every
+    other check. The full column-filling rules (TAL mapping, Installed
+    Technologies/Predictive Buying Stage, phone/date formatting, asset
+    auto-correction — see apply_complex_account_rules) are deliberately
+    deferred to a separate step run only on the leads that end up valid,
+    since there's no point enriching a lead that's about to be refunded.
+    """
+    review: dict[int, list[ReviewDetail]] = {}
+    if CAPTURE_DATE_COLUMN in leads_df.columns:
+        for idx, row in leads_df.iterrows():
+            if reformat_capture_date(row.get(CAPTURE_DATE_COLUMN)) is None:
+                review.setdefault(idx, []).append(ReviewDetail(
+                    check="Complex Account", message="Capture Date is blank or unparseable",
+                    lead_value=str(row.get(CAPTURE_DATE_COLUMN, "")),
+                ))
+    if EMAIL_OPTIN_COLUMN in leads_df.columns:
+        for idx, row in leads_df.iterrows():
+            if clean_email_optin(row.get(EMAIL_OPTIN_COLUMN)) is None:
+                review.setdefault(idx, []).append(ReviewDetail(
+                    check="Complex Account", message="Email Opt-in value is not clearly Yes/No",
+                    lead_value=str(row.get(EMAIL_OPTIN_COLUMN, "")),
+                ))
+    return review
+
+
 def apply_complex_account_rules(
     leads_df: pd.DataFrame,
     field_mapping,
