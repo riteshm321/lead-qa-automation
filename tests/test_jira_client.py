@@ -165,6 +165,28 @@ def test_build_comment_body_table_gives_wider_columns_more_colwidth():
     assert campaign_width > cid_width
 
 
+def test_build_comment_body_table_truncates_long_cell_text():
+    # A long Campaign Segment name would otherwise wrap onto multiple lines
+    # and stretch that row taller than the rest — truncating keeps every
+    # row the same height, at the cost of not showing the full name.
+    long_name = "Aon M&A Transaction Claims Study 2026 - International Segment Name"
+    doc = build_comment_body(
+        opening_text="Hi",
+        table_headers=["CID", "Campaign Segment"],
+        table_rows=[["118118", long_name]],
+    )
+    table_node = next(n for n in doc["content"] if n["type"] == "table")
+    data_row = table_node["content"][1]
+    campaign_text = data_row["content"][1]["content"][0]["content"][0]["text"]
+    assert campaign_text.endswith("…")
+    assert len(campaign_text) == 40
+    assert campaign_text != long_name
+
+    # Short values must be left completely untouched.
+    cid_text = data_row["content"][0]["content"][0]["content"][0]["text"]
+    assert cid_text == "118118"
+
+
 def test_build_comment_body_omits_table_when_rows_not_provided():
     doc = build_comment_body(opening_text="Hi", table_headers=["CID"])
     assert not any(n["type"] == "table" for n in doc["content"])

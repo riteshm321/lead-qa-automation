@@ -65,37 +65,63 @@ def _links_to_adf_list(links: list[tuple[str, str]]) -> dict:
     return {"type": "orderedList", "attrs": {"order": 1}, "content": items}
 
 
-_MIN_COLUMN_WIDTH = 64
-_MAX_COLUMN_WIDTH = 340
+_MIN_COLUMN_WIDTH = 56
+_MAX_COLUMN_WIDTH = 220
 # Rough px-per-character plus fixed cell padding — Jira doesn't expose real
 # font-metrics, so this is a deliberately simple heuristic, not a precise
-# measurement. It only needs to get columns in the right ballpark relative
-# to each other (a long free-text column noticeably wider than short
-# numeric/date ones), not pixel-perfect.
-_PX_PER_CHAR = 8
-_CELL_PADDING_PX = 24
+# measurement.
+_PX_PER_CHAR = 10
+_CELL_PADDING_PX = 32
+
+
+def _longest_token_length(text: str) -> int:
+    # A cell only needs to be as wide as its longest unbreakable word — text
+    # wraps at spaces without looking broken (a 2-line "Campaign Segment"
+    # header is fine, matching how the source spreadsheet already displays
+    # it), but a single-word header ("Delivered", "Contracted") narrower
+    # than its own length wraps *mid-word* ("Deliver"/"ed"), which is what
+    # actually looked broken. Sizing by whole-string length (the original
+    # approach here) over-widened multi-word columns while still leaving
+    # single-word ones too narrow to avoid a mid-word break.
+    tokens = text.split()
+    return max((len(t) for t in tokens), default=0)
 
 
 def _estimate_column_widths(headers: list[str], rows: list[list]) -> list[int]:
     # Uniform, name-agnostic column widths (Jira's ADF "default" table
     # layout) squeezed every column in the Pacing Overview table to the same
-    # width regardless of content, so a long free-text column (e.g.
-    # "Campaign Segment") wrapped word-by-word while short numeric/date
-    # columns sat mostly empty. Sizing each column from its own actual
-    # longest value — rather than hardcoding by header name, which would
-    # break for a client using different column names — fixes this
-    # generically for any Pacing Overview layout.
+    # width regardless of content — sizing each column from its own actual
+    # content, rather than hardcoding by header name (which would break for
+    # a client using different column names), fixes this generically for
+    # any Pacing Overview layout.
     widths = []
     for col_idx, header in enumerate(headers):
-        max_len = len(str(header))
+        longest_token = _longest_token_length(str(header))
         for row in rows:
             if col_idx < len(row) and row[col_idx] is not None:
-                max_len = max(max_len, len(str(row[col_idx])))
-        widths.append(max(_MIN_COLUMN_WIDTH, min(_MAX_COLUMN_WIDTH, max_len * _PX_PER_CHAR + _CELL_PADDING_PX)))
+                longest_token = max(longest_token, _longest_token_length(str(row[col_idx])))
+        widths.append(max(_MIN_COLUMN_WIDTH,
+                           min(_MAX_COLUMN_WIDTH, longest_token * _PX_PER_CHAR + _CELL_PADDING_PX)))
     return widths
 
 
+_MAX_CELL_TEXT_LENGTH = 40
+
+
+def _truncate_value(value):
+    # A long free-text value (a Campaign Segment name, say) would otherwise
+    # wrap onto several lines and stretch that whole row taller — fine in
+    # the source spreadsheet, but chosen here to keep every row a single,
+    # predictable height in the posted comment instead, at the cost of not
+    # showing the full name.
+    if isinstance(value, str) and len(value) > _MAX_CELL_TEXT_LENGTH:
+        return value[: _MAX_CELL_TEXT_LENGTH - 1].rstrip() + "…"
+    return value
+
+
 def _table_to_adf(headers: list[str], rows: list[list]) -> dict:
+    headers = [_truncate_value(h) for h in headers]
+    rows = [[_truncate_value(v) for v in row] for row in rows]
     column_widths = _estimate_column_widths(headers, rows)
 
     def _cell(value, is_header: bool, col_idx: int) -> dict:
