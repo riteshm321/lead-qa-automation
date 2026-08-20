@@ -65,16 +65,49 @@ def _links_to_adf_list(links: list[tuple[str, str]]) -> dict:
     return {"type": "orderedList", "attrs": {"order": 1}, "content": items}
 
 
+_MIN_COLUMN_WIDTH = 64
+_MAX_COLUMN_WIDTH = 340
+# Rough px-per-character plus fixed cell padding — Jira doesn't expose real
+# font-metrics, so this is a deliberately simple heuristic, not a precise
+# measurement. It only needs to get columns in the right ballpark relative
+# to each other (a long free-text column noticeably wider than short
+# numeric/date ones), not pixel-perfect.
+_PX_PER_CHAR = 8
+_CELL_PADDING_PX = 24
+
+
+def _estimate_column_widths(headers: list[str], rows: list[list]) -> list[int]:
+    # Uniform, name-agnostic column widths (Jira's ADF "default" table
+    # layout) squeezed every column in the Pacing Overview table to the same
+    # width regardless of content, so a long free-text column (e.g.
+    # "Campaign Segment") wrapped word-by-word while short numeric/date
+    # columns sat mostly empty. Sizing each column from its own actual
+    # longest value — rather than hardcoding by header name, which would
+    # break for a client using different column names — fixes this
+    # generically for any Pacing Overview layout.
+    widths = []
+    for col_idx, header in enumerate(headers):
+        max_len = len(str(header))
+        for row in rows:
+            if col_idx < len(row) and row[col_idx] is not None:
+                max_len = max(max_len, len(str(row[col_idx])))
+        widths.append(max(_MIN_COLUMN_WIDTH, min(_MAX_COLUMN_WIDTH, max_len * _PX_PER_CHAR + _CELL_PADDING_PX)))
+    return widths
+
+
 def _table_to_adf(headers: list[str], rows: list[list]) -> dict:
-    def _cell(value, is_header: bool) -> dict:
+    column_widths = _estimate_column_widths(headers, rows)
+
+    def _cell(value, is_header: bool, col_idx: int) -> dict:
         text = "" if value is None else str(value)
         marks = [{"type": "strong"}] if is_header and text else []
         content = [{"type": "text", "text": text, "marks": marks}] if text else []
         paragraph = {"type": "paragraph", "content": content}
-        return {"type": "tableHeader" if is_header else "tableCell", "attrs": {}, "content": [paragraph]}
+        attrs = {"colwidth": [column_widths[col_idx]]} if col_idx < len(column_widths) else {}
+        return {"type": "tableHeader" if is_header else "tableCell", "attrs": attrs, "content": [paragraph]}
 
-    header_row = {"type": "tableRow", "content": [_cell(h, True) for h in headers]}
-    data_rows = [{"type": "tableRow", "content": [_cell(v, False) for v in row]} for row in rows]
+    header_row = {"type": "tableRow", "content": [_cell(h, True, i) for i, h in enumerate(headers)]}
+    data_rows = [{"type": "tableRow", "content": [_cell(v, False, i) for i, v in enumerate(row)]} for row in rows]
     return {
         "type": "table",
         # "full-width" uses the whole comment pane width instead of ADF's

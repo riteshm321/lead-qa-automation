@@ -560,12 +560,33 @@ def detect_cids_from_pacing_overview(
         wb.close()
 
 
+def _format_pacing_header(value) -> str:
+    # Date column headers ("19-Aug") are stored as real datetime values, not
+    # text — str()'ing one directly gives a full "2026-08-19 00:00:00"
+    # timestamp instead of the short date the sheet actually displays.
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.strftime("%d-%b")
+    return str(value).strip()
+
+
+def _format_pacing_value(header: str, value):
+    if value is None:
+        return ""
+    if _normalize_header_text(header) == "pacing" and isinstance(value, (int, float)):
+        return f"{value * 100:.0f}%"
+    return value
+
+
 def read_pacing_overview_table(accumulated_path: str, sheet_name: str = "Pacing Overview") -> pd.DataFrame:
     """Read the Pacing Overview sheet as a full table (every column, not
     just CID/Campaign), for embedding as a native table in a Jira summary
-    comment. Reuses the same header-row and stop-row rules as
-    detect_cids_from_pacing_overview (header row = the row with a "CID"
-    cell; stops at the first blank CID or a "Grand Total"/"Total" row).
+    comment. Reuses the same header-row rule as detect_cids_from_pacing_overview
+    (header row = the row with a "CID" cell). Stops at the first blank CID;
+    a trailing "Grand Total"/"Total" row is kept (as the last row) rather
+    than dropped, since it's a real, meaningful summary row in the source
+    sheet. The "Pacing" column is formatted as a percentage and date column
+    headers are shortened to a plain date, matching how the sheet actually
+    displays them.
     """
     wb = openpyxl.load_workbook(accumulated_path, read_only=True, data_only=True)
     try:
@@ -588,19 +609,22 @@ def read_pacing_overview_table(accumulated_path: str, sheet_name: str = "Pacing 
 
         header_cells = next(ws.iter_rows(min_row=header_row_idx, max_row=header_row_idx))
         col_indices = [c.column for c in header_cells if c.value is not None and str(c.value).strip() != ""]
-        headers = [str(ws.cell(row=header_row_idx, column=c).value).strip() for c in col_indices]
+        headers = [_format_pacing_header(ws.cell(row=header_row_idx, column=c).value) for c in col_indices]
+
+        def _row_record(row) -> dict:
+            return {
+                header: _format_pacing_value(header, row[col - 1].value)
+                for header, col in zip(headers, col_indices)
+            }
 
         records: list[dict] = []
         for row in ws.iter_rows(min_row=header_row_idx + 1, max_row=ws.max_row):
             cid_cell = row[cid_col_idx - 1]
             if cid_cell.value is None or str(cid_cell.value).strip() == "":
                 break
+            records.append(_row_record(row))
             if str(cid_cell.value).strip().lower() in ("grand total", "total"):
                 break
-            records.append({
-                header: ("" if row[col - 1].value is None else row[col - 1].value)
-                for header, col in zip(headers, col_indices)
-            })
 
         return pd.DataFrame.from_records(records, columns=headers)
     finally:

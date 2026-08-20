@@ -343,6 +343,8 @@ def test_read_pacing_overview_table_captures_every_column(tmp_path):
     ws["E5"] = 80
     ws["F5"] = 80
     ws["C6"] = "Grand Total"
+    ws["E6"] = 180
+    ws["F6"] = 122
     wb.save(path)
 
     df = read_pacing_overview_table(path)
@@ -350,7 +352,47 @@ def test_read_pacing_overview_table_captures_every_column(tmp_path):
     assert list(df.columns) == ["SR No", "CID", "Campaign Segment", "Target", "Delivered"]
     assert df.iloc[0].tolist() == [1, "118118", "APAC Mgr+ Q3", 100, 42]
     assert df.iloc[1].tolist() == [2, "118119", "EMEA Mgr+ Q3", 80, 80]
-    assert len(df) == 2  # Grand Total row excluded
+    # The Grand Total row is kept as a real summary row, not dropped.
+    assert len(df) == 3
+    assert df.iloc[2].tolist() == ["", "Grand Total", "", 180, 122]
+
+
+def test_read_pacing_overview_table_formats_pacing_column_as_percentage(tmp_path):
+    from core.excel_io import read_pacing_overview_table
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing Overview"
+    ws["B3"] = "CID"
+    ws["C3"] = "Pacing"
+    ws["B4"] = "118118"
+    ws["C4"] = 0.0547368421
+    wb.save(path)
+
+    df = read_pacing_overview_table(path)
+
+    assert df.iloc[0]["Pacing"] == "5%"
+
+
+def test_read_pacing_overview_table_formats_date_headers_without_timestamp(tmp_path):
+    import datetime as dt
+
+    from core.excel_io import read_pacing_overview_table
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing Overview"
+    ws["B3"] = "CID"
+    ws["C3"] = dt.datetime(2026, 8, 19)
+    ws["B4"] = "118118"
+    ws["C4"] = 4
+    wb.save(path)
+
+    df = read_pacing_overview_table(path)
+
+    assert list(df.columns) == ["CID", "19-Aug"]
 
 
 def test_read_pacing_overview_table_stops_at_blank_cid_row(tmp_path):

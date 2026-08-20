@@ -147,6 +147,24 @@ def test_build_comment_body_table_uses_full_width_layout_with_bold_headers():
     assert {"type": "strong"} in header_text_node["marks"]
 
 
+def test_build_comment_body_table_gives_wider_columns_more_colwidth():
+    # Regression test: every column got the same implicit width regardless
+    # of content, so a long free-text column ("Campaign Segment") wrapped
+    # word-by-word while short numeric columns ("CID") sat mostly empty —
+    # looked misaligned/ugly compared to the source spreadsheet even after
+    # switching to full-width layout. Widths must scale with actual content.
+    doc = build_comment_body(
+        opening_text="Hi",
+        table_headers=["CID", "Campaign Segment"],
+        table_rows=[["118118", "INT_ABM Leads_Arkance ADSK_AECO_Snr Mgr+_Jul-Aug'26"]],
+    )
+    table_node = next(n for n in doc["content"] if n["type"] == "table")
+    header_cells = table_node["content"][0]["content"]
+    cid_width = header_cells[0]["attrs"]["colwidth"][0]
+    campaign_width = header_cells[1]["attrs"]["colwidth"][0]
+    assert campaign_width > cid_width
+
+
 def test_build_comment_body_omits_table_when_rows_not_provided():
     doc = build_comment_body(opening_text="Hi", table_headers=["CID"])
     assert not any(n["type"] == "table" for n in doc["content"])
