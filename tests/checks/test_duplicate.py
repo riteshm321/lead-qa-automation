@@ -133,3 +133,99 @@ def test_no_match_for_distinct_leads():
 
     assert outcome.fail == {}
     assert outcome.review == {}
+
+
+def test_name_and_company_prefix_match_against_accumulated_goes_to_review():
+    # Rule 5: full name differs (Michael/Micheal, Johnson/Johnston) so the
+    # exact-name rule never fires, but the first 3 letters of first name,
+    # last name, and company all match — a plausible typo/near-duplicate,
+    # coarse enough that it's only ever sent to review, never auto-failed.
+    new_leads = pd.DataFrame([
+        {"emailaddress": "michael.johnson@acme.com", "firstname": "Michael", "lastname": "Johnson",
+         "company": "Acme Corp", "CID": 1},
+    ])
+    accumulated = pd.DataFrame([
+        {"emailaddress": "m.johnston@acmecorp.com", "firstname": "Micheal", "lastname": "Johnston",
+         "company": "Acme Corporation", "CID": 1},
+    ])
+
+    outcome = check_duplicates(new_leads, accumulated, FM)
+
+    assert outcome.fail == {}
+    detail = outcome.review[0]
+    assert detail.check == "Duplicate"
+    assert "company prefix" in detail.message.lower()
+
+
+def test_name_and_domain_prefix_match_against_accumulated_goes_to_review():
+    # Rule 6: same idea as Rule 5, but keyed on the email domain instead of
+    # company — different (or blank) company, so Rule 5 doesn't fire first.
+    new_leads = pd.DataFrame([
+        {"emailaddress": "robert.smith@techcorp.com", "firstname": "Robert", "lastname": "Smith",
+         "company": "", "CID": 1},
+    ])
+    accumulated = pd.DataFrame([
+        {"emailaddress": "r.smith@technologycorp.io", "firstname": "Rob", "lastname": "Smithson",
+         "company": "", "CID": 1},
+    ])
+
+    outcome = check_duplicates(new_leads, accumulated, FM)
+
+    assert outcome.fail == {}
+    detail = outcome.review[0]
+    assert detail.check == "Duplicate"
+    assert "domain prefix" in detail.message.lower()
+
+
+def test_prefix_rules_do_not_fire_on_blank_fields():
+    new_leads = pd.DataFrame([
+        {"emailaddress": "", "firstname": "Michael", "lastname": "Johnson", "company": "", "CID": 1},
+    ])
+    accumulated = pd.DataFrame([
+        {"emailaddress": "", "firstname": "Micheal", "lastname": "Johnston", "company": "", "CID": 1},
+    ])
+
+    outcome = check_duplicates(new_leads, accumulated, FM)
+
+    assert outcome.fail == {}
+    assert outcome.review == {}
+
+
+def test_prefix_rule_only_first_of_several_in_batch_matches_passes_through():
+    # Several new leads share the same first-3-letter name & company prefix
+    # purely within this batch (no accumulated counterpart) — the first one
+    # processed is the "original" and passes clean; the rest are flagged
+    # against it, one at a time as they're seen.
+    new_leads = pd.DataFrame([
+        {"emailaddress": "a@acme.com", "firstname": "Michael", "lastname": "Johnson", "company": "Acme Corp", "CID": 1},
+        {"emailaddress": "b@acme.com", "firstname": "Micheal", "lastname": "Johnston", "company": "Acme Co", "CID": 1},
+        {"emailaddress": "c@acme.com", "firstname": "Mich", "lastname": "Johns", "company": "Acme Ltd", "CID": 1},
+    ])
+    accumulated = pd.DataFrame(columns=["emailaddress", "firstname", "lastname", "company", "CID"])
+
+    outcome = check_duplicates(new_leads, accumulated, FM)
+
+    assert 0 not in outcome.fail and 0 not in outcome.review
+    assert outcome.review[1].check == "Duplicate"
+    assert outcome.review[2].check == "Duplicate"
+
+
+def test_prefix_rule_flags_every_batch_lead_matching_an_accumulated_lead():
+    # Unlike purely in-batch duplicates, when the match is against an
+    # existing Accumulated Report lead, every matching new lead is flagged
+    # — none should pass as valid, since the accumulated lead already
+    # counts as delivered.
+    new_leads = pd.DataFrame([
+        {"emailaddress": "a@acme.com", "firstname": "Michael", "lastname": "Johnson", "company": "Acme Corp", "CID": 1},
+        {"emailaddress": "b@acme.com", "firstname": "Mich", "lastname": "Johns", "company": "Acme Ltd", "CID": 1},
+    ])
+    accumulated = pd.DataFrame([
+        {"emailaddress": "existing@acmecorp.com", "firstname": "Micheal", "lastname": "Johnston",
+         "company": "Acme Corporation", "CID": 1},
+    ])
+
+    outcome = check_duplicates(new_leads, accumulated, FM)
+
+    assert outcome.fail == {}
+    assert 0 in outcome.review
+    assert 1 in outcome.review

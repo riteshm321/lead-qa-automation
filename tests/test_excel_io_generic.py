@@ -247,6 +247,32 @@ def test_append_leads_matches_headers_with_extra_suffix_via_containment(tmp_path
     assert unmatched == []
 
 
+def test_append_leads_matches_headers_via_known_synonym_group(tmp_path):
+    # Regression test: leadfile "companysize" and Lead Template "Employee
+    # Size" are genuinely different words for the same field — no amount of
+    # string-similarity scoring matches them ("company" vs "employee" score
+    # well under the fuzzy threshold), so this previously left the column
+    # blank despite both files having equivalent data.
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "Employee Size"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([{"Email_Address": "bob@x.com", "First_Name": "Bob",
+                               "Last_Name": "Lee", "Company_Name": "Beta",
+                               "companysize": "1,000-4,999"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    unmatched = append_leads(path, "Accumulated", leads_df, field_mapping, run_date="2026-08-13")
+
+    ws = openpyxl.load_workbook(path)["Accumulated"]
+    assert ws.cell(row=2, column=5).value == "1,000-4,999"
+    assert unmatched == []
+
+
 def test_append_leads_leaves_ambiguous_containment_matches_unmatched(tmp_path):
     # Two leadfile columns both contain "region" — auto-picking either one
     # risks silently wiring the wrong data into a client's real report, so

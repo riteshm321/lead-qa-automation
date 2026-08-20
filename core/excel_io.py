@@ -335,6 +335,24 @@ def _find_last_data_row(ws, first_data_row: int, headers: list) -> int | None:
 _CONTAINMENT_MIN_LEN = 4
 _FUZZY_MATCH_THRESHOLD = 88
 
+# Known passthrough-column synonym groups: real leadfiles and Lead Templates
+# use genuinely different words for the same field (not just typos/word
+# order, which the fuzzy tier below already catches) — e.g. "Company Size"
+# vs "Employee Size" — so no amount of string-similarity scoring will ever
+# match them; "company" and "employee" just aren't similar strings. Each
+# inner set is normalized synonyms for one field; add more groups here as
+# further real-world mismatches turn up.
+_PASSTHROUGH_SYNONYM_GROUPS: list[set[str]] = [
+    {_normalize_header_text(s) for s in (
+        "company size", "employee size", "employee count", "number of employees",
+        "headcount", "company headcount", "employee size range", "company size range",
+        "no of employees",
+    )},
+]
+_PASSTHROUGH_SYNONYM_GROUP_BY_HEADER: dict[str, int] = {
+    header: group_idx for group_idx, group in enumerate(_PASSTHROUGH_SYNONYM_GROUPS) for header in group
+}
+
 
 def _find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str, str]) -> str | None:
     """Best-effort match of a target header to a leadfile column, for the
@@ -346,11 +364,14 @@ def _find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str,
 
     1. Exact match on the fully-stripped normalized text (handles
        "Job Function" / "jobfunction").
-    2. Containment: one normalized string is fully contained in the other
+    2. Known synonym group (handles genuinely different wording for the same
+       field, like "Company Size" vs "Employee Size" — see
+       _PASSTHROUGH_SYNONYM_GROUPS above).
+    3. Containment: one normalized string is fully contained in the other
        (handles suffix/prefix noise like "Referential") — guarded by a
        minimum length so short strings ("cid") don't swallow unrelated
        columns.
-    3. Fuzzy similarity (rapidfuzz) above a high threshold, for typos and
+    4. Fuzzy similarity (rapidfuzz) above a high threshold, for typos and
        reordered words.
 
     A tier is only used if exactly one leadfile column qualifies — wiring
@@ -359,6 +380,15 @@ def _find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str,
     """
     if header_norm in lead_headers_norm:
         return lead_headers_norm[header_norm]
+
+    group_idx = _PASSTHROUGH_SYNONYM_GROUP_BY_HEADER.get(header_norm)
+    if group_idx is not None:
+        candidates = [
+            orig for norm, orig in lead_headers_norm.items()
+            if _PASSTHROUGH_SYNONYM_GROUP_BY_HEADER.get(norm) == group_idx
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
 
     if len(header_norm) >= _CONTAINMENT_MIN_LEN:
         candidates = [
