@@ -105,6 +105,42 @@ def test_load_domain_value_map_matches_real_pbs_column_layout():
     assert mapping == {"kelltontech.com": "No Active Signals", "emcure.com": "Awareness"}
 
 
+def test_load_domain_value_map_aggregates_multiple_rows_for_same_domain():
+    # A domain can appear on more than one row — one Installed Technology
+    # per row — and all of them should be combined, not just the last one.
+    csv_text = (
+        "Client: Dell APAC\n"
+        '"Program: Dell APAC (ID: 139849)"\n'
+        "\n"
+        "Company,Domain,Category,Installed Technologies,Verified on Date\n"
+        "Cipla,cipla.com,OS,Oracle Linux,2026-08-01\n"
+        "Cipla,cipla.com,Networking,Cisco,2026-08-01\n"
+        "Cipla,cipla.com,Storage,Pure Storage,2026-08-01\n"
+        "Cipla,cipla.com,OS,Oracle Linux,2026-08-01\n"  # exact duplicate — must not repeat
+    )
+    mapping = load_domain_value_map(
+        _upload("it.csv", csv_text), "Domain", "Installed Technologies", aggregate=True)
+
+    assert mapping == {"cipla.com": "Oracle Linux, Cisco, Pure Storage"}
+
+
+def test_load_domain_value_map_skips_configured_values():
+    csv_text = (
+        "Client: Dell APAC\n"
+        '"Program: Dell APAC (ID: 139843)"\n'
+        "\n"
+        "Targeted Accounts,Trending,Reached,Engaged,Predictive Buying Stage\n"
+        "kelltontech.com,Yes,Yes,Yes,No Active Signals\n"
+        "emcure.com,Yes,Yes,Yes,Awareness\n"
+    )
+    mapping = load_domain_value_map(
+        _upload("pbs.csv", csv_text), "Targeted Accounts", "Predictive Buying Stage",
+        skip_values={"No Active Signals"})
+
+    # kelltontech.com is left out entirely, not mapped to the literal label.
+    assert mapping == {"emcure.com": "Awareness"}
+
+
 def test_reformat_capture_date_handles_mmddyyyy_text():
     assert reformat_capture_date("08/17/2026") == "08/17/2026"
 

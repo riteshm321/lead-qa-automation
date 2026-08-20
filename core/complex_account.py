@@ -125,11 +125,24 @@ def _find_csv_header_row(text: str, required_column: str, max_scan: int = 15) ->
     return 0
 
 
-def load_domain_value_map(file_obj, domain_column: str, value_column: str) -> dict[str, str]:
+def load_domain_value_map(
+    file_obj, domain_column: str, value_column: str,
+    aggregate: bool = False, skip_values: set[str] | None = None,
+) -> dict[str, str]:
     """Reads a CID-specific reference export (Installed Technologies or
     Predictive Buying Stage) into a domain -> value dict. file_obj is
     anything with .read() returning bytes (a Streamlit UploadedFile or a
     plain open file).
+
+    aggregate: a domain can appear on more than one row (e.g. Installed
+    Technologies lists one technology per row) — when True, every distinct
+    value seen for a domain is joined with ", " in first-seen order,
+    instead of only the last row winning.
+
+    skip_values: values to treat as "nothing to report" (case-insensitive
+    exact match) — e.g. Predictive Buying Stage's "No Active Signals"
+    should leave that domain unmapped rather than showing the label text
+    itself.
     """
     raw = file_obj.read()
     if isinstance(raw, bytes):
@@ -138,15 +151,27 @@ def load_domain_value_map(file_obj, domain_column: str, value_column: str) -> di
         text = raw
     header_row = _find_csv_header_row(text, domain_column)
     df = pd.read_csv(io.StringIO(text), skiprows=header_row)
+    skip_norm = {s.strip().lower() for s in (skip_values or ())}
 
     mapping: dict[str, str] = {}
+    seen_values: dict[str, list[str]] = {}
     for _, row in df.iterrows():
         domain = _norm_domain(row.get(domain_column))
         if not domain:
             continue
         value = row.get(value_column)
-        if value is not None and str(value).strip() and str(value).strip().lower() != "nan":
-            mapping[domain] = str(value).strip()
+        if value is None or not str(value).strip() or str(value).strip().lower() == "nan":
+            continue
+        value_text = str(value).strip()
+        if value_text.lower() in skip_norm:
+            continue
+        if aggregate:
+            values = seen_values.setdefault(domain, [])
+            if value_text not in values:
+                values.append(value_text)
+            mapping[domain] = ", ".join(values)
+        else:
+            mapping[domain] = value_text
     return mapping
 
 

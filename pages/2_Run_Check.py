@@ -499,13 +499,22 @@ if "run_result" in st.session_state:
                     cid = complex_it_file_cids.get(f.name)
                     if cid and cid in _leadfile_cids:
                         f.seek(0)
-                        cid_it_maps[cid] = load_domain_value_map(f, "Domain", "Installed Technologies")
+                        # A domain can appear on more than one row, one
+                        # technology per row — combine them all rather than
+                        # only keeping whichever row happened to load last.
+                        cid_it_maps[cid] = load_domain_value_map(
+                            f, "Domain", "Installed Technologies", aggregate=True)
                 cid_pbs_maps: dict[str, dict[str, str]] = {}
                 for f in complex_pbs_files:
                     cid = complex_pbs_file_cids.get(f.name)
                     if cid and cid in _leadfile_cids:
                         f.seek(0)
-                        cid_pbs_maps[cid] = load_domain_value_map(f, "Targeted Accounts", "Predictive Buying Stage")
+                        # "No Active Signals" means there's nothing to
+                        # report for that domain — leave the column blank
+                        # instead of writing the label text itself.
+                        cid_pbs_maps[cid] = load_domain_value_map(
+                            f, "Targeted Accounts", "Predictive Buying Stage",
+                            skip_values={"No Active Signals"})
 
                 enriched_valid, _ = apply_complex_account_rules(
                     new_leads.loc[final_valid_indices], field_mapping,

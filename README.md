@@ -390,7 +390,10 @@ single Finalize:
    match → blank Account ID, `Company` left as-is).
 2. **Installed Technologies** / **Predictive Buying Stage** — looked up by domain in
    that lead's CID's uploaded file, written as `"Installed Technologies: {value}"` /
-   `"Predictive Buying Stage: {value}"`, replacing whatever was there.
+   `"Predictive Buying Stage: {value}"`, replacing whatever was there. A domain listed
+   on more than one Installed Technologies row (one technology per row) gets all of
+   them combined, comma-separated. A Predictive Buying Stage value of "No Active
+   Signals" is treated as nothing to report — that lead's column is left blank.
 3. The first "Additional Data Point" column keeps its existing value, prefixed with
    `"Top Trending Topics: "`.
 4. **Capture Date** reformatted to `mm/dd/yyyy` (parsed flexibly, not just already
