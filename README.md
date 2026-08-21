@@ -322,6 +322,12 @@ a "Post summary to Jira" prompt appears, pre-filled and ready to review:
     widths and this truncation are the only levers available to keep a wide,
     growing table compact.
 - **Closing message** (editable) — defaults to "Thanks".
+- **Attachments** (optional) — a file picker to attach any one file, and a paste
+  box to attach one screenshot (e.g. of the Pacing Overview table): click the box,
+  then press Ctrl+V. Both upload as real Jira attachments after the comment posts.
+  A failed upload is reported without blocking the comment or the other
+  attachment; the button then switches to **"Retry failed attachment(s)"**, which
+  retries only what failed without reposting the comment.
 
 Since not every run is a QA task — some are plain uploads — nothing here is
 hard-coded to always appear; the file links and table sections only show up when
