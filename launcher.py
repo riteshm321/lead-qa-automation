@@ -6,10 +6,7 @@ import webbrowser
 
 from streamlit.web import cli as stcli
 
-
-def _resource_path(rel_path: str) -> str:
-    base = getattr(sys, "_MEIPASS", os.path.abspath("."))
-    return os.path.join(base, rel_path)
+from core.resources import resource_path as _resource_path
 
 
 def _app_data_dir() -> str:

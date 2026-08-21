@@ -9,6 +9,7 @@ from core.excel_io import (
     find_header_row, read_sheet_headers,
 )
 from core.app_settings import get_clients_dir
+from core.branding import configure_page
 from core.file_browser import browse_for_file
 from core.jira_client import extract_ticket_key
 from core.models import (
@@ -18,6 +19,7 @@ from core.models import (
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
+configure_page("Client Setup")
 st.title("Client Setup")
 st.caption("Shared team data location and Jira account credentials moved to the ⚙️ Settings page.")
 

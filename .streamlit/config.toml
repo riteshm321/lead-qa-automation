@@ -1,0 +1,13 @@
+# Madison Logic brand theme — colors only, no workflow changes.
+# See docs/superpowers/specs/2026-08-21-ui-branding-design.md for the design.
+[theme]
+base = "light"
+primaryColor = "#1C6BFF"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F6F6FB"
+textColor = "#001B47"
+linkColor = "#1C6BFF"
+borderColor = "#DEE3EF"
+font = "sans-serif"
+baseRadius = "medium"
+buttonRadius = "medium"

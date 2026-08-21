@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from core.app_settings import get_aliases_path, get_clients_dir, get_jira_settings
+from core.branding import configure_page
 from core.checks.leadcap import validate_purchased_report_cids
 from core.errors import render_error
 from core.excel_io import (
@@ -28,6 +29,7 @@ from core.pipeline import run_pipeline, apply_refund_overrides
 from core.profile_store import list_profile_names, load_profile, save_profile
 import requests
 
+configure_page("Run Check")
 st.title("▶️ Run Check")
 
 
@@ -194,79 +196,80 @@ if st.button("Run Check") and new_leads_file:
         st.error("Map the New Leads columns above before running the check.")
         st.stop()
     try:
-        new_leads = new_leads_df
-        accumulated_leads = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
+        with st.spinner("Running checks..."):
+            new_leads = new_leads_df
+            accumulated_leads = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
 
-        complex_review = {}
-        if profile.complex_account.enabled:
-            # Only the conditions that can actually flag a lead (bad
-            # Capture Date, ambiguous Email Opt-in, an already-filled Asset
-            # URN/Form URL/Dell Asset URL that doesn't match the
-            # specifications file) run here, so they go through the same
-            # Refund/Needs Review flow as every other check. The
-            # column-filling rules (TAL mapping, Installed Technologies/
-            # Predictive Buying Stage, phone/date formatting) run later,
-            # only on whichever leads end up valid — see the "Finalize
-            # (fill columns)" step below.
-            _check_asset_specs = None
-            if profile.complex_account.specifications_path:
-                _check_asset_specs = _cached_asset_specs(
-                    profile.complex_account.specifications_path,
-                    os.path.getmtime(profile.complex_account.specifications_path))
-            complex_review = check_complex_account_conditions(new_leads, _check_asset_specs)
+            complex_review = {}
+            if profile.complex_account.enabled:
+                # Only the conditions that can actually flag a lead (bad
+                # Capture Date, ambiguous Email Opt-in, an already-filled Asset
+                # URN/Form URL/Dell Asset URL that doesn't match the
+                # specifications file) run here, so they go through the same
+                # Refund/Needs Review flow as every other check. The
+                # column-filling rules (TAL mapping, Installed Technologies/
+                # Predictive Buying Stage, phone/date formatting) run later,
+                # only on whichever leads end up valid — see the "Finalize
+                # (fill columns)" step below.
+                _check_asset_specs = None
+                if profile.complex_account.specifications_path:
+                    _check_asset_specs = _cached_asset_specs(
+                        profile.complex_account.specifications_path,
+                        os.path.getmtime(profile.complex_account.specifications_path))
+                complex_review = check_complex_account_conditions(new_leads, _check_asset_specs)
 
-        reference_data: dict = {"purchased_reports": purchased_reports}
-        if profile.exclusion.enabled:
-            exclusion_sources_data: dict[str, pd.DataFrame] = {}
-            for source in profile.exclusion.sources:
-                df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                required_cols = [source.domain_column]
-                if profile.exclusion.check_company_name:
-                    required_cols.append(source.company_column)
-                require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
-                exclusion_sources_data[source.name] = df
-            reference_data["exclusion_sources"] = exclusion_sources_data
-        if profile.tal.enabled:
-            tal_sources_data: dict[str, pd.DataFrame] = {}
-            for source in profile.tal.sources:
-                df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                required_cols = [source.domain_column]
-                if profile.tal.check_company_name:
-                    required_cols.append(source.company_column)
-                require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
-                tal_sources_data[source.name] = df
-            reference_data["tal_sources"] = tal_sources_data
-        if profile.suppression.enabled:
-            suppression_sources_data: dict[str, pd.DataFrame] = {}
-            for source in profile.suppression.sources:
-                df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                required_cols = []
-                if profile.suppression.check_domain:
-                    required_cols.append(source.domain_column)
-                if profile.suppression.check_company_name:
-                    required_cols.append(source.company_column)
-                if profile.suppression.check_email:
-                    required_cols.append(source.email_column)
-                if required_cols:
+            reference_data: dict = {"purchased_reports": purchased_reports}
+            if profile.exclusion.enabled:
+                exclusion_sources_data: dict[str, pd.DataFrame] = {}
+                for source in profile.exclusion.sources:
+                    df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
+                    required_cols = [source.domain_column]
+                    if profile.exclusion.check_company_name:
+                        required_cols.append(source.company_column)
                     require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
-                suppression_sources_data[source.name] = df
-            reference_data["suppression_sources"] = suppression_sources_data
-        if profile.dedupe_list.enabled:
-            dedupe_sources_data: dict[str, pd.DataFrame] = {}
-            for source in profile.dedupe_list.sources:
-                df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                require_columns(df, [source.email_column], f"{source.file_path} [{source.sheet_name}]")
-                dedupe_sources_data[source.name] = df
-            reference_data["dedupe_sources"] = dedupe_sources_data
+                    exclusion_sources_data[source.name] = df
+                reference_data["exclusion_sources"] = exclusion_sources_data
+            if profile.tal.enabled:
+                tal_sources_data: dict[str, pd.DataFrame] = {}
+                for source in profile.tal.sources:
+                    df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
+                    required_cols = [source.domain_column]
+                    if profile.tal.check_company_name:
+                        required_cols.append(source.company_column)
+                    require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
+                    tal_sources_data[source.name] = df
+                reference_data["tal_sources"] = tal_sources_data
+            if profile.suppression.enabled:
+                suppression_sources_data: dict[str, pd.DataFrame] = {}
+                for source in profile.suppression.sources:
+                    df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
+                    required_cols = []
+                    if profile.suppression.check_domain:
+                        required_cols.append(source.domain_column)
+                    if profile.suppression.check_company_name:
+                        required_cols.append(source.company_column)
+                    if profile.suppression.check_email:
+                        required_cols.append(source.email_column)
+                    if required_cols:
+                        require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
+                    suppression_sources_data[source.name] = df
+                reference_data["suppression_sources"] = suppression_sources_data
+            if profile.dedupe_list.enabled:
+                dedupe_sources_data: dict[str, pd.DataFrame] = {}
+                for source in profile.dedupe_list.sources:
+                    df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
+                    require_columns(df, [source.email_column], f"{source.file_path} [{source.sheet_name}]")
+                    dedupe_sources_data[source.name] = df
+                reference_data["dedupe_sources"] = dedupe_sources_data
 
-        alias_groups = load_alias_groups(get_aliases_path())
-        result = run_pipeline(new_leads, profile, accumulated_leads, reference_data, alias_groups)
-        if complex_review:
-            merge_complex_account_review(result, complex_review)
+            alias_groups = load_alias_groups(get_aliases_path())
+            result = run_pipeline(new_leads, profile, accumulated_leads, reference_data, alias_groups)
+            if complex_review:
+                merge_complex_account_review(result, complex_review)
 
-        st.session_state["run_new_leads"] = new_leads
-        st.session_state["run_result"] = result
-        st.session_state["run_result_for"] = _run_identity
+            st.session_state["run_new_leads"] = new_leads
+            st.session_state["run_result"] = result
+            st.session_state["run_result_for"] = _run_identity
     except Exception as exc:
         render_error(exc)
 
@@ -507,39 +510,40 @@ if "run_result" in st.session_state:
         if "complex_enriched_leads" not in st.session_state and not result.review_reasons and \
                 st.button("Finalize (fill columns)"):
             try:
-                tal_index = None
-                if profile.complex_account.tal_path:
-                    tal_index = _cached_tal_index(
-                        profile.complex_account.tal_path, os.path.getmtime(profile.complex_account.tal_path))
+                with st.spinner("Filling in Complex Account columns..."):
+                    tal_index = None
+                    if profile.complex_account.tal_path:
+                        tal_index = _cached_tal_index(
+                            profile.complex_account.tal_path, os.path.getmtime(profile.complex_account.tal_path))
 
-                cid_it_maps: dict[str, dict[str, str]] = {}
-                for i, f in enumerate(complex_it_files):
-                    cid = complex_it_file_cids.get(i)
-                    if cid and cid in _leadfile_cids:
-                        f.seek(0)
-                        # A domain can appear on more than one row, one
-                        # technology per row — combine them all rather than
-                        # only keeping whichever row happened to load last.
-                        cid_it_maps[cid] = load_domain_value_map(
-                            f, "Domain", "Installed Technologies", aggregate=True)
-                cid_pbs_maps: dict[str, dict[str, str]] = {}
-                for i, f in enumerate(complex_pbs_files):
-                    cid = complex_pbs_file_cids.get(i)
-                    if cid and cid in _leadfile_cids:
-                        f.seek(0)
-                        # "No Active Signals" means there's nothing to
-                        # report for that domain — leave the column blank
-                        # instead of writing the label text itself.
-                        cid_pbs_maps[cid] = load_domain_value_map(
-                            f, "Targeted Accounts", "Predictive Buying Stage",
-                            skip_values={"No Active Signals"})
+                    cid_it_maps: dict[str, dict[str, str]] = {}
+                    for i, f in enumerate(complex_it_files):
+                        cid = complex_it_file_cids.get(i)
+                        if cid and cid in _leadfile_cids:
+                            f.seek(0)
+                            # A domain can appear on more than one row, one
+                            # technology per row — combine them all rather than
+                            # only keeping whichever row happened to load last.
+                            cid_it_maps[cid] = load_domain_value_map(
+                                f, "Domain", "Installed Technologies", aggregate=True)
+                    cid_pbs_maps: dict[str, dict[str, str]] = {}
+                    for i, f in enumerate(complex_pbs_files):
+                        cid = complex_pbs_file_cids.get(i)
+                        if cid and cid in _leadfile_cids:
+                            f.seek(0)
+                            # "No Active Signals" means there's nothing to
+                            # report for that domain — leave the column blank
+                            # instead of writing the label text itself.
+                            cid_pbs_maps[cid] = load_domain_value_map(
+                                f, "Targeted Accounts", "Predictive Buying Stage",
+                                skip_values={"No Active Signals"})
 
-                enriched_valid, _ = apply_complex_account_rules(
-                    new_leads.loc[final_valid_indices], field_mapping,
-                    tal_index, cid_it_maps, cid_pbs_maps)
-                st.session_state["complex_enriched_leads"] = enriched_valid
-                st.session_state["complex_final_refund_reasons"] = final_refund_reasons
-                st.session_state["complex_final_refund_indices"] = final_refund_indices
+                    enriched_valid, _ = apply_complex_account_rules(
+                        new_leads.loc[final_valid_indices], field_mapping,
+                        tal_index, cid_it_maps, cid_pbs_maps)
+                    st.session_state["complex_enriched_leads"] = enriched_valid
+                    st.session_state["complex_final_refund_reasons"] = final_refund_reasons
+                    st.session_state["complex_final_refund_indices"] = final_refund_indices
                 st.rerun()
             except Exception as exc:
                 render_error(exc)
@@ -557,15 +561,16 @@ if "run_result" in st.session_state:
             col_write, col_discard = st.columns(2)
             if col_write.button("Confirm & Write", type="primary", use_container_width=True):
                 try:
-                    _refund_indices = st.session_state["complex_final_refund_indices"]
-                    _refund_reasons = st.session_state["complex_final_refund_reasons"]
-                    lead_template_links_used = _finalize_write(
-                        enriched_valid, new_leads.loc[_refund_indices], _refund_reasons)
-                    _finalize_jira_summary(
-                        len(new_leads), len(enriched_valid), len(_refund_indices), lead_template_links_used)
-                    for key in ("run_result", "run_new_leads", "complex_enriched_leads",
-                                "complex_final_refund_reasons", "complex_final_refund_indices"):
-                        st.session_state.pop(key, None)
+                    with st.spinner("Writing to the Accumulated Report and Lead Template..."):
+                        _refund_indices = st.session_state["complex_final_refund_indices"]
+                        _refund_reasons = st.session_state["complex_final_refund_reasons"]
+                        lead_template_links_used = _finalize_write(
+                            enriched_valid, new_leads.loc[_refund_indices], _refund_reasons)
+                        _finalize_jira_summary(
+                            len(new_leads), len(enriched_valid), len(_refund_indices), lead_template_links_used)
+                        for key in ("run_result", "run_new_leads", "complex_enriched_leads",
+                                    "complex_final_refund_reasons", "complex_final_refund_indices"):
+                            st.session_state.pop(key, None)
                     st.rerun()
                 except Exception as exc:
                     render_error(exc)
@@ -575,13 +580,14 @@ if "run_result" in st.session_state:
                 st.rerun()
     elif not result.review_reasons and st.button("Finalize"):
         try:
-            valid_leads_df = new_leads.loc[final_valid_indices]
-            refund_leads_df = new_leads.loc[final_refund_indices]
-            lead_template_links_used = _finalize_write(valid_leads_df, refund_leads_df, final_refund_reasons)
-            _finalize_jira_summary(
-                len(new_leads), len(final_valid_indices), len(final_refund_indices), lead_template_links_used)
-            del st.session_state["run_result"]
-            del st.session_state["run_new_leads"]
+            with st.spinner("Writing to the Accumulated Report and Lead Template..."):
+                valid_leads_df = new_leads.loc[final_valid_indices]
+                refund_leads_df = new_leads.loc[final_refund_indices]
+                lead_template_links_used = _finalize_write(valid_leads_df, refund_leads_df, final_refund_reasons)
+                _finalize_jira_summary(
+                    len(new_leads), len(final_valid_indices), len(final_refund_indices), lead_template_links_used)
+                del st.session_state["run_result"]
+                del st.session_state["run_new_leads"]
         except Exception as exc:
             render_error(exc)
 

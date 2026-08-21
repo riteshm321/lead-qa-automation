@@ -6,8 +6,10 @@ from core.app_settings import (
     get_aliases_path, get_clients_dir, get_jira_settings, get_shared_root_dir,
     load_app_settings, save_app_settings, save_jira_settings,
 )
+from core.branding import configure_page
 from core.file_browser import browse_for_folder
 
+configure_page("Settings")
 st.title("⚙️ Settings")
 st.caption("App-wide settings, set up once — not tied to any specific client.")
 
