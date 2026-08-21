@@ -1,3 +1,5 @@
+import datetime
+
 import openpyxl
 import pandas as pd
 from openpyxl.styles import Font
@@ -219,6 +221,32 @@ def test_append_leads_highlight_fill_colors_only_the_new_rows(tmp_path):
     assert ws.cell(row=3, column=1).fill.fgColor.rgb == "00C6E0B4"
     # The pre-existing row must not have been touched.
     assert ws.cell(row=2, column=1).fill.fill_type is None
+
+
+def test_append_leads_writes_a_real_date_value_with_date_number_format(tmp_path):
+    # Regression test: a passthrough column holding a real date/datetime
+    # object (e.g. Complex Account's reformatted Capture Date) previously
+    # displayed as a raw serial number in a "General"-formatted cell —
+    # Excel needs an explicit date format to show and filter it as a date.
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company", "Capture Date"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y",
+         "Capture Date": datetime.date(2026, 8, 17)},
+    ])
+
+    append_leads(path, "Report", leads_df, _field_mapping(), run_date="2026-08-08")
+
+    ws = openpyxl.load_workbook(path)["Report"]
+    cell = ws.cell(row=2, column=6)
+    # openpyxl reads a whole-day Excel date back as a datetime, not a date.
+    assert cell.value == datetime.datetime(2026, 8, 17)
+    assert cell.number_format == "mm/dd/yyyy"
 
 
 def test_append_leads_highlight_fill_clears_previous_run_highlight(tmp_path):

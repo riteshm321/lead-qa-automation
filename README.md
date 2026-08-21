@@ -408,10 +408,12 @@ single Finalize:
 3. The first "Additional Data Point" column keeps its existing value, prefixed with
    `"Top Trending Topics: "`.
 4. **Capture Date** reformatted to `mm/dd/yyyy` (parsed flexibly, not just already
-   the right format).
+   the right format) and written as a real Excel date, not text, so it displays and
+   filters like a date rather than tripping Excel's "Number Stored as Text" warning.
 5. **Email Opt-in** collapsed to a bare `"Yes"`/`"No"`.
 6. **Asset download day/month/year** derived from the (now-clean) Capture Date — day
-   as 2 digits, month as its full name, year hardcoded `"2026"`.
+   and year written as real numbers (not zero-padded text), month as its full name,
+   year hardcoded `2026`.
 7. **Phone** — every non-digit character stripped, then a space inserted after the
    first 2 digits.
 

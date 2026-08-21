@@ -1,3 +1,4 @@
+import datetime
 import io
 
 import openpyxl
@@ -172,11 +173,17 @@ def test_clean_email_optin_returns_none_when_ambiguous():
 
 def test_asset_download_parts():
     day, month = asset_download_parts("08/17/2026")
-    assert day == "17"
+    assert day == 17
     assert month == "August"
 
     day, month = asset_download_parts("08/05/2026")
-    assert day == "05"
+    assert day == 5
+
+
+def test_asset_download_parts_accepts_a_date_object():
+    day, month = asset_download_parts(datetime.date(2026, 8, 5))
+    assert day == 5
+    assert month == "August"
 
 
 def test_format_phone_strips_punctuation_and_inserts_space():
@@ -304,7 +311,8 @@ def test_apply_complex_account_rules_end_to_end():
     assert row["Additional Data Point (poll questions, dynamic data, etc)  1"] == "Top Trending Topics: AI, Cloud"
     assert row["Additional Data Point (poll questions, dynamic data, etc)  2"] == "Installed Technologies: AWS, Azure"
     assert row["Additional Data Point (poll questions, dynamic data, etc)  3"] == "Predictive Buying Stage: Awareness"
-    assert row["Capture Date"] == "08/17/2026"
+    # A real date object, not text — so Excel stores/filters it as a date.
+    assert row["Capture Date"] == datetime.date(2026, 8, 17)
     assert row["Email Opt-in"] == "Yes"
     assert row["Business Phone"] == "91 9819719038"
     # Asset URN/Form URL/Dell Asset URL are a check now (check_asset_url_mismatches),
@@ -312,9 +320,10 @@ def test_apply_complex_account_rules_end_to_end():
     assert row["Asset URN"] == "WRONG"
     assert row["Form URL"] == "https://wrong.com"
     assert row["Dell Asset URL"] == "https://wrong-dell.com"
-    assert row["Asset download day"] == "17"
+    # Numbers, not text, so Excel doesn't flag "Number Stored as Text".
+    assert row["Asset download day"] == 17
     assert row["Asset download month"] == "August"
-    assert row["Asset download year"] == "2026"
+    assert row["Asset download year"] == 2026
 
 
 def test_apply_complex_account_rules_matches_cid_when_column_upcast_to_float():

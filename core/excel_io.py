@@ -425,7 +425,7 @@ def append_leads(
     tab_name: str,
     leads_df: pd.DataFrame,
     field_mapping: FieldMapping,
-    run_date: str,
+    run_date,
     reasons: dict[int, str] | None = None,
     target_field_mapping: FieldMapping | None = None,
     header_row: int = 1,
@@ -525,9 +525,17 @@ def append_leads(
                 cell.font, cell.fill, cell.border, cell.alignment, cell.number_format = (
                     copy(font), copy(fill), copy(border), copy(alignment), number_format
                 )
+            # Captured before assigning cell.value below — openpyxl itself
+            # overwrites a "General" cell's number_format the moment a
+            # date/datetime value is assigned to it, so checking *after*
+            # assignment would always see openpyxl's own default format
+            # instead of the "General" it actually started from.
+            was_general_format = cell.number_format == "General"
 
             if header_norm == "date":
                 cell.value = run_date
+                if was_general_format and isinstance(cell.value, (datetime.date, datetime.datetime)):
+                    cell.number_format = "dd-mmm-yy"
             elif header in formula_template:
                 formula, origin_ref = formula_template[header]
                 col_letter = get_column_letter(col_idx)
@@ -539,6 +547,12 @@ def append_leads(
             else:
                 source_col = column_source.get(col_idx)
                 cell.value = lead_row.get(source_col, "") if source_col is not None else None
+                # A real date/datetime value written into a "General"-formatted
+                # cell displays as a raw serial number and Excel's date filter
+                # can't group it — give it an explicit date format so it shows
+                # and filters like a real date instead.
+                if was_general_format and isinstance(cell.value, (datetime.date, datetime.datetime)):
+                    cell.number_format = "mm/dd/yyyy"
 
     if highlight_fill and not leads_df.empty:
         # Only ever one batch highlighted at a time — clear this same color

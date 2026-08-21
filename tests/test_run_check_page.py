@@ -1,3 +1,4 @@
+import datetime
 import os
 from unittest.mock import patch
 
@@ -604,7 +605,8 @@ def test_complex_account_two_stage_finalize_previews_then_writes(tmp_path, monke
     row = next(wb_final["Accumulated"].iter_rows(min_row=2, max_row=2, values_only=True))
     headers = next(wb_final["Accumulated"].iter_rows(min_row=1, max_row=1, values_only=True))
     written = dict(zip(headers, row))
-    assert written["Capture Date"] == "08/17/2026"
+    # A real date value now, not text — so Excel stores/filters it as a date.
+    assert written["Capture Date"] == datetime.datetime(2026, 8, 17)
     assert written["Email Opt-in"] == "Yes"
     assert written["Business Phone"] == "91 9819719038"
 

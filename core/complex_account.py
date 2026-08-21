@@ -27,7 +27,7 @@ PBS_COLUMN = "Additional Data Point (poll questions, dynamic data, etc)  3"
 DOWNLOAD_DAY_COLUMN = "Asset download day"
 DOWNLOAD_MONTH_COLUMN = "Asset download month"
 DOWNLOAD_YEAR_COLUMN = "Asset download year"
-DOWNLOAD_YEAR_VALUE = "2026"
+DOWNLOAD_YEAR_VALUE = 2026
 
 def _norm_domain(value) -> str:
     if value is None:
@@ -221,11 +221,16 @@ def clean_email_optin(value) -> str | None:
     return None
 
 
-def asset_download_parts(capture_date_mmddyyyy: str) -> tuple[str, str]:
-    """(2-digit day, full month name) from an already mm/dd/yyyy-formatted
-    Capture Date string."""
-    parsed = datetime.datetime.strptime(capture_date_mmddyyyy, "%m/%d/%Y")
-    return f"{parsed.day:02d}", parsed.strftime("%B")
+def asset_download_parts(capture_date) -> tuple[int, str]:
+    """(day-of-month as a number, full month name) from a Capture Date
+    value — either an already mm/dd/yyyy-formatted string, or a real
+    date/datetime object. Returned as a number (not zero-padded text) so
+    Excel stores and filters it as a number rather than text."""
+    parsed = (
+        datetime.datetime.strptime(capture_date, "%m/%d/%Y")
+        if isinstance(capture_date, str) else capture_date
+    )
+    return parsed.day, parsed.strftime("%B")
 
 
 def format_phone(value) -> str:
@@ -403,6 +408,10 @@ def apply_complex_account_rules(
 
     capture_date_ok = pd.Series(True, index=df.index)
     if CAPTURE_DATE_COLUMN in df.columns:
+        # A string-typed column (e.g. pandas' pyarrow-backed "str" dtype)
+        # rejects assigning a real date object cell-by-cell below — widen it
+        # to plain object dtype first so it can hold dates.
+        df[CAPTURE_DATE_COLUMN] = df[CAPTURE_DATE_COLUMN].astype(object)
         for idx, row in df.iterrows():
             formatted = reformat_capture_date(row.get(CAPTURE_DATE_COLUMN))
             if formatted is None:
@@ -412,7 +421,9 @@ def apply_complex_account_rules(
                 ))
                 capture_date_ok[idx] = False
             else:
-                df.at[idx, CAPTURE_DATE_COLUMN] = formatted
+                # Store a real date, not text — so Excel writes/filters it as
+                # an actual date instead of flagging "Number Stored as Text".
+                df.at[idx, CAPTURE_DATE_COLUMN] = datetime.datetime.strptime(formatted, "%m/%d/%Y").date()
 
     if EMAIL_OPTIN_COLUMN in df.columns:
         for idx, row in df.iterrows():
@@ -426,6 +437,10 @@ def apply_complex_account_rules(
                 df.at[idx, EMAIL_OPTIN_COLUMN] = cleaned
 
     if CAPTURE_DATE_COLUMN in df.columns and DOWNLOAD_DAY_COLUMN in df.columns:
+        # Same string-dtype widening as Capture Date above — day/year are
+        # real numbers now, not zero-padded text, so Excel doesn't flag them.
+        df[DOWNLOAD_DAY_COLUMN] = df[DOWNLOAD_DAY_COLUMN].astype(object)
+        df[DOWNLOAD_YEAR_COLUMN] = df[DOWNLOAD_YEAR_COLUMN].astype(object)
         for idx, row in df.iterrows():
             if not capture_date_ok[idx]:
                 continue

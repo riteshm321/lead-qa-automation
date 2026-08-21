@@ -391,7 +391,10 @@ if "run_result" in st.session_state:
         backup_path = backup_file(profile.accumulated_report_path)
         st.info(f"Backed up Accumulated Report to {backup_path}")
 
-        run_date = datetime.date.today().strftime("%d-%b-%y")
+        # A real date, not text — so Excel stores/filters it as a date. The
+        # dd-mmm-yy display comes from the cell's number format (set in
+        # append_leads), not from pre-formatting this into a string.
+        run_date = datetime.date.today()
         unmatched_headers: set[str] = set()
         if not valid_leads_df.empty:
             unmatched_headers.update(append_leads(
