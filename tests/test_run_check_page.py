@@ -7,6 +7,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_jira_settings
+from core.jira_client import JiraError
 from core.models import ClientProfile, FieldMapping, DuplicateConfig, LeadTemplateTab, ComplexAccountConfig
 from core.pipeline import PipelineResult, run_pipeline
 from core.profile_store import save_profile
@@ -238,6 +239,113 @@ def test_post_summary_to_jira_after_finalize(tmp_path, monkeypatch):
     assert any(mark["type"] == "link" for mark in all_marks)
 
     # Session state cleaned up so the prompt disappears after a successful post.
+    assert "last_finalized_summary" not in at.session_state
+
+
+def test_jira_post_uploads_provided_attachment(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    save_jira_settings("https://example.atlassian.net", "me@example.com", "token123")
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        duplicate=DuplicateConfig(enabled=True), jira_ticket_key="PROJ-1234",
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    # Simulate a file already selected via st.file_uploader (AppTest can't
+    # drive a real file upload — see the established limitation noted
+    # elsewhere in this suite) by pre-seeding what the uploader branch
+    # writes into session_state.
+    at.session_state["jira_attachment_bytes"] = b"fake-file-bytes"
+    at.session_state["jira_attachment_name"] = "notes.txt"
+
+    with patch("core.jira_client.post_comment_body") as mock_post_comment, \
+         patch("core.jira_client.upload_attachment") as mock_upload:
+        post_button = next(b for b in at.button if b.key == "jira_post_button")
+        post_button.click().run()
+        assert not at.exception
+
+    mock_post_comment.assert_called_once()
+    mock_upload.assert_called_once()
+    assert mock_upload.call_args[0][4] == "notes.txt"
+    assert mock_upload.call_args[0][5] == b"fake-file-bytes"
+    assert "jira_attachment_bytes" not in at.session_state
+
+
+def test_jira_post_reports_attachment_failure_without_blocking_comment(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    save_jira_settings("https://example.atlassian.net", "me@example.com", "token123")
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        duplicate=DuplicateConfig(enabled=True), jira_ticket_key="PROJ-1234",
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    at.session_state["jira_attachment_bytes"] = b"fake-file-bytes"
+    at.session_state["jira_attachment_name"] = "notes.txt"
+
+    with patch("core.jira_client.post_comment_body") as mock_post_comment, \
+         patch("core.jira_client.upload_attachment", side_effect=JiraError("boom")):
+        post_button = next(b for b in at.button if b.key == "jira_post_button")
+        post_button.click().run()
+        assert not at.exception
+
+    mock_post_comment.assert_called_once()
+    assert any("boom" in e.value for e in at.error)
+    # The comment succeeded, so its success message must still show, and
+    # last_finalized_summary must stay put so the retry button can appear.
+    assert any("Posted to PROJ-1234" in s.value for s in at.success)
+    assert "last_finalized_summary" in at.session_state
+
+    # Retrying must not repost the comment — only the failed attachment.
+    with patch("core.jira_client.post_comment_body") as mock_post_comment_retry, \
+         patch("core.jira_client.upload_attachment") as mock_upload_retry:
+        retry_button = next(b for b in at.button if b.key == "jira_post_button")
+        assert "Retry failed attachment" in retry_button.label
+        retry_button.click().run()
+        assert not at.exception
+
+    mock_post_comment_retry.assert_not_called()
+    mock_upload_retry.assert_called_once()
     assert "last_finalized_summary" not in at.session_state
 
 

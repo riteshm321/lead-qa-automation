@@ -1,4 +1,5 @@
 # pages/2_Run_Check.py
+import base64
 import datetime
 import os
 import shutil
@@ -24,6 +25,7 @@ from core import jira_client
 from core.jira_client import JiraError
 from core.matching import load_alias_groups, add_alias_pair
 from core.models import FieldMapping
+from core.paste_component import paste_screenshot
 from core.pipeline import run_pipeline, apply_refund_overrides
 from core.profile_store import list_profile_names, load_profile, save_profile
 import requests
@@ -580,6 +582,14 @@ if "run_result" in st.session_state:
         except Exception as exc:
             render_error(exc)
 
+_just_posted_ticket = st.session_state.pop("jira_last_posted_ticket", None)
+if _just_posted_ticket:
+    # A plain session_state flag, not st.success() directly at post time —
+    # the post handler below calls st.rerun() right after posting (so a
+    # retry-only click never re-posts the comment), and Streamlit discards
+    # anything shown just before a rerun before the user ever sees it.
+    st.success(f"Posted to {_just_posted_ticket}.")
+
 _pending_summary = st.session_state.get("last_finalized_summary")
 if _pending_summary and _pending_summary["client_name"] == client_name:
     st.divider()
@@ -636,29 +646,106 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
 
     st.text_area("Closing message", "Thanks", key="jira_comment_closing", height=60)
 
-    if st.button(f"📋 Post summary to {_pending_summary['ticket_key']}", key="jira_post_button"):
+    st.caption("Optional attachments (uploaded after the comment posts):")
+    _attachment_file = st.file_uploader("Attach a file", key="jira_attachment_upload")
+    if _attachment_file is not None:
+        st.session_state["jira_attachment_bytes"] = _attachment_file.getvalue()
+        st.session_state["jira_attachment_name"] = _attachment_file.name
+
+    st.caption("Paste a screenshot (e.g. of the Pacing Overview table) — click the box, then press Ctrl+V:")
+    _pasted_data_url = paste_screenshot(key="jira_paste_screenshot")
+    if _pasted_data_url is not None:
+        st.session_state["jira_pasted_screenshot"] = _pasted_data_url
+    if st.session_state.get("jira_pasted_screenshot"):
+        st.image(st.session_state["jira_pasted_screenshot"], width=300)
+        if st.button("Clear screenshot"):
+            del st.session_state["jira_pasted_screenshot"]
+            st.rerun()
+
+    # Rendered from session_state (not just inline in the click handler
+    # below) so a failed attachment stays visible across reruns — Streamlit
+    # discards anything shown right before a rerun, and the widgets above
+    # are already drawn with the pre-click state by the time the click
+    # handler below could react to it, so both the error banner and the
+    # button's own label need to come from state that survives the rerun.
+    _prior_errors = st.session_state.get("jira_attachment_errors", {})
+    for _name, _error in _prior_errors.items():
+        st.error(f"Attachment \"{_name}\" failed to upload: {_error}")
+
+    _has_pending_attachment_errors = bool(_prior_errors)
+    _post_label = (
+        f"🔁 Retry failed attachment(s) for {_pending_summary['ticket_key']}"
+        if _has_pending_attachment_errors
+        else f"📋 Post summary to {_pending_summary['ticket_key']}"
+    )
+
+    if st.button(_post_label, key="jira_post_button"):
         jira_settings = get_jira_settings()
         if not all([jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"]]):
             st.error("Set up your Jira account (site URL, email, API token) in Client Setup first.")
         else:
             try:
-                adf_body = jira_client.build_comment_body(
-                    opening_text=st.session_state["jira_comment_opening"],
-                    closing_text=st.session_state["jira_comment_closing"],
-                    file_links=_selected_links,
-                    table_headers=list(_pacing_df.columns) if _include_pacing and _pacing_df is not None else None,
-                    table_rows=_pacing_df.values.tolist() if _include_pacing and _pacing_df is not None else None,
-                )
-                jira_client.post_comment_body(
-                    jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"],
-                    _pending_summary["ticket_key"], adf_body,
-                )
-                st.success(f"Posted to {_pending_summary['ticket_key']}.")
-                del st.session_state["last_finalized_summary"]
+                if not _has_pending_attachment_errors:
+                    adf_body = jira_client.build_comment_body(
+                        opening_text=st.session_state["jira_comment_opening"],
+                        closing_text=st.session_state["jira_comment_closing"],
+                        file_links=_selected_links,
+                        table_headers=list(_pacing_df.columns) if _include_pacing and _pacing_df is not None else None,
+                        table_rows=_pacing_df.values.tolist() if _include_pacing and _pacing_df is not None else None,
+                    )
+                    jira_client.post_comment_body(
+                        jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"],
+                        _pending_summary["ticket_key"], adf_body,
+                    )
+
+                # Only an attachment that failed last time (or, on a fresh
+                # post, any attachment provided at all) gets (re-)uploaded —
+                # never repost the comment itself on a retry.
+                attachment_errors = {}
+
+                _file_bytes = st.session_state.get("jira_attachment_bytes")
+                _file_name = st.session_state.get("jira_attachment_name")
+                if _file_bytes is not None and (not _has_pending_attachment_errors or _file_name in _prior_errors):
+                    try:
+                        jira_client.upload_attachment(
+                            jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"],
+                            _pending_summary["ticket_key"], _file_name, _file_bytes,
+                        )
+                    except JiraError as exc:
+                        attachment_errors[_file_name] = str(exc)
+
+                _screenshot_data_url = st.session_state.get("jira_pasted_screenshot")
+                _screenshot_name = "Pacing_Overview_Screenshot.png"
+                if _screenshot_data_url is not None and (
+                        not _has_pending_attachment_errors or _screenshot_name in _prior_errors):
+                    try:
+                        _screenshot_bytes = base64.b64decode(_screenshot_data_url.split(",", 1)[1])
+                        jira_client.upload_attachment(
+                            jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"],
+                            _pending_summary["ticket_key"], _screenshot_name, _screenshot_bytes,
+                        )
+                    except JiraError as exc:
+                        attachment_errors[_screenshot_name] = str(exc)
+
+                if attachment_errors:
+                    st.session_state["jira_attachment_errors"] = attachment_errors
+                else:
+                    st.session_state.pop("jira_attachment_errors", None)
+                    st.session_state.pop("jira_attachment_bytes", None)
+                    st.session_state.pop("jira_attachment_name", None)
+                    st.session_state.pop("jira_pasted_screenshot", None)
+                    del st.session_state["last_finalized_summary"]
+                if not _has_pending_attachment_errors:
+                    st.session_state["jira_last_posted_ticket"] = _pending_summary["ticket_key"]
+                st.rerun()
             except JiraError as exc:
                 st.error(f"Jira rejected the request: {exc}")
             except requests.RequestException as exc:
                 st.error(f"Couldn't reach Jira: {exc}")
     if st.button("Dismiss", key="jira_dismiss_button"):
         del st.session_state["last_finalized_summary"]
+        st.session_state.pop("jira_attachment_errors", None)
+        st.session_state.pop("jira_attachment_bytes", None)
+        st.session_state.pop("jira_attachment_name", None)
+        st.session_state.pop("jira_pasted_screenshot", None)
         st.rerun()
