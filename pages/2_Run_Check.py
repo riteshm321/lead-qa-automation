@@ -1,5 +1,4 @@
 # pages/2_Run_Check.py
-import base64
 import datetime
 import os
 import shutil
@@ -25,7 +24,6 @@ from core import jira_client
 from core.jira_client import JiraError
 from core.matching import load_alias_groups, add_alias_pair
 from core.models import FieldMapping
-from core.paste_component import paste_screenshot
 from core.pipeline import run_pipeline, apply_refund_overrides
 from core.profile_store import list_profile_names, load_profile, save_profile
 import requests
@@ -646,21 +644,11 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
 
     st.text_area("Closing message", "Thanks", key="jira_comment_closing", height=60)
 
-    st.caption("Optional attachments (uploaded after the comment posts):")
+    st.caption("Optional attachment (uploaded after the comment posts):")
     _attachment_file = st.file_uploader("Attach a file", key="jira_attachment_upload")
     if _attachment_file is not None:
         st.session_state["jira_attachment_bytes"] = _attachment_file.getvalue()
         st.session_state["jira_attachment_name"] = _attachment_file.name
-
-    st.caption("Paste a screenshot (e.g. of the Pacing Overview table) — click the box, then press Ctrl+V:")
-    _pasted_data_url = paste_screenshot(key="jira_paste_screenshot")
-    if _pasted_data_url is not None:
-        st.session_state["jira_pasted_screenshot"] = _pasted_data_url
-    if st.session_state.get("jira_pasted_screenshot"):
-        st.image(st.session_state["jira_pasted_screenshot"], width=300)
-        if st.button("Clear screenshot"):
-            del st.session_state["jira_pasted_screenshot"]
-            st.rerun()
 
     # Rendered from session_state (not just inline in the click handler
     # below) so a failed attachment stays visible across reruns — Streamlit
@@ -714,26 +702,12 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
                     except JiraError as exc:
                         attachment_errors[_file_name] = str(exc)
 
-                _screenshot_data_url = st.session_state.get("jira_pasted_screenshot")
-                _screenshot_name = "Pacing_Overview_Screenshot.png"
-                if _screenshot_data_url is not None and (
-                        not _has_pending_attachment_errors or _screenshot_name in _prior_errors):
-                    try:
-                        _screenshot_bytes = base64.b64decode(_screenshot_data_url.split(",", 1)[1])
-                        jira_client.upload_attachment(
-                            jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"],
-                            _pending_summary["ticket_key"], _screenshot_name, _screenshot_bytes,
-                        )
-                    except JiraError as exc:
-                        attachment_errors[_screenshot_name] = str(exc)
-
                 if attachment_errors:
                     st.session_state["jira_attachment_errors"] = attachment_errors
                 else:
                     st.session_state.pop("jira_attachment_errors", None)
                     st.session_state.pop("jira_attachment_bytes", None)
                     st.session_state.pop("jira_attachment_name", None)
-                    st.session_state.pop("jira_pasted_screenshot", None)
                     del st.session_state["last_finalized_summary"]
                 if not _has_pending_attachment_errors:
                     st.session_state["jira_last_posted_ticket"] = _pending_summary["ticket_key"]
@@ -747,5 +721,4 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
         st.session_state.pop("jira_attachment_errors", None)
         st.session_state.pop("jira_attachment_bytes", None)
         st.session_state.pop("jira_attachment_name", None)
-        st.session_state.pop("jira_pasted_screenshot", None)
         st.rerun()
