@@ -30,6 +30,30 @@ def test_saving_a_jira_ticket_link_normalizes_to_the_bare_key(tmp_path, monkeypa
     assert loaded.jira_ticket_key == "PROJ-9876"
 
 
+def test_client_name_with_path_separator_is_rejected(tmp_path, monkeypatch):
+    # Regression test: the client name becomes a bare "<name>.json" filename
+    # under clients_dir with no sanitizing — a "/" silently created a
+    # nested, orphaned profile file that the client dropdown's flat
+    # directory scan could never show again, and ".." could escape
+    # clients_dir onto an arbitrary path on disk.
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("Acme/Corp").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+
+    save_button = next(b for b in at.button if "Save Client Profile" in b.label)
+    save_button.click().run()
+    assert not at.exception
+
+    assert any("can't contain" in e.value for e in at.error)
+    from core.app_settings import get_clients_dir
+    from core.profile_store import list_profile_names
+    assert list_profile_names(get_clients_dir()) == []
+
+
 def test_lead_template_mapping_reads_from_first_tabs_own_file_when_shared_path_is_blank(tmp_path, monkeypatch):
     # Regression test: with per-CID Lead Template routing, a client can have
     # every tab point at its own separate file and leave the shared "Lead

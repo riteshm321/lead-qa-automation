@@ -194,9 +194,12 @@ editing.
 ## 7. Development — running from source
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 python -m streamlit run Summary.py
 ```
+
+(`requirements-dev.txt` pulls in `requirements.txt` plus `pytest` — the packaged
+exe is built from `requirements.txt` alone, so it never bundles the test framework.)
 
 Run the test suite:
 

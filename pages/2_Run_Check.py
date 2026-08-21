@@ -32,12 +32,17 @@ st.title("▶️ Run Check")
 
 
 @st.cache_data(show_spinner="Loading TAL reference file (large file, first load can take ~15s)...")
-def _cached_tal_index(path: str, _mtime: float):
+def _cached_tal_index(path: str, mtime: float):
+    # mtime must NOT be underscore-prefixed — Streamlit excludes any
+    # parameter named with a leading underscore from the cache key hash,
+    # which would silently defeat the whole point of passing it in (to
+    # invalidate the cache when the file changes on disk mid-session).
     return load_tal_index(path)
 
 
 @st.cache_data(show_spinner="Loading asset specifications...")
-def _cached_asset_specs(path: str, _mtime: float):
+def _cached_asset_specs(path: str, mtime: float):
+    # See _cached_tal_index above — same reasoning for the mtime param name.
     return load_asset_specifications(path)
 
 

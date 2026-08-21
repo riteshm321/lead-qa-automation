@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+import urllib.request
 import webbrowser
 
 from streamlit.web import cli as stcli
@@ -48,7 +49,6 @@ def _chdir_to_app_folder() -> None:
 
 def _open_browser_when_ready(url: str) -> None:
     import time
-    import urllib.request
 
     for _ in range(60):
         try:
@@ -60,18 +60,59 @@ def _open_browser_when_ready(url: str) -> None:
     webbrowser.open(url)
 
 
+def _port_already_serving(url: str) -> bool:
+    # A quick, synchronous check for "is this app (or anything) already
+    # listening here" — done BEFORE starting our own server, so a
+    # double-launch can cleanly reuse the already-running instance's
+    # window instead of racing Streamlit's own bind attempt.
+    try:
+        urllib.request.urlopen(url, timeout=1)
+        return True
+    except Exception:
+        return False
+
+
+def main() -> int:
+    try:
+        _chdir_to_app_folder()
+
+        port = "8501"
+        url = f"http://localhost:{port}"
+
+        if _port_already_serving(url):
+            # Almost certainly our own previous instance, still running —
+            # binding our own server to this port would fail with an
+            # unhandled OSError that kills the whole process (daemon
+            # threads included) before it ever gets a chance to open a
+            # browser tab. Just reuse the existing window instead.
+            webbrowser.open(url)
+            return 0
+
+        threading.Thread(target=_open_browser_when_ready, args=(url,), daemon=True).start()
+
+        sys.argv = [
+            "streamlit", "run", _resource_path("Summary.py"),
+            "--server.port", port,
+            "--server.headless", "true",
+            "--global.developmentMode=false",
+        ]
+        return stcli.main()
+    except Exception:
+        # Anything else that stops the app from starting at all (a
+        # permission error creating the per-user data folder, a corrupted
+        # install, etc.) — print a clear banner ahead of the traceback
+        # (this exe runs with a console window) instead of a bare stack
+        # trace with no context, then report failure so a caller/wrapper
+        # script can detect it.
+        import traceback
+        print("\n" + "=" * 70)
+        print("Lead QA Automation failed to start.")
+        print("If this keeps happening, check Task Manager for a stuck")
+        print("LeadQAAutomation.exe process and end it, then try again.")
+        print("=" * 70 + "\n")
+        traceback.print_exc()
+        return 1
+
+
 if __name__ == "__main__":
-    _chdir_to_app_folder()
-
-    port = "8501"
-    url = f"http://localhost:{port}"
-
-    threading.Thread(target=_open_browser_when_ready, args=(url,), daemon=True).start()
-
-    sys.argv = [
-        "streamlit", "run", _resource_path("Summary.py"),
-        "--server.port", port,
-        "--server.headless", "true",
-        "--global.developmentMode=false",
-    ]
-    sys.exit(stcli.main())
+    sys.exit(main())

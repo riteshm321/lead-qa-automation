@@ -1,5 +1,7 @@
 import streamlit as st
 
+from core.app_logging import get_logger
+
 
 def friendly_error(exc: Exception) -> tuple[str, str]:
     """Return (short message, suggested fix) for a caught exception.
@@ -46,7 +48,17 @@ def friendly_error(exc: Exception) -> tuple[str, str]:
 
 
 def render_error(exc: Exception) -> None:
-    """Show a short, friendly error with a suggested fix when one is known."""
+    """Show a short, friendly error with a suggested fix when one is known.
+
+    The friendly message deliberately hides the raw exception/traceback
+    from the user — but that detail must not simply vanish, or a client
+    who reports "the tool did something wrong" leaves no way to find out
+    what actually happened. Logging it here, at the one place every
+    caught, user-facing error already passes through, means every such
+    error leaves a diagnosable trail in logs/app.log without changing
+    what the user sees.
+    """
+    get_logger().exception("Handled error shown to user: %s", exc, exc_info=exc)
     message, fix = friendly_error(exc)
     if fix:
         st.error(f"⚠️ {message}\n\n**Suggested fix:** {fix}")

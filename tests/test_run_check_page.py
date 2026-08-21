@@ -25,6 +25,45 @@ def _make_accumulated_report(path: str) -> None:
     wb.save(path)
 
 
+def test_cached_loaders_hash_their_mtime_argument():
+    # Regression test for a real, confirmed bug: Streamlit's @st.cache_data
+    # silently EXCLUDES any parameter whose name starts with an underscore
+    # from the cache key hash. _cached_tal_index/_cached_asset_specs pass
+    # os.path.getmtime(path) specifically to bust the cache when the
+    # underlying file changes mid-session — naming that parameter "_mtime"
+    # made Streamlit ignore it entirely, so a file edited and re-saved to
+    # the same path during a running session kept silently serving the
+    # first-loaded (now-stale) data. Verified by parsing the actual page
+    # source (can't import a page module whose filename starts with a
+    # digit) rather than re-deriving the bug in an unrelated toy function.
+    import ast
+
+    with open(_PAGE_PATH, encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=_PAGE_PATH)
+
+    checked_any = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        is_cached = any(
+            (isinstance(d, ast.Call) and getattr(d.func, "attr", None) == "cache_data")
+            or (isinstance(d, ast.Attribute) and d.attr == "cache_data")
+            for d in node.decorator_list
+        )
+        if not is_cached:
+            continue
+        checked_any = True
+        param_names = [a.arg for a in node.args.args]
+        underscored = [p for p in param_names if p.startswith("_")]
+        assert not underscored, (
+            f"@st.cache_data function '{node.name}' has underscore-prefixed param(s) "
+            f"{underscored} — Streamlit excludes these from the cache key, silently "
+            f"breaking any cache-busting argument (e.g. a file's mtime) passed there."
+        )
+
+    assert checked_any, "expected at least one @st.cache_data-decorated function in this page"
+
+
 def test_approved_refund_lead_lands_in_accumulated_tab_not_just_refund(tmp_path, monkeypatch):
     # End-to-end regression test for the "approve a refunded lead as valid"
     # feature: AppTest can't simulate a real file upload, so this pre-seeds

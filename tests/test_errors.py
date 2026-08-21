@@ -1,4 +1,6 @@
-from core.errors import friendly_error
+import logging
+
+from core.errors import friendly_error, render_error
 
 
 def test_friendly_error_file_not_found():
@@ -52,3 +54,19 @@ def test_friendly_error_unrecognized_falls_back_to_raw_text():
     message, fix = friendly_error(exc)
     assert "something unusual happened" in message
     assert fix == ""
+
+
+def test_render_error_logs_the_full_exception(tmp_path, monkeypatch, caplog):
+    # Regression test: render_error() used to convert an exception into a
+    # short friendly message and discard the original entirely — if a user
+    # reported "the tool did something wrong," there was no way to find out
+    # what actually happened. It must now leave a diagnosable trail.
+    monkeypatch.chdir(tmp_path)
+    with caplog.at_level(logging.ERROR, logger="lead_qa_automation"):
+        try:
+            raise ValueError("something specific broke")
+        except ValueError as exc:
+            render_error(exc)
+
+    assert any("something specific broke" in r.message for r in caplog.records)
+    assert any(r.exc_info is not None for r in caplog.records)

@@ -651,8 +651,17 @@ if st.button("💾 Save Client Profile", type="primary"):
 
     _blank_tab_count = sum(1 for t in lead_template_tabs_result if not t.sheet_name)
 
+    _client_name_invalid_chars = set('/\\') & set(client_name)
     if not client_name:
         st.error("Client name is required.")
+    elif _client_name_invalid_chars or ".." in client_name:
+        # The name becomes a bare filename ("<name>.json") under clients_dir
+        # with no further sanitizing — a "/" or "\" silently creates a
+        # nested, orphaned profile that list_profile_names()'s flat scan can
+        # never show again, and ".." can escape clients_dir entirely onto
+        # an arbitrary path on disk.
+        st.error("Client name can't contain a slash, a backslash, or \"..\" — these would break "
+                 "how the profile is saved to disk.")
     elif leadcap_enabled and leadcap_segmented and leadcap_blank_cap_segments:
         st.error("Leadcap segments are missing a cap: " + ", ".join(leadcap_blank_cap_segments) +
                   ". Fill in a cap for every segment before saving (this is required after using "

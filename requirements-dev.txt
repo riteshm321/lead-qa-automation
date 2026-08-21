@@ -1,0 +1,5 @@
+# Test-only dependency — kept separate from requirements.txt so the
+# packaged exe (built from requirements.txt) doesn't bundle the entire
+# pytest framework, which the shipped app never imports or uses at runtime.
+-r requirements.txt
+pytest>=8.0
