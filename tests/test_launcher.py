@@ -47,6 +47,46 @@ def test_main_starts_server_and_browser_thread_when_port_is_free():
     mock_thread_instance.start.assert_called_once()
 
 
+def test_sync_bundled_theme_config_copies_config_to_app_data(tmp_path):
+    # Regression test: Streamlit discovers .streamlit/config.toml relative
+    # to the current working directory, which _chdir_to_app_folder points
+    # at the per-user app-data folder — without copying our bundled theme
+    # config there, the packaged exe silently fell back to Streamlit's own
+    # default theme instead of the app's branded one.
+    bundled_dir = tmp_path / "bundled" / ".streamlit"
+    bundled_dir.mkdir(parents=True)
+    (bundled_dir / "config.toml").write_text("[theme]\nprimaryColor = \"#1C6BFF\"\n", encoding="utf-8")
+
+    app_data = tmp_path / "app_data"
+    app_data.mkdir()
+
+    with patch("launcher._resource_path", side_effect=lambda p: str(tmp_path / "bundled" / p)):
+        launcher._sync_bundled_theme_config(str(app_data))
+
+    dest = app_data / ".streamlit" / "config.toml"
+    assert dest.is_file()
+    assert "#1C6BFF" in dest.read_text(encoding="utf-8")
+
+
+def test_sync_bundled_theme_config_overwrites_a_stale_copy(tmp_path):
+    # Unlike aliases (user-editable, copied only if missing), the theme
+    # config is app-owned — a stale copy from an older build must be
+    # replaced, not preserved, so branding updates actually take effect.
+    bundled_dir = tmp_path / "bundled" / ".streamlit"
+    bundled_dir.mkdir(parents=True)
+    (bundled_dir / "config.toml").write_text("[theme]\nprimaryColor = \"#NEW\"\n", encoding="utf-8")
+
+    app_data = tmp_path / "app_data"
+    dest_dir = app_data / ".streamlit"
+    dest_dir.mkdir(parents=True)
+    (dest_dir / "config.toml").write_text("[theme]\nprimaryColor = \"#OLD\"\n", encoding="utf-8")
+
+    with patch("launcher._resource_path", side_effect=lambda p: str(tmp_path / "bundled" / p)):
+        launcher._sync_bundled_theme_config(str(app_data))
+
+    assert "#NEW" in (dest_dir / "config.toml").read_text(encoding="utf-8")
+
+
 def test_main_reports_failure_instead_of_crashing_on_startup_error():
     # Regression test: an unhandled exception anywhere during startup (e.g.
     # a permission error creating the per-user data folder) used to crash

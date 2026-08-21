@@ -32,6 +32,22 @@ def _bootstrap_bundled_aliases(app_data: str) -> None:
         shutil.copy2(src, dest)
 
 
+def _sync_bundled_theme_config(app_data: str) -> None:
+    # Streamlit discovers .streamlit/config.toml relative to the CURRENT
+    # WORKING DIRECTORY, which the chdir below points at this per-user data
+    # folder instead of the bundled resources — without this, the packaged
+    # exe silently falls back to Streamlit's own default theme instead of
+    # ours. Unlike aliases (user-editable data, copied once), this is
+    # app-owned configuration, so it's always overwritten to pick up
+    # branding changes from a newer build rather than "copy only if missing".
+    src = _resource_path(os.path.join(".streamlit", "config.toml"))
+    if os.path.isfile(src):
+        import shutil
+        dest_dir = os.path.join(app_data, ".streamlit")
+        os.makedirs(dest_dir, exist_ok=True)
+        shutil.copy2(src, os.path.join(dest_dir, "config.toml"))
+
+
 def _chdir_to_app_folder() -> None:
     # So "clients/", "aliases/" (relative paths used elsewhere in the app)
     # resolve to a stable per-user folder, not the PyInstaller-managed exe
@@ -41,6 +57,7 @@ def _chdir_to_app_folder() -> None:
         app_data = _app_data_dir()
         os.makedirs(app_data, exist_ok=True)
         _bootstrap_bundled_aliases(app_data)
+        _sync_bundled_theme_config(app_data)
         os.chdir(app_data)
 
 
