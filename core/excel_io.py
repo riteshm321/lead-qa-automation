@@ -10,6 +10,7 @@ from pathlib import Path
 import openpyxl
 import pandas as pd
 from openpyxl.formula.translate import Translator
+from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 
 from core.models import FieldMapping, LeadTemplateTab
@@ -332,6 +333,16 @@ def _find_last_data_row(ws, first_data_row: int, headers: list) -> int | None:
     return last
 
 
+def _cell_has_fill_color(cell, hex_color: str) -> bool:
+    fill = cell.fill
+    if fill is None or fill.fill_type != "solid":
+        return False
+    rgb = getattr(fill.fgColor, "rgb", None)
+    # openpyxl ARGB strings carry an alpha prefix (e.g. "FFC6E0B4"), so
+    # compare by suffix rather than exact equality.
+    return isinstance(rgb, str) and rgb.upper().endswith(hex_color.upper())
+
+
 _CONTAINMENT_MIN_LEN = 4
 _FUZZY_MATCH_THRESHOLD = 88
 
@@ -419,6 +430,7 @@ def append_leads(
     target_field_mapping: FieldMapping | None = None,
     header_row: int = 1,
     clear_existing: bool = False,
+    highlight_fill: str | None = None,
 ) -> list[str]:
     _original_external_links = _read_external_link_parts(accumulated_path)
 
@@ -527,6 +539,20 @@ def append_leads(
             else:
                 source_col = column_source.get(col_idx)
                 cell.value = lead_row.get(source_col, "") if source_col is not None else None
+
+    if highlight_fill and not leads_df.empty:
+        # Only ever one batch highlighted at a time — clear this same color
+        # from whatever rows existed before this run (an earlier run's
+        # highlight), then apply it fresh to the rows this run just added.
+        for row in range(first_data_row, next_row):
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=row, column=col_idx)
+                if _cell_has_fill_color(cell, highlight_fill):
+                    cell.fill = PatternFill(fill_type=None)
+        new_fill = PatternFill(start_color=highlight_fill, end_color=highlight_fill, fill_type="solid")
+        for row in range(next_row, next_row + len(leads_df)):
+            for col_idx in range(1, len(headers) + 1):
+                ws.cell(row=row, column=col_idx).fill = new_fill
 
     wb.save(accumulated_path)
     wb.close()

@@ -204,8 +204,7 @@ def test_post_summary_to_jira_after_finalize(tmp_path, monkeypatch):
     import datetime as _dt
     opening_box = next(t for t in at.text_area if t.key == "jira_comment_opening")
     assert _dt.date.today().strftime("%d-%m-%y") in opening_box.value
-    assert "1 leads in" in opening_box.value
-    assert "1 valid" in opening_box.value
+    assert "PFB summary for the Lead QA dated" in opening_box.value
     closing_box = next(t for t in at.text_area if t.key == "jira_comment_closing")
     assert closing_box.value == "Thanks"
 

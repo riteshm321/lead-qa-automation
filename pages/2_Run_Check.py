@@ -391,7 +391,7 @@ if "run_result" in st.session_state:
         backup_path = backup_file(profile.accumulated_report_path)
         st.info(f"Backed up Accumulated Report to {backup_path}")
 
-        run_date = datetime.date.today().isoformat()
+        run_date = datetime.date.today().strftime("%d-%b-%y")
         unmatched_headers: set[str] = set()
         if not valid_leads_df.empty:
             unmatched_headers.update(append_leads(
@@ -413,6 +413,11 @@ if "run_result" in st.session_state:
             _tmpl_expected = [v for v in [
                 _tmpl_fm.email, _tmpl_fm.first_name, _tmpl_fm.last_name, _tmpl_fm.company, _tmpl_fm.cid,
             ] if v] if _tmpl_fm else None
+            # Highlight this run's newly added rows in the Lead Report — only
+            # for plain Lead QA clients, never Complex Account, per design.
+            _tmpl_highlight = (
+                "C6E0B4" if profile.client_mode == "Lead QA" and not profile.complex_account.enabled else None
+            )
 
             if profile.lead_template_multi_tab:
                 groups, unmatched = route_leads_by_cid(
@@ -429,7 +434,8 @@ if "run_result" in st.session_state:
                         _tmpl_file_path, sheet_name,
                         tab_leads, profile.field_mapping, run_date,
                         target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
-                        clear_existing=profile.lead_template_clear_existing))
+                        clear_existing=profile.lead_template_clear_existing,
+                        highlight_fill=_tmpl_highlight))
                     _tmpl_files_used.add(_tmpl_file_path)
                     lead_template_links_used[_tmpl_file_path] = _tab_link_by_file.get(
                         _tmpl_file_path, profile.lead_template_link)
@@ -448,7 +454,8 @@ if "run_result" in st.session_state:
                     profile.lead_template_path, profile.lead_template_sheet_name,
                     valid_leads_df, profile.field_mapping, run_date,
                     target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
-                    clear_existing=profile.lead_template_clear_existing))
+                    clear_existing=profile.lead_template_clear_existing,
+                    highlight_fill=_tmpl_highlight))
                 st.info(f"Valid leads also appended to Lead Template at {profile.lead_template_path}")
                 lead_template_links_used[profile.lead_template_path] = profile.lead_template_link
 
@@ -573,14 +580,11 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
     st.subheader("Post to Jira")
     st.caption("Nothing is sent until you click Post below — review (and edit) everything first.")
 
-    _greeting = f"Hi {_pending_summary['reporter_name']}" if _pending_summary["reporter_name"] else "Hi"
+    _greeting = f"Hi {_pending_summary['reporter_name']}," if _pending_summary["reporter_name"] else "Hi,"
     _default_opening = (
         f"{_greeting}\n"
-        f"PFB summary for the leads uploaded/processed dated {_pending_summary['run_date_display']}. "
-        f"Also, pfb the links for the relevant files.\n"
-        f"\n"
-        f"{_pending_summary['leads_in']} leads in → {_pending_summary['valid']} valid, "
-        f"{_pending_summary['refund']} refunded."
+        f"PFB summary for the Lead QA dated {_pending_summary['run_date_display']}. "
+        f"Also, PFB the links for the relevant files."
     )
     st.text_area("Opening message", _default_opening, key="jira_comment_opening", height=140)
 

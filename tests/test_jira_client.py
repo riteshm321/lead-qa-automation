@@ -179,7 +179,7 @@ def test_build_comment_body_table_truncates_long_cell_text():
     data_row = table_node["content"][1]
     campaign_text = data_row["content"][1]["content"][0]["content"][0]["text"]
     assert campaign_text.endswith("…")
-    assert len(campaign_text) == 30
+    assert len(campaign_text) == 20
     assert campaign_text != long_name
 
     # Short values must be left completely untouched.

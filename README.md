@@ -98,6 +98,11 @@ When mode is **Lead QA**, configure:
     formatting, which is reused for the new rows) before pasting this run's leads.
   - The Lead Template's header row doesn't have to be row 1 — the tool scans the
     first 20 rows for one that looks like a real header row.
+  - For a plain **Lead QA** client (not a Complex Account), every row this run
+    added to the Lead Template is highlighted in light green (`#C6E0B4`) so the
+    newest batch stands out — any highlight left over from an earlier run is
+    cleared first, so only the latest batch is ever colored. The Accumulated
+    Report is never highlighted.
 
 ### 3.3 Leadcap, Exclusion, TAL, Suppression, Dedupe & Duplicate tabs
 
@@ -287,8 +292,9 @@ with a timestamp. If something goes wrong, restore from there.
 After Finalize, if the client has a **Jira ticket key** set (Client Setup → Basics),
 a "Post summary to Jira" prompt appears, pre-filled and ready to review:
 
-- **Opening message** (editable) — a "Hi `<reporter name>`" greeting (if you set one),
-  the run date, and the leads-in/valid/refunded counts.
+- **Opening message** (editable) — `Hi <reporter name>,` (or just `Hi,` if none is
+  set) followed by `PFB summary for the Lead QA dated <date>. Also, PFB the links for
+  the relevant files.`
 - **File links** — checkboxes to include the Accumulated Report and (for
   "Lead QA" clients with a Lead Template configured) the Lead Report as clickable
   links in the comment. If a SharePoint link is configured for that file (Client
@@ -310,6 +316,11 @@ a "Post summary to Jira" prompt appears, pre-filled and ready to review:
     be installed** on this machine; if it isn't (or the attempt fails), the
     preview falls back to the file's last-saved values with an on-screen
     warning, rather than blocking the Jira post entirely.
+  - A free-text cell over 20 characters (e.g. a long Campaign Segment name) is
+    truncated with `…` so every row stays the same height. **Note:** Jira's ADF
+    comment format has no way to shrink a table's font size via the API — column
+    widths and this truncation are the only levers available to keep a wide,
+    growing table compact.
 - **Closing message** (editable) — defaults to "Thanks".
 
 Since not every run is a QA task — some are plain uploads — nothing here is

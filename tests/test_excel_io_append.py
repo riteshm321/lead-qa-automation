@@ -200,6 +200,71 @@ def test_append_leads_clear_existing_removes_old_rows_but_keeps_formatting(tmp_p
     assert ws.cell(row=2, column=1).font.color.rgb == "FF00FF00"
 
 
+def test_append_leads_highlight_fill_colors_only_the_new_rows(tmp_path):
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company"])
+    template.append([100, "old@x.com", "Old", "Lead", "X"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y"},
+    ])
+
+    append_leads(path, "Report", leads_df, _field_mapping(), run_date="2026-08-08", highlight_fill="C6E0B4")
+
+    ws = openpyxl.load_workbook(path)["Report"]
+    assert ws.cell(row=3, column=1).fill.fgColor.rgb == "00C6E0B4"
+    # The pre-existing row must not have been touched.
+    assert ws.cell(row=2, column=1).fill.fill_type is None
+
+
+def test_append_leads_highlight_fill_clears_previous_run_highlight(tmp_path):
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company"])
+    wb.save(path)
+
+    # Simulate an earlier run that highlighted its own new row (row 2).
+    highlighted_previously = pd.DataFrame([
+        {"CID": 100, "emailaddress": "prev@x.com", "firstname": "Prev", "lastname": "Lead", "company": "X"},
+    ])
+    append_leads(path, "Report", highlighted_previously, _field_mapping(), run_date="2026-08-07",
+                 highlight_fill="C6E0B4")
+
+    new_leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y"},
+    ])
+    append_leads(path, "Report", new_leads_df, _field_mapping(), run_date="2026-08-08", highlight_fill="C6E0B4")
+
+    ws = openpyxl.load_workbook(path)["Report"]
+    # Row 2 was highlighted by the first call — the second call must clear it.
+    assert ws.cell(row=2, column=1).fill.fill_type is None
+    # Row 3 (this run's new lead) is now the one highlighted.
+    assert ws.cell(row=3, column=1).fill.fgColor.rgb == "00C6E0B4"
+
+
+def test_append_leads_without_highlight_fill_leaves_fill_untouched(tmp_path):
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y"},
+    ])
+    append_leads(path, "Report", leads_df, _field_mapping(), run_date="2026-08-08")
+
+    ws = openpyxl.load_workbook(path)["Report"]
+    assert ws.cell(row=2, column=1).fill.fill_type is None
+
+
 def test_append_leads_clear_existing_on_empty_sheet_is_a_no_op(tmp_path):
     path = str(tmp_path / "lead_report.xlsx")
     wb = openpyxl.Workbook()

@@ -105,7 +105,7 @@ def _estimate_column_widths(headers: list[str], rows: list[list]) -> list[int]:
     return widths
 
 
-_MAX_CELL_TEXT_LENGTH = 30
+_MAX_CELL_TEXT_LENGTH = 20
 
 
 def _truncate_value(value):
