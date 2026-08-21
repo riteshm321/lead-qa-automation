@@ -155,8 +155,11 @@ if profile.leadcap.enabled:
 
 complex_it_files = []
 complex_pbs_files = []
-complex_it_file_cids: dict[str, str] = {}
-complex_pbs_file_cids: dict[str, str] = {}
+# Keyed by position, not filename — the uploader allows two files with the
+# identical name (e.g. the same export downloaded twice for different
+# CIDs), which would otherwise collide on both the widget key and the dict.
+complex_it_file_cids: dict[int, str] = {}
+complex_pbs_file_cids: dict[int, str] = {}
 if profile.complex_account.enabled:
     st.subheader("Complex Account: Installed Technologies & Predictive Buying Stage")
     st.caption("Upload this run's per-CID reference files, then pick which CID each one is for — "
@@ -170,16 +173,16 @@ if profile.complex_account.enabled:
     complex_it_files = st.file_uploader(
         "Installed Technologies files", type=["csv"], accept_multiple_files=True,
         key=f"complex_it_files_{_upload_key_suffix}") or []
-    for _f in complex_it_files:
-        complex_it_file_cids[_f.name] = st.selectbox(
-            f"CID for \"{_f.name}\"", _cid_options, key=f"complex_it_cid_{_upload_key_suffix}_{_f.name}")
+    for _i, _f in enumerate(complex_it_files):
+        complex_it_file_cids[_i] = st.selectbox(
+            f"CID for \"{_f.name}\"", _cid_options, key=f"complex_it_cid_{_upload_key_suffix}_{_i}")
 
     complex_pbs_files = st.file_uploader(
         "Predictive Buying Stage files", type=["csv"], accept_multiple_files=True,
         key=f"complex_pbs_files_{_upload_key_suffix}") or []
-    for _f in complex_pbs_files:
-        complex_pbs_file_cids[_f.name] = st.selectbox(
-            f"CID for \"{_f.name}\"", _cid_options, key=f"complex_pbs_cid_{_upload_key_suffix}_{_f.name}")
+    for _i, _f in enumerate(complex_pbs_files):
+        complex_pbs_file_cids[_i] = st.selectbox(
+            f"CID for \"{_f.name}\"", _cid_options, key=f"complex_pbs_cid_{_upload_key_suffix}_{_i}")
 
 if st.button("Run Check") and new_leads_file:
     if not mapping_valid:
@@ -505,8 +508,8 @@ if "run_result" in st.session_state:
                         profile.complex_account.tal_path, os.path.getmtime(profile.complex_account.tal_path))
 
                 cid_it_maps: dict[str, dict[str, str]] = {}
-                for f in complex_it_files:
-                    cid = complex_it_file_cids.get(f.name)
+                for i, f in enumerate(complex_it_files):
+                    cid = complex_it_file_cids.get(i)
                     if cid and cid in _leadfile_cids:
                         f.seek(0)
                         # A domain can appear on more than one row, one
@@ -515,8 +518,8 @@ if "run_result" in st.session_state:
                         cid_it_maps[cid] = load_domain_value_map(
                             f, "Domain", "Installed Technologies", aggregate=True)
                 cid_pbs_maps: dict[str, dict[str, str]] = {}
-                for f in complex_pbs_files:
-                    cid = complex_pbs_file_cids.get(f.name)
+                for i, f in enumerate(complex_pbs_files):
+                    cid = complex_pbs_file_cids.get(i)
                     if cid and cid in _leadfile_cids:
                         f.seek(0)
                         # "No Active Signals" means there's nothing to
