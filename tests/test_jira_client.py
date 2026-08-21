@@ -4,7 +4,7 @@ import pytest
 
 from core.jira_client import (
     post_comment, post_comment_body, JiraError, _text_to_adf, extract_ticket_key,
-    build_comment_body, path_to_link_href,
+    build_comment_body, path_to_link_href, upload_attachment,
 )
 
 
@@ -211,3 +211,42 @@ def test_post_comment_body_sends_prebuilt_adf_unmodified():
         post_comment_body("https://example.atlassian.net", "me@example.com", "token123", "PROJ-1", adf)
 
     assert mock_post.call_args[1]["json"]["body"] is adf
+
+
+def test_upload_attachment_posts_multipart_with_required_header():
+    mock_response = MagicMock(status_code=200, text="")
+    with patch("core.jira_client.requests.post", return_value=mock_response) as mock_post:
+        upload_attachment(
+            "https://example.atlassian.net", "me@example.com", "token123",
+            "PROJ-1", "screenshot.png", b"fake-image-bytes",
+        )
+
+    args, kwargs = mock_post.call_args
+    assert args[0] == "https://example.atlassian.net/rest/api/3/issue/PROJ-1/attachments"
+    assert kwargs["auth"] == ("me@example.com", "token123")
+    assert kwargs["headers"]["X-Atlassian-Token"] == "no-check"
+    assert kwargs["files"]["file"] == ("screenshot.png", b"fake-image-bytes")
+
+
+def test_upload_attachment_strips_trailing_slash_from_base_url():
+    mock_response = MagicMock(status_code=201, text="")
+    with patch("core.jira_client.requests.post", return_value=mock_response) as mock_post:
+        upload_attachment(
+            "https://example.atlassian.net/", "me@example.com", "token123",
+            "PROJ-1", "f.txt", b"data",
+        )
+
+    assert mock_post.call_args[0][0] == "https://example.atlassian.net/rest/api/3/issue/PROJ-1/attachments"
+
+
+def test_upload_attachment_raises_jira_error_on_non_2xx():
+    mock_response = MagicMock(status_code=413, text="Attachment too large")
+    with patch("core.jira_client.requests.post", return_value=mock_response):
+        with pytest.raises(JiraError) as exc_info:
+            upload_attachment(
+                "https://example.atlassian.net", "me@example.com", "token123",
+                "PROJ-1", "big.png", b"data",
+            )
+
+    assert "413" in str(exc_info.value)
+    assert "PROJ-1" in str(exc_info.value)

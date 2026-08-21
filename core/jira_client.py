@@ -182,6 +182,29 @@ def _post(base_url: str, email: str, api_token: str, ticket_key: str, adf_body: 
         raise JiraError(f"Jira returned {response.status_code} for {ticket_key}: {response.text[:300]}")
 
 
+def upload_attachment(
+    base_url: str, email: str, api_token: str, ticket_key: str,
+    filename: str, file_bytes: bytes,
+) -> None:
+    """Uploads file_bytes as a named attachment on a Jira Cloud issue.
+
+    A separate endpoint from the comment APIs above — Jira requires the
+    X-Atlassian-Token: no-check header here (its CSRF check otherwise
+    rejects the multipart request) and no JSON Content-Type, since requests
+    sets the multipart boundary itself from the `files` argument.
+    """
+    url = f"{base_url.rstrip('/')}/rest/api/3/issue/{ticket_key}/attachments"
+    response = requests.post(
+        url,
+        files={"file": (filename, file_bytes)},
+        auth=(email, api_token),
+        headers={"X-Atlassian-Token": "no-check", "Accept": "application/json"},
+        timeout=30,
+    )
+    if response.status_code not in (200, 201):
+        raise JiraError(f"Jira returned {response.status_code} for {ticket_key}: {response.text[:300]}")
+
+
 def post_comment(base_url: str, email: str, api_token: str, ticket_key: str, comment_text: str) -> None:
     """Post plain comment_text as a new comment on a Jira Cloud issue.
 
