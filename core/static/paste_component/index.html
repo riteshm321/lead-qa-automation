@@ -28,16 +28,22 @@
   // package, no CDN fetch): the frontend announces readiness, may report
   // its own height, and sends a value back to Python via postMessage.
   // See https://docs.streamlit.io/library/components/components-api
+  //
+  // isStreamlitMessage: true is REQUIRED on every message — Streamlit's
+  // ComponentRegistry.onMessageEvent silently drops any postMessage that
+  // doesn't carry this exact flag, before even looking at `type`.
   function sendReady() {
-    window.parent.postMessage({ type: "streamlit:componentReady", apiVersion: 1 }, "*");
+    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
   }
   function setFrameHeight() {
     window.parent.postMessage(
-      { type: "streamlit:setFrameHeight", height: document.body.scrollHeight }, "*"
+      { isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: document.body.scrollHeight }, "*"
     );
   }
   function sendValue(value) {
-    window.parent.postMessage({ type: "streamlit:setComponentValue", value: value, dataType: "json" }, "*");
+    window.parent.postMessage(
+      { isStreamlitMessage: true, type: "streamlit:setComponentValue", value: value, dataType: "json" }, "*"
+    );
   }
 
   const box = document.getElementById("box");
