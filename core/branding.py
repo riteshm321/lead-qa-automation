@@ -20,6 +20,23 @@ def configure_page(page_title: str) -> None:
     """
     st.set_page_config(page_title=page_title, page_icon=_FAVICON_PATH, layout="wide")
     st.logo(_LOGO_PATH, size="large")
+    # The logo's own ink (dark indigo, close to the dark theme's own sidebar
+    # color) has no separate light/reversed variant, so it reads fine on the
+    # light theme's near-white sidebar but nearly vanishes against the dark
+    # theme's own indigo-toned one. A small light backdrop behind it keeps it
+    # legible in both — a standard treatment for a single-ink logo that isn't
+    # dark-mode-safe on its own. Uses stSidebarLogo, Streamlit's own stable
+    # test id for this element, so it isn't tied to generated CSS class names.
+    st.markdown(
+        """<style>
+        [data-testid="stSidebarLogo"] {
+            background-color: #FFFFFF;
+            padding: 6px 10px;
+            border-radius: 8px;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
     st.sidebar.divider()
     with st.sidebar.container(border=True):
         st.markdown("👤 **Ritesh Majumdar**")
