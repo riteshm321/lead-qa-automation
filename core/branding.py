@@ -14,10 +14,14 @@ def configure_page(page_title: str) -> None:
 
     Applies the app's branding consistently everywhere: browser tab
     icon/title, wide layout, the Madison Logic logo above the sidebar nav,
-    and a small developer credit below it. set_page_config() must be the
-    first Streamlit command a script makes, so every page calls this
+    and a small developer credit card below it. set_page_config() must be
+    the first Streamlit command a script makes, so every page calls this
     instead of st.set_page_config directly.
     """
     st.set_page_config(page_title=page_title, page_icon=_FAVICON_PATH, layout="wide")
     st.logo(_LOGO_PATH, size="large")
-    st.sidebar.caption("Built by Ritesh")
+    st.sidebar.divider()
+    with st.sidebar.container(border=True):
+        st.markdown("👤 **Ritesh Majumdar**")
+        st.caption("Sr. Client Reporting Specialist")
+        st.caption("Team: CRS")
