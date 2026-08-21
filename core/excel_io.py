@@ -656,9 +656,14 @@ def read_pacing_overview_table(accumulated_path: str, sheet_name: str = "Pacing 
     than dropped, since it's a real, meaningful summary row in the source
     sheet. The "Pacing" column is formatted as a percentage and date column
     headers are shortened to a plain date, matching how the sheet actually
-    displays them.
+    displays them. A column the sheet itself has hidden (e.g. an old or
+    not-yet-active date the client collapsed to reduce clutter) is skipped
+    — openpyxl reads a hidden column's values same as any other, so without
+    this check the Jira table would show a date the sheet doesn't visibly
+    have. Reading column visibility requires a non-read-only load — that
+    metadata isn't available in read_only mode.
     """
-    wb = openpyxl.load_workbook(accumulated_path, read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(accumulated_path, read_only=False, data_only=True)
     try:
         if sheet_name not in wb.sheetnames:
             raise ValueError(f"'{accumulated_path}' has no sheet named '{sheet_name}'")
@@ -678,7 +683,11 @@ def read_pacing_overview_table(accumulated_path: str, sheet_name: str = "Pacing 
             raise ValueError(f"Could not find a 'CID' column in '{accumulated_path}' [{sheet_name}]")
 
         header_cells = next(ws.iter_rows(min_row=header_row_idx, max_row=header_row_idx))
-        col_indices = [c.column for c in header_cells if c.value is not None and str(c.value).strip() != ""]
+        col_indices = [
+            c.column for c in header_cells
+            if c.value is not None and str(c.value).strip() != ""
+            and not ws.column_dimensions[get_column_letter(c.column)].hidden
+        ]
         headers = [_format_pacing_header(ws.cell(row=header_row_idx, column=c).value) for c in col_indices]
 
         def _row_record(row) -> dict:

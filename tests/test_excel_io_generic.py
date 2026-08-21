@@ -421,6 +421,35 @@ def test_read_pacing_overview_table_formats_date_headers_without_timestamp(tmp_p
     assert list(df.columns) == ["CID", "19-Aug"]
 
 
+def test_read_pacing_overview_table_skips_hidden_date_columns(tmp_path):
+    # Regression test: a date column the sheet itself has hidden (e.g. an
+    # old date the client collapsed to reduce clutter) must not appear in
+    # the Jira table — openpyxl reads a hidden column's values the same as
+    # any visible one, so without an explicit check it would show a date
+    # the sheet doesn't visibly have.
+    import datetime as dt
+
+    from core.excel_io import read_pacing_overview_table
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing Overview"
+    ws["B3"] = "CID"
+    ws["C3"] = dt.datetime(2026, 8, 18)
+    ws["D3"] = dt.datetime(2026, 8, 19)
+    ws["B4"] = "118118"
+    ws["C4"] = 3
+    ws["D4"] = 4
+    ws.column_dimensions["C"].hidden = True
+    wb.save(path)
+
+    df = read_pacing_overview_table(path)
+
+    assert list(df.columns) == ["CID", "19-Aug"]
+    assert df.iloc[0].tolist() == ["118118", 4]
+
+
 def test_read_pacing_overview_table_stops_at_blank_cid_row(tmp_path):
     from core.excel_io import read_pacing_overview_table
 

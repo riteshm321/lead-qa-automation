@@ -321,6 +321,9 @@ a "Post summary to Jira" prompt appears, pre-filled and ready to review:
     comment format has no way to shrink a table's font size via the API — column
     widths and this truncation are the only levers available to keep a wide,
     growing table compact.
+  - A column **hidden** in the sheet itself (e.g. an old date collapsed to
+    reduce clutter) is left out of the posted table — matching what the sheet
+    visibly shows, not just what has a value underneath.
 - **Closing message** (editable) — defaults to "Thanks".
 - **Attachment** (optional) — a file picker to attach one file, uploaded as a real
   Jira attachment after the comment posts. A failed upload is reported without
