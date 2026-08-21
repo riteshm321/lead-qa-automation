@@ -1,13 +1,29 @@
 # Madison Logic brand theme — colors only, no workflow changes.
 # See docs/superpowers/specs/2026-08-21-ui-branding-design.md for the design.
+#
+# No `base` set here deliberately: Streamlit's built-in menu (top-right "⋮")
+# offers Light / Dark / "Use system setting" whenever both [theme.light] and
+# [theme.dark] are defined, and forcing `base` biases that choice instead of
+# leaving it to auto-detect the OS/browser preference by default.
 [theme]
-base = "light"
+font = "sans-serif"
+baseRadius = "medium"
+buttonRadius = "medium"
+
+[theme.light]
 primaryColor = "#1C6BFF"
 backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F6F6FB"
 textColor = "#001B47"
 linkColor = "#1C6BFF"
 borderColor = "#DEE3EF"
-font = "sans-serif"
-baseRadius = "medium"
-buttonRadius = "medium"
+
+[theme.dark]
+# Matches Madison Logic's own dark-section styling (dark CTA / footer
+# treatments use this same navy/indigo pairing).
+primaryColor = "#1C6BFF"
+backgroundColor = "#001B47"
+secondaryBackgroundColor = "#252E80"
+textColor = "#F6F6FB"
+linkColor = "#5B9BFF"
+borderColor = "#3A4570"
