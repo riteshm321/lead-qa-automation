@@ -37,8 +37,11 @@ def configure_page(page_title: str) -> None:
         </style>""",
         unsafe_allow_html=True,
     )
-    # Deliberately quiet — plain captions, no border/bold/icon — so this
-    # reads as a small footer credit, not a prominent UI element.
     st.sidebar.divider()
-    st.sidebar.caption("Ritesh Majumdar  \nSr. Client Reporting Specialist · CRS")
-    st.sidebar.caption("Built by Ritesh Majumdar")
+    with st.sidebar.container(border=True):
+        st.caption("Tool Made By")
+        st.markdown(
+            "👤 **Ritesh Majumdar**  \n"
+            "💼 Sr. Client Reporting Specialist  \n"
+            "👥 Client Reporting Specialist"
+        )
