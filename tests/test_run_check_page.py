@@ -349,7 +349,12 @@ def test_jira_post_reports_attachment_failure_without_blocking_comment(tmp_path,
     ])
     result = PipelineResult(valid_indices=[0], refund_reasons={})
 
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    # This test drives more sequential button-click+rerun cycles than any
+    # other in this file (Finalize, post, retry), which occasionally brushes
+    # up against AppTest's default wait window under momentary system load —
+    # a longer timeout here is slack for the test harness, not a change to
+    # the app's own behavior.
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=30)
     at.session_state["run_new_leads"] = new_leads
     at.session_state["run_result"] = result
     at.session_state["run_result_for"] = "Test Client"

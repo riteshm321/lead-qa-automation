@@ -18,8 +18,10 @@ from core.models import (
     LeadTemplateTab, ComplexAccountConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
+from core.toast import show_pending_toast
 
 configure_page("Client Setup")
+show_pending_toast()
 st.title("Client Setup")
 st.caption("Shared team data location and Jira account credentials moved to the ⚙️ Settings page.")
 
@@ -59,7 +61,7 @@ def _tabs_to_state(tabs: list[LeadTemplateTab]) -> list[dict]:
 
 def _render_lead_template_tabs(template_path: str) -> list[LeadTemplateTab]:
     if not st.session_state["lead_template_tabs"]:
-        st.caption("No tabs configured yet.")
+        st.caption("📭 No tabs configured yet — click **➕ Add Tab** below to create one.")
     if st.button("➕ Add Tab", key="lead_template_tabs_add"):
         st.session_state["lead_template_tabs"].append(
             {"id": str(uuid.uuid4()), "sheet_name": "", "cids": "", "file_path": "", "link": ""})
@@ -129,7 +131,7 @@ def _render_sources_section(
 ) -> list[ReferenceSource]:
     result: list[ReferenceSource] = []
     if not st.session_state[section_key]:
-        st.caption(f"No {label} sources configured yet.")
+        st.caption(f"📭 No {label} sources configured yet — click **➕ Add {label} Source** below to create one.")
     if st.button(f"➕ Add {label} Source", key=f"{section_key}_add"):
         st.session_state[section_key].append({
             "id": str(uuid.uuid4()), "name": "", "file_path": "", "sheet_name": "", "cids": "",
@@ -310,321 +312,328 @@ tab_basics, tab_leadcap, tab_exclusion, tab_tal, tab_suppression, tab_dedupe, ta
 ])
 
 with tab_basics:
-    st.subheader("Reference Files")
-    accumulated_path = _path_input_with_browse(
-        "Accumulated Report path", "accumulated_path_input",
-        profile.accumulated_report_path if profile else "")
-    accumulated_report_link = st.text_input(
-        "Accumulated Report SharePoint link (optional)",
-        value=profile.accumulated_report_link if profile else "",
-        placeholder="e.g. https://madlog.sharepoint.com/:x:/s/.../...",
-        help="Used as the \"Accumulated File\" link when posting a summary to Jira, instead of a local "
-             "file path that only opens on your own machine. Leave blank to fall back to the local path.",
-    )
-    col_acc, col_ref = st.columns(2)
-    with col_acc:
-        accumulated_tab_name = st.text_input("Accumulated tab name",
-                                              value=profile.accumulated_tab_name if profile else "Accumulated")
-    with col_ref:
-        refund_tab_name = st.text_input("Refund tab name",
-                                         value=profile.refund_tab_name if profile else "Refund")
-
-    col_jira_ticket, col_jira_reporter = st.columns(2)
-    with col_jira_ticket:
-        jira_ticket_key = st.text_input(
-            "Jira ticket key or link (optional)", value=profile.jira_ticket_key if profile else "",
-            placeholder="e.g. PROJ-1234 or https://yourteam.atlassian.net/browse/PROJ-1234",
-            help="Paste either the ticket key or the full link — either works. Enables a \"Post summary "
-                 "to Jira\" button on Run Check after Finalize. Leave blank to skip. The same ticket "
-                 "usually covers a whole campaign — come back here and update it if that ever changes.",
-        )
-    with col_jira_reporter:
-        jira_reporter_name = st.text_input(
-            "Jira reporter's name (optional)", value=profile.jira_reporter_name if profile else "",
-            placeholder="e.g. Jane",
-            help="Used for the \"Hi <name>\" greeting in the posted summary.",
-        )
-
-    accumulated_headers, accumulated_headers_error = _safe_read_template_headers(accumulated_path, accumulated_tab_name)
-
-    # Reset the mapping dropdowns whenever the actual file/tab changes —
-    # a keyed selectbox ignores a fresh `index=` on later reruns and just
-    # keeps showing whatever's already in session_state, so switching files
-    # without this explicit reset would leave stale selections on screen.
-    _acc_file_identity = f"{accumulated_path}::{accumulated_tab_name}"
-    if st.session_state.get("_acc_mapping_for") != _acc_file_identity:
-        st.session_state["_acc_mapping_for"] = _acc_file_identity
-        _acc_fm_match = (
-            profile.accumulated_field_mapping
-            if profile and profile.accumulated_report_path == accumulated_path
-            and profile.accumulated_tab_name == accumulated_tab_name else None
-        )
-        _acc_guess = guess_target_field_mapping(accumulated_headers) if not _acc_fm_match else {}
-        st.session_state["acc_map_email"] = _acc_fm_match.email if _acc_fm_match else _acc_guess.get("email", "")
-        st.session_state["acc_map_first"] = _acc_fm_match.first_name if _acc_fm_match else _acc_guess.get("first_name", "")
-        st.session_state["acc_map_last"] = _acc_fm_match.last_name if _acc_fm_match else _acc_guess.get("last_name", "")
-        st.session_state["acc_map_company"] = _acc_fm_match.company if _acc_fm_match else _acc_guess.get("company", "")
-        st.session_state["acc_map_cid"] = _acc_fm_match.cid if _acc_fm_match else _acc_guess.get("cid", "")
-
-    accumulated_field_mapping_result = None
-    with st.expander("🔗 Map Accumulated Report columns (optional)"):
-        accumulated_field_mapping_result = _render_target_field_mapping(
-            "Accumulated Report", "acc", accumulated_headers)
-        if accumulated_headers_error is not None:
-            st.error(f"Couldn't read '{accumulated_path}' [{accumulated_tab_name}]: {accumulated_headers_error}")
-        elif not accumulated_headers:
-            st.caption("Enter a valid Accumulated Report path and tab name above to map its columns.")
-
-    st.divider()
-    st.subheader("Client Mode")
-    _CLIENT_MODES = ["Lead QA", "Lead QA & Upload"]
-    _mode_default = profile.client_mode if profile and profile.client_mode in _CLIENT_MODES else "Lead QA"
-    client_mode = st.radio("Mode", _CLIENT_MODES, index=_CLIENT_MODES.index(_mode_default), horizontal=True)
-
-    lead_template_path = ""
-    lead_template_link = ""
-    lead_template_sheet_name = ""
-    lead_template_multi_tab = False
-    lead_template_tabs_result: list[LeadTemplateTab] = []
-    lead_template_field_mapping_result = None
-    if client_mode == "Lead QA":
-        lead_template_path = _path_input_with_browse(
-            "Lead Template path", "lead_template_path_input",
-            profile.lead_template_path if profile else "")
-        st.caption("The default/shared Lead Template file. Leave this blank if every CID group below has "
-                   "its own separate file — a shared default isn't required.")
-        lead_template_link = st.text_input(
-            "Lead Template SharePoint link (optional)",
-            value=profile.lead_template_link if profile else "",
+    with st.container(border=True):
+        st.subheader("Reference Files")
+        accumulated_path = _path_input_with_browse(
+            "Accumulated Report path", "accumulated_path_input",
+            profile.accumulated_report_path if profile else "")
+        accumulated_report_link = st.text_input(
+            "Accumulated Report SharePoint link (optional)",
+            value=profile.accumulated_report_link if profile else "",
             placeholder="e.g. https://madlog.sharepoint.com/:x:/s/.../...",
-            help="Used as the \"Lead Report\" link when posting a summary to Jira, instead of a local "
-                 "file path. This is the default for every tab below — a tab with its own file (and its "
-                 "own SharePoint link) can override it individually.",
+            help="Used as the \"Accumulated File\" link when posting a summary to Jira, instead of a local "
+                 "file path that only opens on your own machine. Leave blank to fall back to the local path.",
         )
+        col_acc, col_ref = st.columns(2)
+        with col_acc:
+            accumulated_tab_name = st.text_input("Accumulated tab name",
+                                                  value=profile.accumulated_tab_name if profile else "Accumulated")
+        with col_ref:
+            refund_tab_name = st.text_input("Refund tab name",
+                                             value=profile.refund_tab_name if profile else "Refund")
 
-        lead_template_multi_tab = st.checkbox(
-            "Route different CIDs to different tabs and/or separate files",
-            value=profile.lead_template_multi_tab if profile else False)
-
-        lead_template_clear_existing = st.checkbox(
-            "Clear existing leads before adding new ones",
-            value=profile.lead_template_clear_existing if profile else False,
-            help="On: removes all existing data rows (keeping the header and its formatting, which is "
-                 "reused for the new rows) before pasting this run's leads — for a Lead Report that's "
-                 "re-sent fresh each time rather than accumulated. Off (default): new leads are appended "
-                 "below whatever's already there, like the Accumulated Report.",
-        )
-
-        if lead_template_multi_tab:
-            st.info(
-                "Add one tab below for each group of CIDs. By default a tab writes into the shared Lead "
-                "Template file above, on the sheet you pick for it — set **\"File for this tab\"** only "
-                "when that CID group's leads go into a completely **different workbook** (its own "
-                "SharePoint file), not just a different sheet in the same file. A lead whose CID matches "
-                "no tab is skipped for the Lead Template step (with a warning) — it still goes to the "
-                "Accumulated Report normally."
+        col_jira_ticket, col_jira_reporter = st.columns(2)
+        with col_jira_ticket:
+            jira_ticket_key = st.text_input(
+                "Jira ticket key or link (optional)", value=profile.jira_ticket_key if profile else "",
+                placeholder="e.g. PROJ-1234 or https://yourteam.atlassian.net/browse/PROJ-1234",
+                help="Paste either the ticket key or the full link — either works. Enables a \"Post summary "
+                     "to Jira\" button on Run Check after Finalize. Leave blank to skip. The same ticket "
+                     "usually covers a whole campaign — come back here and update it if that ever changes.",
             )
-            lead_template_tabs_result = _render_lead_template_tabs(lead_template_path)
-            if not lead_template_tabs_result:
-                st.warning("Multi-tab is enabled but no tabs are configured — "
-                           "no leads will be pasted into the Lead Template.")
-            _header_source_sheet = lead_template_tabs_result[0].sheet_name if lead_template_tabs_result else ""
-            # A tab can point at a completely different workbook than the shared
-            # path above — the column-mapping preview must read from whichever
-            # file the first tab will actually write to, not always the shared
-            # default (which can legitimately be left blank).
-            _header_source_path = (
-                (lead_template_tabs_result[0].file_path or lead_template_path)
-                if lead_template_tabs_result else lead_template_path
+        with col_jira_reporter:
+            jira_reporter_name = st.text_input(
+                "Jira reporter's name (optional)", value=profile.jira_reporter_name if profile else "",
+                placeholder="e.g. Jane",
+                help="Used for the \"Hi <name>\" greeting in the posted summary.",
             )
-        else:
-            template_sheet_options: list[str] = []
-            if lead_template_path:
-                try:
-                    template_sheet_options = list_sheet_names(lead_template_path)
-                except Exception as exc:
-                    render_error(exc)
-            if template_sheet_options:
-                default_template_sheet = profile.lead_template_sheet_name if profile else ""
-                template_sheet_idx = (
-                    template_sheet_options.index(default_template_sheet)
-                    if default_template_sheet in template_sheet_options else 0
+
+        accumulated_headers, accumulated_headers_error = _safe_read_template_headers(accumulated_path, accumulated_tab_name)
+
+        # Reset the mapping dropdowns whenever the actual file/tab changes —
+        # a keyed selectbox ignores a fresh `index=` on later reruns and just
+        # keeps showing whatever's already in session_state, so switching files
+        # without this explicit reset would leave stale selections on screen.
+        _acc_file_identity = f"{accumulated_path}::{accumulated_tab_name}"
+        if st.session_state.get("_acc_mapping_for") != _acc_file_identity:
+            st.session_state["_acc_mapping_for"] = _acc_file_identity
+            _acc_fm_match = (
+                profile.accumulated_field_mapping
+                if profile and profile.accumulated_report_path == accumulated_path
+                and profile.accumulated_tab_name == accumulated_tab_name else None
+            )
+            _acc_guess = guess_target_field_mapping(accumulated_headers) if not _acc_fm_match else {}
+            st.session_state["acc_map_email"] = _acc_fm_match.email if _acc_fm_match else _acc_guess.get("email", "")
+            st.session_state["acc_map_first"] = _acc_fm_match.first_name if _acc_fm_match else _acc_guess.get("first_name", "")
+            st.session_state["acc_map_last"] = _acc_fm_match.last_name if _acc_fm_match else _acc_guess.get("last_name", "")
+            st.session_state["acc_map_company"] = _acc_fm_match.company if _acc_fm_match else _acc_guess.get("company", "")
+            st.session_state["acc_map_cid"] = _acc_fm_match.cid if _acc_fm_match else _acc_guess.get("cid", "")
+
+        accumulated_field_mapping_result = None
+        with st.expander("🔗 Map Accumulated Report columns (optional)"):
+            accumulated_field_mapping_result = _render_target_field_mapping(
+                "Accumulated Report", "acc", accumulated_headers)
+            if accumulated_headers_error is not None:
+                st.error(f"Couldn't read '{accumulated_path}' [{accumulated_tab_name}]: {accumulated_headers_error}")
+            elif not accumulated_headers:
+                st.caption("Enter a valid Accumulated Report path and tab name above to map its columns.")
+
+    with st.container(border=True):
+        st.subheader("Client Mode")
+        _CLIENT_MODES = ["Lead QA", "Lead QA & Upload"]
+        _mode_default = profile.client_mode if profile and profile.client_mode in _CLIENT_MODES else "Lead QA"
+        client_mode = st.radio("Mode", _CLIENT_MODES, index=_CLIENT_MODES.index(_mode_default), horizontal=True)
+
+        lead_template_path = ""
+        lead_template_link = ""
+        lead_template_sheet_name = ""
+        lead_template_multi_tab = False
+        lead_template_tabs_result: list[LeadTemplateTab] = []
+        lead_template_field_mapping_result = None
+        if client_mode == "Lead QA":
+            lead_template_path = _path_input_with_browse(
+                "Lead Template path", "lead_template_path_input",
+                profile.lead_template_path if profile else "")
+            st.caption("The default/shared Lead Template file. Leave this blank if every CID group below has "
+                       "its own separate file — a shared default isn't required.")
+            lead_template_link = st.text_input(
+                "Lead Template SharePoint link (optional)",
+                value=profile.lead_template_link if profile else "",
+                placeholder="e.g. https://madlog.sharepoint.com/:x:/s/.../...",
+                help="Used as the \"Lead Report\" link when posting a summary to Jira, instead of a local "
+                     "file path. This is the default for every tab below — a tab with its own file (and its "
+                     "own SharePoint link) can override it individually.",
+            )
+
+            lead_template_multi_tab = st.checkbox(
+                "Route different CIDs to different tabs and/or separate files",
+                value=profile.lead_template_multi_tab if profile else False)
+
+            lead_template_clear_existing = st.checkbox(
+                "Clear existing leads before adding new ones",
+                value=profile.lead_template_clear_existing if profile else False,
+                help="On: removes all existing data rows (keeping the header and its formatting, which is "
+                     "reused for the new rows) before pasting this run's leads — for a Lead Report that's "
+                     "re-sent fresh each time rather than accumulated. Off (default): new leads are appended "
+                     "below whatever's already there, like the Accumulated Report.",
+            )
+
+            if lead_template_multi_tab:
+                st.info(
+                    "Add one tab below for each group of CIDs. By default a tab writes into the shared Lead "
+                    "Template file above, on the sheet you pick for it — set **\"File for this tab\"** only "
+                    "when that CID group's leads go into a completely **different workbook** (its own "
+                    "SharePoint file), not just a different sheet in the same file. A lead whose CID matches "
+                    "no tab is skipped for the Lead Template step (with a warning) — it still goes to the "
+                    "Accumulated Report normally."
                 )
-                lead_template_sheet_name = st.selectbox("Lead Template sheet", template_sheet_options,
-                                                          index=template_sheet_idx, key="lead_template_sheet_select")
+                lead_template_tabs_result = _render_lead_template_tabs(lead_template_path)
+                if not lead_template_tabs_result:
+                    st.warning("Multi-tab is enabled but no tabs are configured — "
+                               "no leads will be pasted into the Lead Template.")
+                _header_source_sheet = lead_template_tabs_result[0].sheet_name if lead_template_tabs_result else ""
+                # A tab can point at a completely different workbook than the shared
+                # path above — the column-mapping preview must read from whichever
+                # file the first tab will actually write to, not always the shared
+                # default (which can legitimately be left blank).
+                _header_source_path = (
+                    (lead_template_tabs_result[0].file_path or lead_template_path)
+                    if lead_template_tabs_result else lead_template_path
+                )
             else:
-                lead_template_sheet_name = st.text_input(
-                    "Lead Template sheet name (enter a valid file path above to pick from a list)",
-                    value=profile.lead_template_sheet_name if profile else "", key="lead_template_sheet_text")
-            _header_source_sheet = lead_template_sheet_name
-            _header_source_path = lead_template_path
+                template_sheet_options: list[str] = []
+                if lead_template_path:
+                    try:
+                        template_sheet_options = list_sheet_names(lead_template_path)
+                    except Exception as exc:
+                        render_error(exc)
+                if template_sheet_options:
+                    default_template_sheet = profile.lead_template_sheet_name if profile else ""
+                    template_sheet_idx = (
+                        template_sheet_options.index(default_template_sheet)
+                        if default_template_sheet in template_sheet_options else 0
+                    )
+                    lead_template_sheet_name = st.selectbox("Lead Template sheet", template_sheet_options,
+                                                              index=template_sheet_idx, key="lead_template_sheet_select")
+                else:
+                    lead_template_sheet_name = st.text_input(
+                        "Lead Template sheet name (enter a valid file path above to pick from a list)",
+                        value=profile.lead_template_sheet_name if profile else "", key="lead_template_sheet_text")
+                _header_source_sheet = lead_template_sheet_name
+                _header_source_path = lead_template_path
 
-        _tmpl_file_identity = f"{_header_source_path}::{_header_source_sheet}"
-        _tmpl_fm_match = (
-            profile.lead_template_field_mapping
-            if profile and profile.lead_template_path == lead_template_path
-            and (profile.lead_template_multi_tab == lead_template_multi_tab)
-            and ((not lead_template_multi_tab and profile.lead_template_sheet_name == lead_template_sheet_name)
-                 or (lead_template_multi_tab and profile.lead_template_tabs
-                     and profile.lead_template_tabs[0].sheet_name == _header_source_sheet))
-            else None
-        )
-        _tmpl_expected_for_detection = [v for v in [
-            _tmpl_fm_match.email, _tmpl_fm_match.first_name, _tmpl_fm_match.last_name,
-            _tmpl_fm_match.company, _tmpl_fm_match.cid,
-        ] if v] if _tmpl_fm_match else None
-        template_headers, template_headers_error = _safe_read_template_headers(
-            _header_source_path, _header_source_sheet, _tmpl_expected_for_detection)
+            _tmpl_file_identity = f"{_header_source_path}::{_header_source_sheet}"
+            _tmpl_fm_match = (
+                profile.lead_template_field_mapping
+                if profile and profile.lead_template_path == lead_template_path
+                and (profile.lead_template_multi_tab == lead_template_multi_tab)
+                and ((not lead_template_multi_tab and profile.lead_template_sheet_name == lead_template_sheet_name)
+                     or (lead_template_multi_tab and profile.lead_template_tabs
+                         and profile.lead_template_tabs[0].sheet_name == _header_source_sheet))
+                else None
+            )
+            _tmpl_expected_for_detection = [v for v in [
+                _tmpl_fm_match.email, _tmpl_fm_match.first_name, _tmpl_fm_match.last_name,
+                _tmpl_fm_match.company, _tmpl_fm_match.cid,
+            ] if v] if _tmpl_fm_match else None
+            template_headers, template_headers_error = _safe_read_template_headers(
+                _header_source_path, _header_source_sheet, _tmpl_expected_for_detection)
 
-        # Same reset requirement as the Accumulated Report mapping above —
-        # a keyed selectbox won't pick up a new default on its own when the
-        # underlying file/sheet changes.
-        if st.session_state.get("_tmpl_mapping_for") != _tmpl_file_identity:
-            st.session_state["_tmpl_mapping_for"] = _tmpl_file_identity
-            _tmpl_guess = guess_target_field_mapping(template_headers) if not _tmpl_fm_match else {}
-            st.session_state["tmpl_map_email"] = _tmpl_fm_match.email if _tmpl_fm_match else _tmpl_guess.get("email", "")
-            st.session_state["tmpl_map_first"] = _tmpl_fm_match.first_name if _tmpl_fm_match else _tmpl_guess.get("first_name", "")
-            st.session_state["tmpl_map_last"] = _tmpl_fm_match.last_name if _tmpl_fm_match else _tmpl_guess.get("last_name", "")
-            st.session_state["tmpl_map_company"] = _tmpl_fm_match.company if _tmpl_fm_match else _tmpl_guess.get("company", "")
-            st.session_state["tmpl_map_cid"] = _tmpl_fm_match.cid if _tmpl_fm_match else _tmpl_guess.get("cid", "")
+            # Same reset requirement as the Accumulated Report mapping above —
+            # a keyed selectbox won't pick up a new default on its own when the
+            # underlying file/sheet changes.
+            if st.session_state.get("_tmpl_mapping_for") != _tmpl_file_identity:
+                st.session_state["_tmpl_mapping_for"] = _tmpl_file_identity
+                _tmpl_guess = guess_target_field_mapping(template_headers) if not _tmpl_fm_match else {}
+                st.session_state["tmpl_map_email"] = _tmpl_fm_match.email if _tmpl_fm_match else _tmpl_guess.get("email", "")
+                st.session_state["tmpl_map_first"] = _tmpl_fm_match.first_name if _tmpl_fm_match else _tmpl_guess.get("first_name", "")
+                st.session_state["tmpl_map_last"] = _tmpl_fm_match.last_name if _tmpl_fm_match else _tmpl_guess.get("last_name", "")
+                st.session_state["tmpl_map_company"] = _tmpl_fm_match.company if _tmpl_fm_match else _tmpl_guess.get("company", "")
+                st.session_state["tmpl_map_cid"] = _tmpl_fm_match.cid if _tmpl_fm_match else _tmpl_guess.get("cid", "")
 
-        with st.expander("🔗 Map Lead Template columns (optional)"):
-            lead_template_field_mapping_result = _render_target_field_mapping(
-                "Lead Template", "tmpl", template_headers)
-            if template_headers_error:
-                render_error(template_headers_error)
-            elif not template_headers:
-                st.caption("Enter a valid Lead Template path and sheet above to map its columns — for "
-                           "multiple tabs/files, this reads from the first tab's own file if it has one, "
-                           "otherwise the shared Lead Template path.")
-            else:
-                st.caption("Header row auto-detected — rows above it (titles, instructions) are left untouched.")
+            with st.expander("🔗 Map Lead Template columns (optional)"):
+                lead_template_field_mapping_result = _render_target_field_mapping(
+                    "Lead Template", "tmpl", template_headers)
+                if template_headers_error:
+                    render_error(template_headers_error)
+                elif not template_headers:
+                    st.caption("Enter a valid Lead Template path and sheet above to map its columns — for "
+                               "multiple tabs/files, this reads from the first tab's own file if it has one, "
+                               "otherwise the shared Lead Template path.")
+                else:
+                    st.caption("Header row auto-detected — rows above it (titles, instructions) are left untouched.")
 
-    st.divider()
-    st.subheader("Duplicate Check")
-    duplicate_enabled = st.checkbox("Enable Duplicate check", value=profile.duplicate.enabled if profile else False)
+    with st.container(border=True):
+        st.subheader("Duplicate Check")
+        duplicate_enabled = st.checkbox("Enable Duplicate check", value=profile.duplicate.enabled if profile else False)
 
 with tab_leadcap:
-    leadcap_enabled = st.checkbox("Enable Leadcap check", value=profile.leadcap.enabled if profile else False)
-    leadcap_check_company = st.checkbox("Also check Leadcap by company name",
-                                         value=profile.leadcap.check_company_name if profile else False)
-    leadcap_segmented = st.checkbox("Leadcap is segmented by CID", value=profile.leadcap.segmented if profile else False)
-    leadcap_flat_cap = None
-    leadcap_segments: list[LeadcapSegment] = []
-    leadcap_blank_cap_segments: list[str] = []
-    if leadcap_enabled and not leadcap_segmented:
-        leadcap_flat_cap = st.number_input("Flat lead cap", min_value=0, step=1,
-                                            value=profile.leadcap.flat_cap if profile and profile.leadcap.flat_cap else 0)
-    if leadcap_enabled and leadcap_segmented:
-        if accumulated_path and st.button("Detect CIDs from Accumulated Report"):
-            try:
-                detected = detect_cids_from_pacing_overview(accumulated_path)
-                st.session_state["leadcap_segments_text"] = "\n".join(f"{cid} - " for cid, _name in detected)
-            except Exception as exc:
-                render_error(exc)
-        st.caption("Define segments as: comma-separated CIDs - cap, one per line. "
-                   "Merge two rows' CIDs together (comma-separated) to share one cap across them. "
-                   "For eg:- 119336 - 3 or 119336, 119337 - 2")
-        default_text = "\n".join(f"{', '.join(s.cids)} - {s.cap}" for s in (profile.leadcap.segments if profile else []))
-        segment_text = st.text_area("Leadcap segments", value=default_text, key="leadcap_segments_text")
-        for line in segment_text.splitlines():
-            if not line.strip():
-                continue
-            cids_str, _, cap_str = line.rpartition("-")
-            cids_str, cap_str = cids_str.strip(), cap_str.strip()
-            cids = [c.strip() for c in cids_str.split(",") if c.strip()]
-            segment_name = ", ".join(cids)
-            if not cap_str:
-                leadcap_blank_cap_segments.append(segment_name or "(unnamed)")
-                leadcap_segments.append(LeadcapSegment(name=segment_name, cids=cids, cap=0))
-            else:
-                leadcap_segments.append(LeadcapSegment(name=segment_name, cids=cids, cap=int(cap_str)))
-    if not leadcap_enabled:
-        st.caption("Leadcap check is disabled.")
+    with st.container(border=True):
+        leadcap_enabled = st.checkbox("Enable Leadcap check", value=profile.leadcap.enabled if profile else False)
+        leadcap_check_company = st.checkbox("Also check Leadcap by company name",
+                                             value=profile.leadcap.check_company_name if profile else False)
+        leadcap_segmented = st.checkbox("Leadcap is segmented by CID", value=profile.leadcap.segmented if profile else False)
+        leadcap_flat_cap = None
+        leadcap_segments: list[LeadcapSegment] = []
+        leadcap_blank_cap_segments: list[str] = []
+        if leadcap_enabled and not leadcap_segmented:
+            leadcap_flat_cap = st.number_input("Flat lead cap", min_value=0, step=1,
+                                                value=profile.leadcap.flat_cap if profile and profile.leadcap.flat_cap else 0)
+        if leadcap_enabled and leadcap_segmented:
+            if accumulated_path and st.button("Detect CIDs from Accumulated Report"):
+                try:
+                    detected = detect_cids_from_pacing_overview(accumulated_path)
+                    st.session_state["leadcap_segments_text"] = "\n".join(f"{cid} - " for cid, _name in detected)
+                except Exception as exc:
+                    render_error(exc)
+            st.caption("Define segments as: comma-separated CIDs - cap, one per line. "
+                       "Merge two rows' CIDs together (comma-separated) to share one cap across them. "
+                       "For eg:- 119336 - 3 or 119336, 119337 - 2")
+            default_text = "\n".join(f"{', '.join(s.cids)} - {s.cap}" for s in (profile.leadcap.segments if profile else []))
+            segment_text = st.text_area("Leadcap segments", value=default_text, key="leadcap_segments_text")
+            for line in segment_text.splitlines():
+                if not line.strip():
+                    continue
+                cids_str, _, cap_str = line.rpartition("-")
+                cids_str, cap_str = cids_str.strip(), cap_str.strip()
+                cids = [c.strip() for c in cids_str.split(",") if c.strip()]
+                segment_name = ", ".join(cids)
+                if not cap_str:
+                    leadcap_blank_cap_segments.append(segment_name or "(unnamed)")
+                    leadcap_segments.append(LeadcapSegment(name=segment_name, cids=cids, cap=0))
+                else:
+                    leadcap_segments.append(LeadcapSegment(name=segment_name, cids=cids, cap=int(cap_str)))
+        if not leadcap_enabled:
+            st.caption("Leadcap check is disabled.")
 
 with tab_exclusion:
-    exclusion_enabled = st.checkbox("Enable Exclusion check", value=profile.exclusion.enabled if profile else False)
-    exclusion_check_company = st.checkbox("Also check Exclusion by company name",
-                                           value=profile.exclusion.check_company_name if profile else False)
-    exclusion_sources_result: list[ReferenceSource] = []
-    if exclusion_enabled:
-        exclusion_sources_result = _render_sources_section(
-            "exclusion_sources", "Exclusion", check_domain=True, check_company=exclusion_check_company, check_email=False)
-        if not exclusion_sources_result:
-            st.warning("Exclusion is enabled but no sources are configured — this check will do nothing.")
-    else:
-        st.caption("Exclusion check is disabled.")
+    with st.container(border=True):
+        exclusion_enabled = st.checkbox("Enable Exclusion check", value=profile.exclusion.enabled if profile else False)
+        exclusion_check_company = st.checkbox("Also check Exclusion by company name",
+                                               value=profile.exclusion.check_company_name if profile else False)
+        exclusion_sources_result: list[ReferenceSource] = []
+        if exclusion_enabled:
+            exclusion_sources_result = _render_sources_section(
+                "exclusion_sources", "Exclusion", check_domain=True, check_company=exclusion_check_company, check_email=False)
+            if not exclusion_sources_result:
+                st.warning("Exclusion is enabled but no sources are configured — this check will do nothing.")
+        else:
+            st.caption("Exclusion check is disabled.")
 
 with tab_tal:
-    tal_enabled = st.checkbox("Enable TAL check", value=profile.tal.enabled if profile else False)
-    tal_check_company = st.checkbox("Also check TAL by company name", value=profile.tal.check_company_name if profile else False)
-    tal_sources_result: list[ReferenceSource] = []
-    if tal_enabled:
-        tal_sources_result = _render_sources_section(
-            "tal_sources", "TAL", check_domain=True, check_company=tal_check_company, check_email=False)
-        if not tal_sources_result:
-            st.warning("TAL is enabled but no sources are configured — this check will do nothing.")
-    else:
-        st.caption("TAL check is disabled.")
+    with st.container(border=True):
+        tal_enabled = st.checkbox("Enable TAL check", value=profile.tal.enabled if profile else False)
+        tal_check_company = st.checkbox("Also check TAL by company name", value=profile.tal.check_company_name if profile else False)
+        tal_sources_result: list[ReferenceSource] = []
+        if tal_enabled:
+            tal_sources_result = _render_sources_section(
+                "tal_sources", "TAL", check_domain=True, check_company=tal_check_company, check_email=False)
+            if not tal_sources_result:
+                st.warning("TAL is enabled but no sources are configured — this check will do nothing.")
+        else:
+            st.caption("TAL check is disabled.")
 
 with tab_suppression:
-    suppression_enabled = st.checkbox("Enable Suppression check", value=profile.suppression.enabled if profile else False)
-    suppression_check_domain = st.checkbox("Check Suppression by domain",
-                                            value=profile.suppression.check_domain if profile else True)
-    suppression_check_company = st.checkbox("Check Suppression by company name",
-                                             value=profile.suppression.check_company_name if profile else False)
-    suppression_check_email = st.checkbox("Check Suppression by email",
-                                           value=profile.suppression.check_email if profile else False)
-    suppression_sources_result: list[ReferenceSource] = []
-    if suppression_enabled:
-        suppression_sources_result = _render_sources_section(
-            "suppression_sources", "Suppression", check_domain=suppression_check_domain,
-            check_company=suppression_check_company, check_email=suppression_check_email)
-        if not suppression_sources_result:
-            st.warning("Suppression is enabled but no sources are configured — this check will do nothing.")
-    else:
-        st.caption("Suppression check is disabled.")
+    with st.container(border=True):
+        suppression_enabled = st.checkbox("Enable Suppression check", value=profile.suppression.enabled if profile else False)
+        suppression_check_domain = st.checkbox("Check Suppression by domain",
+                                                value=profile.suppression.check_domain if profile else True)
+        suppression_check_company = st.checkbox("Check Suppression by company name",
+                                                 value=profile.suppression.check_company_name if profile else False)
+        suppression_check_email = st.checkbox("Check Suppression by email",
+                                               value=profile.suppression.check_email if profile else False)
+        suppression_sources_result: list[ReferenceSource] = []
+        if suppression_enabled:
+            suppression_sources_result = _render_sources_section(
+                "suppression_sources", "Suppression", check_domain=suppression_check_domain,
+                check_company=suppression_check_company, check_email=suppression_check_email)
+            if not suppression_sources_result:
+                st.warning("Suppression is enabled but no sources are configured — this check will do nothing.")
+        else:
+            st.caption("Suppression check is disabled.")
 
 with tab_dedupe:
-    st.subheader("Dedupe List")
-    dedupe_enabled = st.checkbox("Enable Dedupe list check", value=profile.dedupe_list.enabled if profile else False)
-    dedupe_sources_result: list[ReferenceSource] = []
-    if dedupe_enabled:
-        dedupe_sources_result = _render_sources_section(
-            "dedupe_sources", "Dedupe List", check_domain=False, check_company=False, check_email=True)
-        if not dedupe_sources_result:
-            st.warning("Dedupe list is enabled but no sources are configured — this check will do nothing.")
-    else:
-        st.caption("Dedupe list check is disabled.")
+    with st.container(border=True):
+        st.subheader("Dedupe List")
+        dedupe_enabled = st.checkbox("Enable Dedupe list check", value=profile.dedupe_list.enabled if profile else False)
+        dedupe_sources_result: list[ReferenceSource] = []
+        if dedupe_enabled:
+            dedupe_sources_result = _render_sources_section(
+                "dedupe_sources", "Dedupe List", check_domain=False, check_company=False, check_email=True)
+            if not dedupe_sources_result:
+                st.warning("Dedupe list is enabled but no sources are configured — this check will do nothing.")
+        else:
+            st.caption("Dedupe list check is disabled.")
 
 with tab_complex:
-    st.subheader("Complex Account")
-    st.caption(
-        "For accounts that need extra, highly specific enrichment rules beyond the standard checks — "
-        "TAL account-ID/company mapping, per-CID Installed Technologies and Predictive Buying Stage "
-        "lookups, Capture Date/Email Opt-in/phone cleanup, and asset metadata auto-correction. These "
-        "rules are hardcoded (not configurable per field) since they're currently built for one client's "
-        "exact file layout — see core/complex_account.py."
-    )
-    complex_account_enabled = st.checkbox(
-        "This is a complex account", value=profile.complex_account.enabled if profile else False)
-    complex_account_tal_path = ""
-    complex_account_specifications_path = ""
-    if complex_account_enabled:
-        complex_account_tal_path = _path_input_with_browse(
-            "TAL file path", "complex_account_tal_path_input",
-            profile.complex_account.tal_path if profile else "")
-        st.caption("Account ID / company-name reference — matched by domain, with Country as a tie-breaker "
-                   "when a domain maps to more than one account.")
-        complex_account_specifications_path = _path_input_with_browse(
-            "Specifications file path (\"...BANT NTQ & EHS\")", "complex_account_specs_path_input",
-            profile.complex_account.specifications_path if profile else "")
-        st.caption("Asset Name → URN / Asset URL 1 & 2 / Dell URL reference, used to auto-correct those "
-                   "columns for each lead's Asset Title.")
-        st.caption("The Installed Technologies and Predictive Buying Stage files are uploaded fresh on "
-                   "the Run Check page each time, like the Purchased Lead Report — not configured here.")
-    else:
-        st.caption("Complex Account rules are disabled for this client.")
+    with st.container(border=True):
+        st.subheader("Complex Account")
+        st.caption(
+            "For accounts that need extra, highly specific enrichment rules beyond the standard checks — "
+            "TAL account-ID/company mapping, per-CID Installed Technologies and Predictive Buying Stage "
+            "lookups, Capture Date/Email Opt-in/phone cleanup, and asset metadata auto-correction. These "
+            "rules are hardcoded (not configurable per field) since they're currently built for one client's "
+            "exact file layout — see core/complex_account.py."
+        )
+        complex_account_enabled = st.checkbox(
+            "This is a complex account", value=profile.complex_account.enabled if profile else False)
+        complex_account_tal_path = ""
+        complex_account_specifications_path = ""
+        if complex_account_enabled:
+            complex_account_tal_path = _path_input_with_browse(
+                "TAL file path", "complex_account_tal_path_input",
+                profile.complex_account.tal_path if profile else "")
+            st.caption("Account ID / company-name reference — matched by domain, with Country as a tie-breaker "
+                       "when a domain maps to more than one account.")
+            complex_account_specifications_path = _path_input_with_browse(
+                "Specifications file path (\"...BANT NTQ & EHS\")", "complex_account_specs_path_input",
+                profile.complex_account.specifications_path if profile else "")
+            st.caption("Asset Name → URN / Asset URL 1 & 2 / Dell URL reference, used to auto-correct those "
+                       "columns for each lead's Asset Title.")
+            st.caption("The Installed Technologies and Predictive Buying Stage files are uploaded fresh on "
+                       "the Run Check page each time, like the Purchased Lead Report — not configured here.")
+        else:
+            st.caption("Complex Account rules are disabled for this client.")
 
 st.divider()
 
@@ -719,4 +728,4 @@ if st.button("💾 Save Client Profile", type="primary"):
             ),
         )
         saved_path = save_profile(new_profile, get_clients_dir())
-        st.success(f"Saved profile to {saved_path}")
+        st.toast(f"Saved profile to {saved_path}", icon="✅")

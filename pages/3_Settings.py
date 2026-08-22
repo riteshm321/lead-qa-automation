@@ -8,8 +8,10 @@ from core.app_settings import (
 )
 from core.branding import configure_page
 from core.file_browser import browse_for_folder
+from core.toast import queue_toast_before_rerun, show_pending_toast
 
 configure_page("Settings")
+show_pending_toast()
 st.title("⚙️ Settings")
 st.caption("App-wide settings, set up once — not tied to any specific client.")
 
@@ -71,7 +73,7 @@ with st.expander("⚙️ Shared team data location", expanded=True):
                                 if k not in ("clients_dir", "shared_root_dir")}
             updated_settings["shared_root_dir"] = new_root
             save_app_settings(updated_settings)
-            st.success("Saved. Reloading...")
+            queue_toast_before_rerun("Saved.")
             st.rerun()
     with col_reset:
         if st.button("Reset to default", key="clients_dir_reset", use_container_width=True):
@@ -97,5 +99,5 @@ with st.expander("🔑 Jira account (private to this machine)", expanded=True):
     )
     if st.button("Save Jira account", key="jira_settings_save"):
         save_jira_settings(jira_base_url, jira_email, jira_api_token)
-        st.success("Saved.")
+        queue_toast_before_rerun("Saved.")
         st.rerun()

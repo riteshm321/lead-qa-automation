@@ -27,9 +27,11 @@ from core.matching import load_alias_groups, add_alias_pair
 from core.models import FieldMapping
 from core.pipeline import run_pipeline, apply_refund_overrides
 from core.profile_store import list_profile_names, load_profile, save_profile
+from core.toast import queue_toast_before_rerun, show_pending_toast
 import requests
 
 configure_page("Run Check")
+show_pending_toast()
 st.title("▶️ Run Check")
 
 
@@ -77,6 +79,30 @@ _run_identity = client_name
 if st.session_state.get("run_result_for") not in (None, _run_identity) and "run_result" in st.session_state:
     for key in ("run_result", "run_new_leads", "run_result_for"):
         st.session_state.pop(key, None)
+
+# A lightweight progress indicator, not a tracked workflow state — it just
+# reflects what's in session_state right now, the same way the rest of this
+# page already decides what to show. "Post to Jira" only appears for a
+# client that actually has a ticket key configured, since that step is
+# never reachable otherwise.
+_step_current = 1
+if "run_result" in st.session_state:
+    _step_current = 2
+_step_pending_summary = st.session_state.get("last_finalized_summary")
+if _step_pending_summary and _step_pending_summary.get("client_name") == client_name:
+    _step_current = 3
+_step_labels = ["Run Check", "Review & Finalize"]
+if profile.jira_ticket_key:
+    _step_labels.append("Post to Jira")
+_step_cols = st.columns(len(_step_labels))
+for _step_num, (_step_col, _step_label) in enumerate(zip(_step_cols, _step_labels), start=1):
+    if _step_num < _step_current:
+        _step_col.markdown(f"✅ {_step_num}. {_step_label}")
+    elif _step_num == _step_current:
+        _step_col.markdown(f"**➡️ {_step_num}. {_step_label}**")
+    else:
+        _step_col.markdown(f"⚪ {_step_num}. {_step_label}")
+st.divider()
 
 _upload_key_suffix = st.session_state.get("upload_reset_counter", 0)
 
@@ -128,7 +154,7 @@ if new_leads_file and not mapping_valid:
         profile.field_mapping = FieldMapping(email=fm_email, first_name=fm_first, last_name=fm_last,
                                               company=fm_company, cid=fm_cid)
         save_profile(profile, get_clients_dir())
-        st.success("Column mapping saved for this client.")
+        queue_toast_before_rerun("Column mapping saved for this client.")
         st.rerun()
 
 purchased_reports: dict[str, pd.DataFrame] = {}
@@ -278,8 +304,11 @@ if "run_result" in st.session_state:
     result = st.session_state["run_result"]
 
     st.subheader("Summary")
-    st.write(f"{len(new_leads)} in → {len(result.valid_indices)} valid, "
-             f"{len(result.refund_reasons)} refunded, {len(result.review_reasons)} needs review")
+    _summary_col_in, _summary_col_valid, _summary_col_refund, _summary_col_review = st.columns(4)
+    _summary_col_in.metric("Leads In", len(new_leads))
+    _summary_col_valid.metric("Valid", len(result.valid_indices))
+    _summary_col_refund.metric("Refunded", len(result.refund_reasons))
+    _summary_col_review.metric("Needs Review", len(result.review_reasons))
 
     _completed_checks = [
         label for label, on in [
@@ -480,7 +509,10 @@ if "run_result" in st.session_state:
                 "different name, rename the leadfile column (or its header) to something closer to the "
                 "target column name and re-run."
             )
-        st.success("Accumulated Report updated.")
+        # Both callers rerun right after this returns (the plain Finalize
+        # path added its own rerun below to match), so the confirmation must
+        # be queued rather than shown directly here — see core/toast.py.
+        queue_toast_before_rerun("Accumulated Report updated.")
         return lead_template_links_used
 
     def _finalize_jira_summary(total_leads_in, valid_count, refund_count, lead_template_links_used):
@@ -588,6 +620,7 @@ if "run_result" in st.session_state:
                     len(new_leads), len(final_valid_indices), len(final_refund_indices), lead_template_links_used)
                 del st.session_state["run_result"]
                 del st.session_state["run_new_leads"]
+            st.rerun()
         except Exception as exc:
             render_error(exc)
 
