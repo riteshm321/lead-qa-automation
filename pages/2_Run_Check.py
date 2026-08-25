@@ -376,7 +376,7 @@ if "run_result" in st.session_state:
             _refund_export_df = new_leads.loc[refund_indices].copy()
             _refund_export_df.insert(0, "Refund Reason", [result.refund_reasons[idx] for idx in refund_indices])
             st.download_button(
-                "⬇️ Download refund leads (Excel)",
+                "⬇️ Download", key="refund_download_button",
                 data=dataframe_to_excel_bytes(_refund_export_df, sheet_name="Refund Leads"),
                 file_name=f"{client_name} - Refund Leads.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -408,8 +408,7 @@ if "run_result" in st.session_state:
 
     if result.review_reasons:
         st.subheader("Needs Review")
-        st.caption("Tick leads below, then act on them in bulk — or use the buttons inside each "
-                   "lead's detail further down to act on it individually.")
+        st.caption("Tick leads below, then act on them in bulk.")
         fm = profile.field_mapping
         review_indices = list(result.review_reasons.keys())
 
@@ -435,7 +434,7 @@ if "run_result" in st.session_state:
                 "; ".join(str(d) for d in result.review_reasons[idx]) for idx in review_indices
             ])
             st.download_button(
-                "⬇️ Download needs-review leads (Excel)",
+                "⬇️ Download", key="review_download_button",
                 data=dataframe_to_excel_bytes(_review_export_df, sheet_name="Needs Review"),
                 file_name=f"{client_name} - Needs Review Leads.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -486,41 +485,6 @@ if "run_result" in st.session_state:
                 st.session_state["review_all_selected_default"] = False
                 st.session_state["review_editor_nonce"] += 1
                 st.rerun()
-
-        for idx, details in list(result.review_reasons.items()):
-            lead = new_leads.loc[idx]
-            name = f"{lead.get(fm.first_name, '')} {lead.get(fm.last_name, '')}".strip()
-            email = lead.get(fm.email, "")
-            company = lead.get(fm.company, "")
-            cid = lead.get(fm.cid, "")
-            with st.expander(
-                f"Excel row {idx + 2}: {name or '(no name)'} · {email or '(no email)'} "
-                f"· {company or '(no company)'} · CID {cid or '?'}"
-            ):
-                st.caption(f"📧 {email}  |  🏢 {company}  |  🆔 CID {cid}")
-                for detail_idx, detail in enumerate(details):
-                    st.markdown(f"**{detail}**" + (f" — {detail.score:.0f}% similar" if detail.score is not None else ""))
-                    if detail.lead_value or detail.candidate_value:
-                        comp1, comp2 = st.columns(2)
-                        # detail_idx (not detail.check) keys these -- several
-                        # details for the same lead commonly share the same
-                        # check name (e.g. two Complex Account asset-URL
-                        # mismatches at once), which would otherwise collide.
-                        comp1.text_input("This lead's value", detail.lead_value, disabled=True,
-                                          key=f"lead_val_{idx}_{detail_idx}")
-                        comp2.text_input(
-                            f"Compared against ({detail.candidate_context})" if detail.candidate_context else "Compared against",
-                            detail.candidate_value, disabled=True, key=f"cand_val_{idx}_{detail_idx}",
-                        )
-                col1, col2 = st.columns(2)
-                if col1.button("Approve as valid", key=f"approve_{idx}", use_container_width=True):
-                    result.valid_indices.append(idx)
-                    del result.review_reasons[idx]
-                    st.rerun()
-                if col2.button("Mark as refund", key=f"refund_{idx}", use_container_width=True):
-                    result.refund_reasons[idx] = "; ".join(str(d) for d in details)
-                    del result.review_reasons[idx]
-                    st.rerun()
 
     final_valid_indices, final_refund_reasons = apply_refund_overrides(result, approved_refund_indices)
     final_refund_indices = list(final_refund_reasons.keys())
