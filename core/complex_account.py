@@ -68,19 +68,6 @@ def _norm_domain(value) -> str:
     return "" if text in ("", "nan") else text
 
 
-def _norm_cid(value) -> str:
-    # A CID column with even one blank cell elsewhere gets silently upcast
-    # by pandas from int64 to float64, turning every value from e.g. 119414
-    # into 119414.0 — while the CID chosen for a file via the Run Check
-    # page's CID dropdown is always a clean digit string. Without this,
-    # that mismatch alone would make every lead in an otherwise perfectly
-    # good CID look like it has no matching file at all.
-    text = str(value).strip() if value is not None else ""
-    if text.endswith(".0") and text[:-2].isdigit():
-        return text[:-2]
-    return text
-
-
 def load_tal_index(tal_path: str) -> dict[str, list[dict]]:
     """Loads the (large, ~500k+ row) TAL reference file into a
     domain -> [{"account_id", "account_name", "country_code"}, ...] index,
@@ -392,8 +379,8 @@ def apply_complex_account_rules(
     leads_df: pd.DataFrame,
     field_mapping,
     tal_index: dict[str, list[dict]] | None,
-    cid_installed_tech_maps: dict[str, dict[str, str]],
-    cid_pbs_maps: dict[str, dict[str, str]],
+    installed_tech_map: dict[str, str],
+    pbs_map: dict[str, str],
 ) -> tuple[pd.DataFrame, dict[int, list[ReviewDetail]]]:
     """Applies every Complex Account column-filling rule to a copy of
     leads_df and returns (enriched_df, review_reasons) — review_reasons
@@ -410,9 +397,10 @@ def apply_complex_account_rules(
     so it's a check (see check_asset_url_mismatches), not a fill, and runs
     at Run Check time instead.
 
-    cid_installed_tech_maps / cid_pbs_maps: {cid: {domain: value}} — a CID
-    missing from the dict (no file uploaded for it this run) gets that
-    lead's corresponding column cleared to blank, per design.
+    installed_tech_map / pbs_map: {domain: value}, covering every CID in
+    one file (not split per CID) -- a domain missing from the map (no file
+    uploaded, or no match for that domain) gets that lead's corresponding
+    column cleared to blank, per design.
     """
     df = _normalize_known_columns(leads_df.copy())
     review: dict[int, list[ReviewDetail]] = {}
@@ -421,16 +409,13 @@ def apply_complex_account_rules(
         df = apply_tal_mapping(df, field_mapping.email, COUNTRY_COLUMN, ACCOUNT_ID_COLUMN, COMPANY_COLUMN, tal_index)
 
     for idx, row in df.iterrows():
-        cid = _norm_cid(row.get(field_mapping.cid, ""))
         domain = _norm_domain(extract_domain(row.get(field_mapping.email)))
 
-        it_map = cid_installed_tech_maps.get(cid)
-        it_value = it_map.get(domain) if it_map else None
+        it_value = installed_tech_map.get(domain)
         if INSTALLED_TECH_COLUMN in df.columns:
             df.at[idx, INSTALLED_TECH_COLUMN] = f"Installed Technologies: {it_value}" if it_value else ""
 
-        pbs_map = cid_pbs_maps.get(cid)
-        pbs_value = pbs_map.get(domain) if pbs_map else None
+        pbs_value = pbs_map.get(domain)
         if PBS_COLUMN in df.columns:
             df.at[idx, PBS_COLUMN] = f"Predictive Buying Stage: {pbs_value}" if pbs_value else ""
 

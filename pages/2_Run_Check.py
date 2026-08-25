@@ -186,36 +186,18 @@ if profile.leadcap.enabled:
         except ValueError as exc:
             render_error(exc)
 
-complex_it_files = []
-complex_pbs_files = []
-# Keyed by position, not filename — the uploader allows two files with the
-# identical name (e.g. the same export downloaded twice for different
-# CIDs), which would otherwise collide on both the widget key and the dict.
-complex_it_file_cids: dict[int, str] = {}
-complex_pbs_file_cids: dict[int, str] = {}
+complex_it_file = None
+complex_pbs_file = None
 if profile.complex_account.enabled:
     st.subheader("Complex Account: Installed Technologies & Predictive Buying Stage")
-    st.caption("Upload this run's per-CID reference files, then pick which CID each one is for — "
-               "the filename doesn't reliably identify the CID, so it's not auto-detected.")
+    st.caption("Upload this run's Installed Technologies and Predictive Buying Stage files — each "
+               "one file covering every CID. Leads are matched by domain only, regardless of CID.")
 
-    _leadfile_cids = []
-    if mapping_valid:
-        _leadfile_cids = sorted(set(new_leads_df[field_mapping.cid].dropna().astype(str).str.strip()) - {""})
-    _cid_options = _leadfile_cids or ["(upload a New Leads file first to see its CIDs)"]
+    complex_it_file = st.file_uploader(
+        "Installed Technologies file", type=["csv"], key=f"complex_it_file_{_upload_key_suffix}")
 
-    complex_it_files = st.file_uploader(
-        "Installed Technologies files", type=["csv"], accept_multiple_files=True,
-        key=f"complex_it_files_{_upload_key_suffix}") or []
-    for _i, _f in enumerate(complex_it_files):
-        complex_it_file_cids[_i] = st.selectbox(
-            f"CID for \"{_f.name}\"", _cid_options, key=f"complex_it_cid_{_upload_key_suffix}_{_i}")
-
-    complex_pbs_files = st.file_uploader(
-        "Predictive Buying Stage files", type=["csv"], accept_multiple_files=True,
-        key=f"complex_pbs_files_{_upload_key_suffix}") or []
-    for _i, _f in enumerate(complex_pbs_files):
-        complex_pbs_file_cids[_i] = st.selectbox(
-            f"CID for \"{_f.name}\"", _cid_options, key=f"complex_pbs_cid_{_upload_key_suffix}_{_i}")
+    complex_pbs_file = st.file_uploader(
+        "Predictive Buying Stage file", type=["csv"], key=f"complex_pbs_file_{_upload_key_suffix}")
 
 if st.button("Run Check") and new_leads_file:
     if not mapping_valid:
@@ -548,31 +530,27 @@ if "run_result" in st.session_state:
                         tal_index = _cached_tal_index(
                             profile.complex_account.tal_path, os.path.getmtime(profile.complex_account.tal_path))
 
-                    cid_it_maps: dict[str, dict[str, str]] = {}
-                    for i, f in enumerate(complex_it_files):
-                        cid = complex_it_file_cids.get(i)
-                        if cid and cid in _leadfile_cids:
-                            f.seek(0)
-                            # A domain can appear on more than one row, one
-                            # technology per row — combine them all rather than
-                            # only keeping whichever row happened to load last.
-                            cid_it_maps[cid] = load_domain_value_map(
-                                f, "Domain", "Installed Technologies", aggregate=True)
-                    cid_pbs_maps: dict[str, dict[str, str]] = {}
-                    for i, f in enumerate(complex_pbs_files):
-                        cid = complex_pbs_file_cids.get(i)
-                        if cid and cid in _leadfile_cids:
-                            f.seek(0)
-                            # "No Active Signals" means there's nothing to
-                            # report for that domain — leave the column blank
-                            # instead of writing the label text itself.
-                            cid_pbs_maps[cid] = load_domain_value_map(
-                                f, "Targeted Accounts", "Predictive Buying Stage",
-                                skip_values={"No Active Signals"})
+                    installed_tech_map: dict[str, str] = {}
+                    if complex_it_file is not None:
+                        complex_it_file.seek(0)
+                        # A domain can appear on more than one row, one
+                        # technology per row — combine them all rather than
+                        # only keeping whichever row happened to load last.
+                        installed_tech_map = load_domain_value_map(
+                            complex_it_file, "Domain", "Installed Technologies", aggregate=True)
+                    pbs_map: dict[str, str] = {}
+                    if complex_pbs_file is not None:
+                        complex_pbs_file.seek(0)
+                        # "No Active Signals" means there's nothing to report
+                        # for that domain — leave the column blank instead of
+                        # writing the label text itself.
+                        pbs_map = load_domain_value_map(
+                            complex_pbs_file, "Targeted Accounts", "Predictive Buying Stage",
+                            skip_values={"No Active Signals"})
 
                     enriched_valid, _ = apply_complex_account_rules(
                         new_leads.loc[final_valid_indices], field_mapping,
-                        tal_index, cid_it_maps, cid_pbs_maps)
+                        tal_index, installed_tech_map, pbs_map)
                     st.session_state["complex_enriched_leads"] = enriched_valid
                     st.session_state["complex_final_refund_reasons"] = final_refund_reasons
                     st.session_state["complex_final_refund_indices"] = final_refund_indices

@@ -299,10 +299,10 @@ def test_check_complex_account_conditions_passes_clean_leads():
 def test_apply_complex_account_rules_end_to_end():
     df = _base_leads_df()
     tal_index = {"wipro.com": [{"account_id": "P123", "account_name": "Wipro Ltd", "country_code": "IN"}]}
-    it_maps = {"119414": {"wipro.com": "AWS, Azure"}}
-    pbs_maps = {"119414": {"wipro.com": "Awareness"}}
+    it_map = {"wipro.com": "AWS, Azure"}
+    pbs_map = {"wipro.com": "Awareness"}
 
-    enriched, review = apply_complex_account_rules(df, FM, tal_index, it_maps, pbs_maps)
+    enriched, review = apply_complex_account_rules(df, FM, tal_index, it_map, pbs_map)
 
     assert review == {}
     row = enriched.iloc[0]
@@ -326,20 +326,38 @@ def test_apply_complex_account_rules_end_to_end():
     assert row["Asset download year"] == 2026
 
 
-def test_apply_complex_account_rules_matches_cid_when_column_upcast_to_float():
-    # Regression test for a real reported bug: a CID column with even one
-    # blank cell elsewhere gets silently upcast by pandas from int64 to
-    # float64, turning every value (e.g. 119414) into 119414.0 — while the
-    # CID parsed from an IT/PBS filename is always a clean digit string
-    # ("119414"). Without normalizing this, every lead's Installed
-    # Technologies/Predictive Buying Stage columns would go blank even
-    # though the uploaded file genuinely has that CID's data.
-    df = _base_leads_df()
-    df["CID"] = df["CID"].astype(float)  # simulates the float-upcast column
-    it_maps = {"119414": {"wipro.com": "AWS, Azure"}}
-    pbs_maps = {"119414": {"wipro.com": "Awareness"}}
+def test_apply_complex_account_rules_matches_leads_from_different_cids_off_one_shared_map():
+    # The whole point of the single combined file: a lead's CID doesn't
+    # gate whether its domain gets matched -- two leads on different CIDs
+    # both get filled from the very same installed_tech_map/pbs_map.
+    df = pd.DataFrame([
+        {**_base_leads_df().iloc[0].to_dict(), "CID": "119414", "Email": "a@wipro.com"},
+        {**_base_leads_df().iloc[0].to_dict(), "CID": "119843", "Email": "b@acme.com"},
+    ])
+    it_map = {"wipro.com": "AWS, Azure", "acme.com": "GCP"}
+    pbs_map = {"wipro.com": "Awareness", "acme.com": "Consideration"}
 
-    enriched, _ = apply_complex_account_rules(df, FM, None, it_maps, pbs_maps)
+    enriched, _ = apply_complex_account_rules(df, FM, None, it_map, pbs_map)
+
+    col_it = "Additional Data Point (poll questions, dynamic data, etc)  2"
+    col_pbs = "Additional Data Point (poll questions, dynamic data, etc)  3"
+    assert enriched.loc[0, col_it] == "Installed Technologies: AWS, Azure"
+    assert enriched.loc[0, col_pbs] == "Predictive Buying Stage: Awareness"
+    assert enriched.loc[1, col_it] == "Installed Technologies: GCP"
+    assert enriched.loc[1, col_pbs] == "Predictive Buying Stage: Consideration"
+
+
+def test_apply_complex_account_rules_matches_by_domain_regardless_of_cid():
+    # Installed Technologies/Predictive Buying Stage files now cover every
+    # CID in one upload -- matching is by domain alone, so a lead's CID
+    # value (or its dtype, e.g. pandas upcasting an int column to float)
+    # must have no bearing on whether it gets matched.
+    df = _base_leads_df()
+    df["CID"] = df["CID"].astype(float)
+    it_map = {"wipro.com": "AWS, Azure"}
+    pbs_map = {"wipro.com": "Awareness"}
+
+    enriched, _ = apply_complex_account_rules(df, FM, None, it_map, pbs_map)
 
     row = enriched.iloc[0]
     assert row["Additional Data Point (poll questions, dynamic data, etc)  2"] == "Installed Technologies: AWS, Azure"
@@ -374,10 +392,11 @@ def test_apply_complex_account_rules_leaves_blank_top_topics_cell_blank():
     assert pd.isna(value)
 
 
-def test_apply_complex_account_rules_clears_columns_for_cid_with_no_uploaded_file():
+def test_apply_complex_account_rules_clears_columns_when_domain_not_in_uploaded_maps():
     df = _base_leads_df()
-    # No entry for CID "119414" in either map -> that CID's leads get
-    # column 2/3 cleared to blank rather than left with stale placeholder text.
+    # No entry for "wipro.com" in either map (e.g. no file uploaded this
+    # run) -> its columns get cleared to blank rather than left with stale
+    # placeholder text.
     enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     assert enriched.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  2"] == ""
