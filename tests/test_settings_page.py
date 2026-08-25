@@ -34,6 +34,7 @@ def test_save_button_persists_shared_root_and_migrates_aliases(tmp_path, monkeyp
         f.write('[["acme", "acme corp"]]')
 
     new_root = str(tmp_path / "Shared" / "LeadQA")
+    monkeypatch.setattr("core.onedrive.list_onedrive_mount_points", lambda: [str(tmp_path)])
 
     with patch("core.file_browser.browse_for_folder", return_value=new_root):
         at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
@@ -68,6 +69,7 @@ def test_migrated_aliases_do_not_pollute_client_list_in_shared_folder(tmp_path, 
         f.write('[["acme", "acme corp"]]')
 
     new_root = str(tmp_path / "Shared" / "LeadQA")
+    monkeypatch.setattr("core.onedrive.list_onedrive_mount_points", lambda: [str(tmp_path)])
 
     with patch("core.file_browser.browse_for_folder", return_value=new_root):
         at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
@@ -90,6 +92,37 @@ def test_migrated_aliases_do_not_pollute_client_list_in_shared_folder(tmp_path, 
     )
 
     assert list_profile_names(clients_dir=get_clients_dir()) == ["Real Client"]
+
+
+def test_save_button_rejects_blank_shared_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    at.button(key="clients_dir_save").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 1
+    assert "required" in at.error[0].value
+    from core.app_settings import get_shared_root_dir
+    assert get_shared_root_dir() == ""
+
+
+def test_save_button_rejects_a_folder_not_synced_by_onedrive(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("core.onedrive.list_onedrive_mount_points", lambda: [])
+    not_synced = str(tmp_path / "Downloads" / "MyLeads")
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    at.text_input(key="clients_dir_input").set_value(not_synced).run()
+    at.button(key="clients_dir_save").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 1
+    assert "OneDrive" in at.error[0].value
+    from core.app_settings import get_shared_root_dir
+    assert get_shared_root_dir() == ""
 
 
 def test_save_jira_account_persists_settings(tmp_path, monkeypatch):

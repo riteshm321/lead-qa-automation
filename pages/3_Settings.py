@@ -9,6 +9,7 @@ from core.app_settings import (
 from core.auth import create_user, delete_user, load_users
 from core.branding import configure_page
 from core.file_browser import browse_for_folder
+from core.onedrive import is_onedrive_synced_path
 from core.toast import queue_toast_before_rerun, show_pending_toast
 
 _current_user = configure_page("Settings")
@@ -16,22 +17,21 @@ show_pending_toast()
 st.title("⚙️ Settings")
 st.caption("App-wide settings, set up once — not tied to any specific client.")
 
-with st.expander("⚙️ Shared team data location", expanded=True):
+with st.expander("⚙️ Shared team data location", expanded=False):
     _clients_dir = get_clients_dir()
     _aliases_path = get_aliases_path()
     st.caption(f"Clients are currently stored at: `{os.path.abspath(_clients_dir)}`")
     st.caption(f"Company aliases are currently stored at: `{os.path.abspath(_aliases_path)}`")
     st.caption(
-        "By default both are private to this machine — a colleague using the exe on their own "
-        "laptop won't see these clients or learned aliases. To share them across a team, point this "
-        "at a folder inside a OneDrive folder you both sync locally (each person sets their own local "
-        "path to that same shared folder) — pick the folder itself, not a 'clients' subfolder inside "
-        "it; the app creates and manages its own `clients/` and `aliases/` subfolders under whatever "
-        "you select here, the same way it does for the private default. Any aliases you'd already "
-        "taught locally are copied over so nothing is lost. Note: OneDrive syncs file-by-file, not "
-        "instantly — if two people save the *same* client profile at the *same* moment, OneDrive may "
-        "create a conflicted copy instead of merging, so treat this as low-frequency shared config, "
-        "not simultaneous editing."
+        "Required, and must be a folder inside a OneDrive folder you sync locally (each person sets "
+        "their own local path to that same shared folder) — a folder on your personal computer that "
+        "isn't OneDrive-synced won't be accepted, since your colleagues (and, later, the admin "
+        "activity dashboard) need to see the same data. Pick the folder itself, not a 'clients' "
+        "subfolder inside it; the app creates and manages its own `clients/` and `aliases/` subfolders "
+        "under whatever you select here. Note: OneDrive syncs file-by-file, not instantly — if two "
+        "people save the *same* client profile at the *same* moment, OneDrive may create a conflicted "
+        "copy instead of merging, so treat this as low-frequency shared config, not simultaneous "
+        "editing."
     )
     # Label rendered above (not inline in the text_input) so both columns
     # start at the exact same vertical offset — keeps the Browse button
@@ -55,35 +55,35 @@ with st.expander("⚙️ Shared team data location", expanded=True):
                 st.rerun()
     with col_input:
         _new_dir = st.text_input("Shared team data folder", value=get_shared_root_dir(),
-                                  placeholder="Leave blank for the private default", key="clients_dir_input",
+                                  placeholder="A folder inside your synced OneDrive", key="clients_dir_input",
                                   label_visibility="collapsed")
 
-    col_save, col_reset = st.columns(2)
-    with col_save:
-        if st.button("Save", key="clients_dir_save", use_container_width=True):
-            new_root = _new_dir.strip()
-            if new_root:
-                os.makedirs(os.path.join(new_root, "clients"), exist_ok=True)
-                new_aliases_path = os.path.join(new_root, "aliases", "company_aliases.json")
-                old_aliases_path = get_aliases_path()
-                if not os.path.isfile(new_aliases_path) and os.path.isfile(old_aliases_path):
-                    import shutil
-                    os.makedirs(os.path.dirname(new_aliases_path), exist_ok=True)
-                    shutil.copy2(old_aliases_path, new_aliases_path)
+    if st.button("Save", key="clients_dir_save", use_container_width=True):
+        new_root = _new_dir.strip()
+        if not new_root:
+            st.error("A shared team data folder is required — this can no longer be left blank.")
+        elif not is_onedrive_synced_path(new_root):
+            st.error(
+                "That folder doesn't look like it's inside a OneDrive-synced folder on this machine. "
+                "Pick a folder inside your synced OneDrive (or a synced SharePoint team library) so "
+                "your colleagues can access the same data."
+            )
+        else:
+            os.makedirs(os.path.join(new_root, "clients"), exist_ok=True)
+            new_aliases_path = os.path.join(new_root, "aliases", "company_aliases.json")
+            old_aliases_path = get_aliases_path()
+            if not os.path.isfile(new_aliases_path) and os.path.isfile(old_aliases_path):
+                import shutil
+                os.makedirs(os.path.dirname(new_aliases_path), exist_ok=True)
+                shutil.copy2(old_aliases_path, new_aliases_path)
             updated_settings = {k: v for k, v in load_app_settings().items()
                                 if k not in ("clients_dir", "shared_root_dir")}
             updated_settings["shared_root_dir"] = new_root
             save_app_settings(updated_settings)
             queue_toast_before_rerun("Saved.")
             st.rerun()
-    with col_reset:
-        if st.button("Reset to default", key="clients_dir_reset", use_container_width=True):
-            save_app_settings({
-                k: v for k, v in load_app_settings().items() if k not in ("clients_dir", "shared_root_dir")
-            })
-            st.rerun()
 
-with st.expander("🔑 Jira account (private to this machine)", expanded=True):
+with st.expander("🔑 Jira account (private to this machine)", expanded=False):
     st.caption(
         "Used only for the \"Post summary to Jira\" button on the Run Check page, so a finalized run's "
         "summary can be posted as a comment on that client's Jira ticket under your own account. "
@@ -108,22 +108,9 @@ if _current_user["is_admin"]:
         st.caption(
             "Accounts are local to this machine. Add one for each colleague who runs this app here."
         )
-        _users = load_users()
-        _admin_count = sum(1 for r in _users.values() if r.get("is_admin"))
-        for _username, _record in _users.items():
-            _col_name, _col_role, _col_remove = st.columns([3, 2, 1])
-            _col_name.write(_username)
-            _col_role.write("Admin" if _record.get("is_admin") else "User")
-            _is_last_admin = _record.get("is_admin") and _admin_count <= 1
-            if _col_remove.button(
-                "Remove", key=f"remove_user_{_username}", disabled=_is_last_admin,
-                help="Can't remove the only remaining admin." if _is_last_admin else None,
-            ):
-                delete_user(_username)
-                queue_toast_before_rerun(f"Removed {_username}.")
-                st.rerun()
-
-        st.divider()
+        # Add-account form comes first, above the existing-accounts list, so
+        # it's immediately visible on expanding rather than sinking further
+        # down (and needing more scrolling) as more colleagues get added.
         st.markdown("**Add a new account**")
         with st.form("add_user_form"):
             _new_username = st.text_input("Username")
@@ -139,4 +126,21 @@ if _current_user["is_admin"]:
             else:
                 create_user(_new_username, _new_password, _new_is_admin)
                 queue_toast_before_rerun(f"Added {_new_username}.")
+                st.rerun()
+
+        st.divider()
+        st.markdown("**Existing accounts**")
+        _users = load_users()
+        _admin_count = sum(1 for r in _users.values() if r.get("is_admin"))
+        for _username, _record in _users.items():
+            _col_name, _col_role, _col_remove = st.columns([3, 2, 1])
+            _col_name.write(_username)
+            _col_role.write("Admin" if _record.get("is_admin") else "User")
+            _is_last_admin = _record.get("is_admin") and _admin_count <= 1
+            if _col_remove.button(
+                "Remove", key=f"remove_user_{_username}", disabled=_is_last_admin,
+                help="Can't remove the only remaining admin." if _is_last_admin else None,
+            ):
+                delete_user(_username)
+                queue_toast_before_rerun(f"Removed {_username}.")
                 st.rerun()
