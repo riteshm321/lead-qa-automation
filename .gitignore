@@ -12,3 +12,4 @@ build/
 dist/
 *.spec
 app_settings.json
+auth/

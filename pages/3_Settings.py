@@ -6,11 +6,12 @@ from core.app_settings import (
     get_aliases_path, get_clients_dir, get_jira_settings, get_shared_root_dir,
     load_app_settings, save_app_settings, save_jira_settings,
 )
+from core.auth import create_user, delete_user, load_users
 from core.branding import configure_page
 from core.file_browser import browse_for_folder
 from core.toast import queue_toast_before_rerun, show_pending_toast
 
-configure_page("Settings")
+_current_user = configure_page("Settings")
 show_pending_toast()
 st.title("⚙️ Settings")
 st.caption("App-wide settings, set up once — not tied to any specific client.")
@@ -101,3 +102,41 @@ with st.expander("🔑 Jira account (private to this machine)", expanded=True):
         save_jira_settings(jira_base_url, jira_email, jira_api_token)
         queue_toast_before_rerun("Saved.")
         st.rerun()
+
+if _current_user["is_admin"]:
+    with st.expander("👤 Manage user accounts (admin only)", expanded=False):
+        st.caption(
+            "Accounts are local to this machine. Add one for each colleague who runs this app here."
+        )
+        _users = load_users()
+        _admin_count = sum(1 for r in _users.values() if r.get("is_admin"))
+        for _username, _record in _users.items():
+            _col_name, _col_role, _col_remove = st.columns([3, 2, 1])
+            _col_name.write(_username)
+            _col_role.write("Admin" if _record.get("is_admin") else "User")
+            _is_last_admin = _record.get("is_admin") and _admin_count <= 1
+            if _col_remove.button(
+                "Remove", key=f"remove_user_{_username}", disabled=_is_last_admin,
+                help="Can't remove the only remaining admin." if _is_last_admin else None,
+            ):
+                delete_user(_username)
+                queue_toast_before_rerun(f"Removed {_username}.")
+                st.rerun()
+
+        st.divider()
+        st.markdown("**Add a new account**")
+        with st.form("add_user_form"):
+            _new_username = st.text_input("Username")
+            _new_password = st.text_input("Password", type="password")
+            _new_is_admin = st.checkbox("Admin")
+            _add_submitted = st.form_submit_button("Add account")
+        if _add_submitted:
+            _new_username = _new_username.strip()
+            if not _new_username or not _new_password:
+                st.error("Username and password are required.")
+            elif _new_username in load_users():
+                st.error("That username already exists.")
+            else:
+                create_user(_new_username, _new_password, _new_is_admin)
+                queue_toast_before_rerun(f"Added {_new_username}.")
+                st.rerun()

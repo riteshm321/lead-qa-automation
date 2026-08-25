@@ -111,3 +111,37 @@ def test_save_jira_account_persists_settings(tmp_path, monkeypatch):
     assert settings["base_url"] == "https://example.atlassian.net"
     assert settings["email"] == "me@example.com"
     assert settings["api_token"] == "token123"
+
+
+def test_admin_can_add_a_new_user_account(tmp_path, monkeypatch):
+    # tests/conftest.py's autouse bypass logs every page test in as an
+    # admin, so the "Manage user accounts" panel is always available here.
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+
+    username_input = next(w for w in at.text_input if w.label == "Username")
+    password_input = next(w for w in at.text_input if w.label == "Password")
+    username_input.set_value("colleague")
+    password_input.set_value("their-password")
+    add_button = next(b for b in at.button if b.label == "Add account")
+    add_button.click().run()
+
+    assert not at.exception
+    from core.auth import load_users
+    assert "colleague" in load_users()
+
+
+def test_cannot_remove_the_only_remaining_admin(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.auth import create_user
+    create_user("test-admin", "irrelevant", is_admin=True)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+
+    remove_button = next(b for b in at.button if b.key == "remove_user_test-admin")
+    assert remove_button.disabled
