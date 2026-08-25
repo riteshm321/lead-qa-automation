@@ -388,6 +388,19 @@ _DATE_DETAIL = ReviewDetail(check="Complex Account", message="Capture Date is bl
 _OPTIN_DETAIL = ReviewDetail(check="Complex Account", message="Email Opt-in value is not clearly Yes/No")
 
 
+def test_apply_complex_account_rules_tolerates_header_whitespace_and_case_variation():
+    # Real leadfile exported "CaptureDate" (no space) instead of the expected
+    # "Capture Date" -- the exact-match column lookup must still find it,
+    # rather than silently skipping the whole date/day/month block.
+    df = _base_leads_df().rename(columns={"Capture Date": "CaptureDate"})
+    enriched, review = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert review == {}
+    assert enriched.loc[0, "Capture Date"] == datetime.date(2026, 8, 17)
+    assert enriched.loc[0, "Asset download day"] == 17
+    assert enriched.loc[0, "Asset download month"] == "August"
+
+
 def test_merge_complex_account_review_moves_lead_from_valid_to_review():
     result = PipelineResult(valid_indices=[0, 1], refund_reasons={}, review_reasons={})
     merge_complex_account_review(result, {0: [_DATE_DETAIL]})

@@ -29,6 +29,38 @@ DOWNLOAD_MONTH_COLUMN = "Asset download month"
 DOWNLOAD_YEAR_COLUMN = "Asset download year"
 DOWNLOAD_YEAR_VALUE = 2026
 
+_KNOWN_COLUMNS = (
+    COUNTRY_COLUMN, ACCOUNT_ID_COLUMN, COMPANY_COLUMN, CAPTURE_DATE_COLUMN,
+    EMAIL_OPTIN_COLUMN, PHONE_COLUMN, ASSET_TITLE_COLUMN, ASSET_URN_COLUMN,
+    FORM_URL_COLUMN, DELL_ASSET_URL_COLUMN, TOP_TOPICS_COLUMN,
+    INSTALLED_TECH_COLUMN, PBS_COLUMN, DOWNLOAD_DAY_COLUMN,
+    DOWNLOAD_MONTH_COLUMN, DOWNLOAD_YEAR_COLUMN,
+)
+
+
+def _normalize_header_text(value) -> str:
+    # Same normalization as core/excel_io.py's Lead Template column
+    # matching: strips all non-alphanumeric characters so "Capture Date",
+    # "CaptureDate" and "capture_date" all match -- real leadfile exports
+    # frequently drop or rename separators in headers.
+    return re.sub(r"[^a-z0-9]", "", str(value).strip().lower())
+
+
+def _normalize_known_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Renames any column matching one of this module's hardcoded names
+    (ignoring case/spacing) to that exact name, so the exact-match column
+    lookups below still fire when a leadfile's real header text (e.g.
+    "CaptureDate") differs only cosmetically from what's hardcoded.
+    """
+    lookup = {_normalize_header_text(name): name for name in _KNOWN_COLUMNS}
+    rename = {
+        col: lookup[_normalize_header_text(col)]
+        for col in df.columns
+        if _normalize_header_text(col) in lookup and col != lookup[_normalize_header_text(col)]
+    }
+    return df.rename(columns=rename) if rename else df
+
+
 def _norm_domain(value) -> str:
     if value is None:
         return ""
@@ -334,6 +366,7 @@ def check_complex_account_conditions(
     step run only on the leads that end up valid, since there's no point
     enriching a lead that's about to be refunded.
     """
+    leads_df = _normalize_known_columns(leads_df)
     review: dict[int, list[ReviewDetail]] = {}
     if CAPTURE_DATE_COLUMN in leads_df.columns:
         for idx, row in leads_df.iterrows():
@@ -381,7 +414,7 @@ def apply_complex_account_rules(
     missing from the dict (no file uploaded for it this run) gets that
     lead's corresponding column cleared to blank, per design.
     """
-    df = leads_df.copy()
+    df = _normalize_known_columns(leads_df.copy())
     review: dict[int, list[ReviewDetail]] = {}
 
     if tal_index is not None:
