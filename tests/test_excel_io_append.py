@@ -1,8 +1,10 @@
 import datetime
+import zipfile
 
 import openpyxl
 import pandas as pd
 from openpyxl.styles import Font
+from openpyxl.worksheet.table import Table
 
 from core.excel_io import (
     append_leads, guess_target_field_mapping, find_header_row, read_sheet_headers, route_leads_by_cid,
@@ -200,6 +202,99 @@ def test_append_leads_clear_existing_removes_old_rows_but_keeps_formatting(tmp_p
     # Formatting from the removed old row 2 is preserved on the new row.
     assert ws.cell(row=2, column=1).font.bold is True
     assert ws.cell(row=2, column=1).font.color.rgb == "FF00FF00"
+
+
+def test_append_leads_resizes_excel_table_ref_to_match_real_data(tmp_path):
+    # Regression test for a real reported bug: openpyxl doesn't keep an
+    # Excel Table's declared range (`ref`) in sync with delete_rows() or
+    # new cell writes on its own. After clear_existing wiped old rows, a
+    # table that used to claim e.g. rows 2-99 kept claiming that same
+    # stale range even though only 2 real rows of data existed afterward.
+    # Some downstream ingestion platforms read the file via the table's
+    # declared range rather than a raw cell scan, and saw that mismatch as
+    # "no data in the file" -- table.ref must track the real footprint.
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company"])
+    for row in range(2, 100):  # a large pre-formatted range, like a real template
+        template.append([100, "old@x.com", "Old", "Lead", "X"])
+    template.add_table(Table(displayName="InboundTable", ref="A1:E99"))
+    wb.save(path)
+
+    leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y"},
+        {"CID": 201, "emailaddress": "new2@y.com", "firstname": "New2", "lastname": "Lead2", "company": "Z"},
+    ])
+
+    append_leads(path, "Report", leads_df, _field_mapping(), run_date="2026-08-08", clear_existing=True)
+
+    wb2 = openpyxl.load_workbook(path)
+    ws = wb2["Report"]
+    assert ws.tables["InboundTable"].ref == "A1:E3"  # header + exactly the 2 new leads, not the old A1:E99
+    assert ws.max_row == 3
+
+
+def _inject_synthetic_ext_list(path: str, sheet_xml_rel_path: str) -> None:
+    # openpyxl has no API to write <extLst> content, so simulate what a
+    # real Excel-2010+-authored template looks like by editing the saved
+    # XML directly: an x14 extension block whose <x14:dataValidation> uses
+    # an xr:uid attribute -- a namespace prefix declared on the root
+    # <worksheet> tag, NOT repeated inside <extLst> itself. This is the
+    # exact real-world shape that broke a naive "splice extLst verbatim"
+    # implementation with an "unbound prefix" parse error.
+    with zipfile.ZipFile(path, "r") as zin:
+        entries = {n: zin.read(n) for n in zin.namelist()}
+    xml = entries[sheet_xml_rel_path].decode("utf-8")
+    xml = xml.replace(
+        "<worksheet ", '<worksheet xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" ', 1)
+    ext_list = (
+        '<extLst><ext uri="{some-uri}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">'
+        '<x14:dataValidations count="1"><x14:dataValidation type="list" xr:uid="{TEST-UID}">'
+        '<x14:formula1><xm:f xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">'
+        "Sheet2!$A$1:$A$3</xm:f></x14:formula1><xm:sqref "
+        'xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">B2:B99</xm:sqref>'
+        "</x14:dataValidation></x14:dataValidations></ext></extLst>"
+    )
+    xml = xml.replace("</worksheet>", ext_list + "</worksheet>")
+    entries[sheet_xml_rel_path] = xml.encode("utf-8")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name, data in entries.items():
+            zout.writestr(name, data)
+
+
+def test_append_leads_preserves_extended_data_validation_openpyxl_would_drop(tmp_path):
+    # Regression test for a real reported bug: openpyxl doesn't model
+    # Excel 2010+ extended conditional formatting/data validation
+    # (x14:...) at all, so it silently drops that content from <extLst>
+    # on every save -- confirmed against a real production Lead Template
+    # that had already lost its dropdown/highlighting rules after a prior
+    # run touched it, while the untouched original template still had them.
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company"])
+    template.append([100, "old@x.com", "Old", "Lead", "X"])
+    wb.save(path)
+    _inject_synthetic_ext_list(path, "xl/worksheets/sheet2.xml")
+
+    leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y"},
+    ])
+    append_leads(path, "Report", leads_df, _field_mapping(), run_date="2026-08-08", clear_existing=True)
+
+    # The file must still open cleanly -- a naive splice that ignores the
+    # xr:uid namespace dependency corrupts the XML enough that openpyxl
+    # itself can't parse it back ("unbound prefix").
+    reloaded = openpyxl.load_workbook(path)
+    assert reloaded["Report"].cell(row=2, column=2).value == "new@y.com"
+
+    with zipfile.ZipFile(path) as zin:
+        xml = zin.read("xl/worksheets/sheet2.xml").decode("utf-8")
+    assert "x14:dataValidations" in xml
+    assert "TEST-UID" in xml
 
 
 def test_append_leads_highlight_fill_colors_only_the_new_rows(tmp_path):

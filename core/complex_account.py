@@ -28,13 +28,19 @@ DOWNLOAD_DAY_COLUMN = "Asset download day"
 DOWNLOAD_MONTH_COLUMN = "Asset download month"
 DOWNLOAD_YEAR_COLUMN = "Asset download year"
 DOWNLOAD_YEAR_VALUE = 2026
+AGREED_CONTACTED_COLUMN = "Agreed to be contacted by Dell Technologies"
+PHONE_OPTIN_COLUMN = "Phone Opt-In"
+# Per-CID constant, not derived from anything in the leadfile -- confirmed
+# business rule for this client's two CID groups.
+AGREED_CONTACTED_BY_CID = {"119414": "No", "119415": "Yes"}
 
 _KNOWN_COLUMNS = (
     COUNTRY_COLUMN, ACCOUNT_ID_COLUMN, COMPANY_COLUMN, CAPTURE_DATE_COLUMN,
     EMAIL_OPTIN_COLUMN, PHONE_COLUMN, ASSET_TITLE_COLUMN, ASSET_URN_COLUMN,
     FORM_URL_COLUMN, DELL_ASSET_URL_COLUMN, TOP_TOPICS_COLUMN,
     INSTALLED_TECH_COLUMN, PBS_COLUMN, DOWNLOAD_DAY_COLUMN,
-    DOWNLOAD_MONTH_COLUMN, DOWNLOAD_YEAR_COLUMN,
+    DOWNLOAD_MONTH_COLUMN, DOWNLOAD_YEAR_COLUMN, AGREED_CONTACTED_COLUMN,
+    PHONE_OPTIN_COLUMN,
 )
 
 
@@ -66,6 +72,17 @@ def _norm_domain(value) -> str:
         return ""
     text = str(value).strip().lower()
     return "" if text in ("", "nan") else text
+
+
+def _norm_cid(value) -> str:
+    # A CID column with even one blank cell elsewhere gets silently upcast
+    # by pandas from int64 to float64, turning every value from e.g. 119414
+    # into 119414.0 -- without normalizing this, a per-CID rule keyed on
+    # the clean digit string ("119414") would never match.
+    text = str(value).strip() if value is not None else ""
+    if text.endswith(".0") and text[:-2].isdigit():
+        return text[:-2]
+    return text
 
 
 def load_tal_index(tal_path: str) -> dict[str, list[dict]]:
@@ -408,6 +425,10 @@ def apply_complex_account_rules(
     one file (not split per CID) -- a domain missing from the map (no file
     uploaded, or no match for that domain) gets that lead's corresponding
     column cleared to blank, per design.
+
+    Agreed to be contacted by Dell Technologies / Phone Opt-In: fixed
+    business rules for this client's two CID groups (see
+    AGREED_CONTACTED_BY_CID), not derived from the leadfile at all.
     """
     df = _normalize_known_columns(leads_df.copy())
     review: dict[int, list[ReviewDetail]] = {}
@@ -425,6 +446,13 @@ def apply_complex_account_rules(
         pbs_value = pbs_map.get(domain)
         if PBS_COLUMN in df.columns:
             df.at[idx, PBS_COLUMN] = f"Predictive Buying Stage: {pbs_value}" if pbs_value else ""
+
+        if AGREED_CONTACTED_COLUMN in df.columns:
+            cid = _norm_cid(row.get(field_mapping.cid, ""))
+            df.at[idx, AGREED_CONTACTED_COLUMN] = AGREED_CONTACTED_BY_CID.get(cid, "")
+
+    if PHONE_OPTIN_COLUMN in df.columns:
+        df[PHONE_OPTIN_COLUMN] = "Yes"
 
     if TOP_TOPICS_COLUMN in df.columns:
         df[TOP_TOPICS_COLUMN] = df[TOP_TOPICS_COLUMN].apply(

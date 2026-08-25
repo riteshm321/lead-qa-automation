@@ -2,7 +2,9 @@ import csv
 import datetime
 import io
 import os
+import re
 import shutil
+import xml.etree.ElementTree as ET
 import zipfile
 from copy import copy
 from pathlib import Path
@@ -12,6 +14,7 @@ import pandas as pd
 from openpyxl.formula.translate import Translator
 from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import range_boundaries
 
 from core.models import FieldMapping, LeadTemplateTab
 
@@ -31,6 +34,117 @@ def _restore_external_link_parts(path: str, original_parts: dict[str, bytes]) ->
     with zipfile.ZipFile(path, "r") as zin:
         entries = {n: zin.read(n) for n in zin.namelist()}
     entries.update(original_parts)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name, data in entries.items():
+            zout.writestr(name, data)
+
+
+_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+
+def _worksheet_xml_path_for_sheet(path: str, sheet_name: str) -> str | None:
+    """The zip entry name (e.g. "xl/worksheets/sheet4.xml") holding one
+    sheet's XML, resolved the same way Excel itself does: sheet name ->
+    r:id in xl/workbook.xml -> target file in xl/_rels/workbook.xml.rels.
+    Returns None if the sheet or either mapping file can't be found."""
+    with zipfile.ZipFile(path, "r") as zin:
+        names = zin.namelist()
+        if "xl/workbook.xml" not in names or "xl/_rels/workbook.xml.rels" not in names:
+            return None
+        workbook_xml = zin.read("xl/workbook.xml")
+        rels_xml = zin.read("xl/_rels/workbook.xml.rels")
+
+    sheets_el = ET.fromstring(workbook_xml).find(f"{{{_MAIN_NS}}}sheets")
+    if sheets_el is None:
+        return None
+    rid = None
+    for sheet_el in sheets_el:
+        if sheet_el.get("name") == sheet_name:
+            rid = sheet_el.get(f"{{{_REL_NS}}}id")
+            break
+    if rid is None:
+        return None
+
+    for rel_el in ET.fromstring(rels_xml):
+        if rel_el.get("Id") == rid:
+            target = rel_el.get("Target", "")
+            # Relative to the xl/ folder ("worksheets/sheet4.xml") in a
+            # freshly-authored file, but openpyxl itself writes an
+            # absolute in-package path ("/xl/worksheets/sheet4.xml") when
+            # it re-saves -- handle whichever form is present.
+            return target.lstrip("/") if target.startswith("/") else f"xl/{target}"
+    return None
+
+
+def _read_worksheet_ext_list(path: str, sheet_name: str) -> bytes | None:
+    """Raw <extLst>...</extLst> bytes from one worksheet's XML, if present.
+
+    This is where Excel 2010+ extended features live -- x14 conditional
+    formatting (e.g. highlighting a cell whose value isn't in an allowed
+    picklist) and x14 data validation (e.g. a dropdown whose options
+    depend on another cell's value). openpyxl doesn't model either and
+    silently drops them on every save -- confirmed by re-opening a
+    real Lead Template that had already been through this tool once:
+    loading the untouched original template warns "Data Validation
+    extension is not supported and will be removed"; loading the
+    already-saved file raises no such warning, because it's already gone.
+    Capturing the bytes here lets them be spliced back in afterward.
+    """
+    sheet_xml_path = _worksheet_xml_path_for_sheet(path, sheet_name)
+    if sheet_xml_path is None:
+        return None
+    with zipfile.ZipFile(path, "r") as zin:
+        if sheet_xml_path not in zin.namelist():
+            return None
+        xml = zin.read(sheet_xml_path).decode("utf-8")
+    start = xml.find("<extLst>")
+    if start == -1:
+        return None
+    end = xml.find("</extLst>", start)
+    if end == -1:
+        return None
+    ext_list = xml[start:end + len("</extLst>")]
+
+    # Content inside <extLst> can reference namespace prefixes (e.g. an
+    # xr:uid="..." attribute Excel stamps on x14:dataValidation) that are
+    # declared on the ORIGINAL file's root <worksheet> tag, not repeated
+    # locally within <extLst> itself. Splicing the fragment as-is into a
+    # different file's worksheet XML (whose own root tag won't necessarily
+    # declare the same namespaces) then fails to parse with an "unbound
+    # prefix" error. Promote every such declaration onto <extLst> itself
+    # so the fragment is self-contained regardless of where it lands.
+    root_tag_start = xml.find("<worksheet")
+    root_tag = xml[root_tag_start:xml.find(">", root_tag_start) + 1]
+    root_namespaces = dict(re.findall(r'xmlns:(\w+)="([^"]+)"', root_tag))
+    used_prefixes = set(re.findall(r'[<\s](\w+):\w', ext_list))
+    declared_prefixes = set(re.findall(r'xmlns:(\w+)=', ext_list))
+    missing = sorted(p for p in used_prefixes - declared_prefixes if p in root_namespaces)
+    if missing:
+        extra_ns = "".join(f' xmlns:{p}="{root_namespaces[p]}"' for p in missing)
+        ext_list = ext_list.replace("<extLst>", f"<extLst{extra_ns}>", 1)
+
+    return ext_list.encode("utf-8")
+
+
+def _restore_worksheet_ext_list(path: str, sheet_name: str, ext_list_xml: bytes) -> None:
+    # <extLst> is always the last child of the <worksheet> root element per
+    # the OOXML schema, so splicing it back in right before the closing tag
+    # reproduces exactly where openpyxl would have written its own (had it
+    # understood the content well enough to keep it).
+    sheet_xml_path = _worksheet_xml_path_for_sheet(path, sheet_name)
+    if sheet_xml_path is None:
+        return
+    with zipfile.ZipFile(path, "r") as zin:
+        entries = {n: zin.read(n) for n in zin.namelist()}
+    if sheet_xml_path not in entries:
+        return
+    xml = entries[sheet_xml_path].decode("utf-8")
+    if "<extLst>" in xml:
+        return  # openpyxl unexpectedly kept its own -- don't write a duplicate
+    xml = xml.replace("</worksheet>", ext_list_xml.decode("utf-8") + "</worksheet>")
+    entries[sheet_xml_path] = xml.encode("utf-8")
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zout:
         for name, data in entries.items():
             zout.writestr(name, data)
@@ -443,6 +557,7 @@ def append_leads(
     highlight_fill: str | None = None,
 ) -> list[str]:
     _original_external_links = _read_external_link_parts(accumulated_path)
+    _original_ext_list = _read_worksheet_ext_list(accumulated_path, tab_name)
 
     wb = openpyxl.load_workbook(accumulated_path)
     ws = wb[tab_name]
@@ -578,11 +693,28 @@ def append_leads(
             for col_idx in range(1, len(headers) + 1):
                 ws.cell(row=row, column=col_idx).fill = new_fill
 
+    # openpyxl doesn't keep an Excel Table's declared range in sync with
+    # delete_rows() or new cell writes on its own -- after clear_existing
+    # deletes rows (or leads just get appended past the old range), a
+    # table's `ref` goes stale relative to the sheet's real data footprint
+    # (observed: a table still claiming rows 2-99 after clearing left only
+    # 2 real data rows). Some downstream ingestion platforms read a sheet
+    # via its declared table range rather than a raw cell scan, and see
+    # that mismatch as "no data in the file" even though the cells are
+    # populated. Resize every table anchored at this header row to match.
+    final_last_row = next_row + len(leads_df) - 1
+    for table in ws.tables.values():
+        min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+        if min_row <= header_row <= max_row:
+            table.ref = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{final_last_row}"
+
     wb.save(accumulated_path)
     wb.close()
 
     if _original_external_links:
         _restore_external_link_parts(accumulated_path, _original_external_links)
+    if _original_ext_list:
+        _restore_worksheet_ext_list(accumulated_path, tab_name, _original_ext_list)
 
     return unmatched_passthrough_headers
 

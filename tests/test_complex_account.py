@@ -367,6 +367,52 @@ def test_apply_complex_account_rules_matches_leads_from_different_cids_off_one_s
     assert enriched.loc[1, col_pbs] == "Predictive Buying Stage: Consideration"
 
 
+def test_apply_complex_account_rules_sets_agreed_contacted_by_cid():
+    # Fixed business rule for this client's two CID groups -- not derived
+    # from the leadfile at all.
+    df = pd.DataFrame([
+        {**_base_leads_df().iloc[0].to_dict(), "CID": "119414",
+         "Agreed to be contacted by Dell Technologies": ""},
+        {**_base_leads_df().iloc[0].to_dict(), "CID": "119415",
+         "Agreed to be contacted by Dell Technologies": ""},
+        {**_base_leads_df().iloc[0].to_dict(), "CID": "999999",  # unrecognized CID
+         "Agreed to be contacted by Dell Technologies": ""},
+    ])
+
+    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    col = "Agreed to be contacted by Dell Technologies"
+    assert enriched.loc[0, col] == "No"
+    assert enriched.loc[1, col] == "Yes"
+    assert enriched.loc[2, col] == ""
+
+
+def test_apply_complex_account_rules_matches_agreed_contacted_cid_when_column_upcast_to_float():
+    # Same float-upcast risk as any other CID comparison -- a blank cell
+    # elsewhere in the CID column turns "119414" into 119414.0.
+    df = pd.DataFrame([
+        {**_base_leads_df().iloc[0].to_dict(), "CID": "119415",
+         "Agreed to be contacted by Dell Technologies": ""},
+    ])
+    df["CID"] = df["CID"].astype(float)
+
+    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert enriched.loc[0, "Agreed to be contacted by Dell Technologies"] == "Yes"
+
+
+def test_apply_complex_account_rules_sets_phone_optin_yes_for_every_lead_regardless_of_cid():
+    df = pd.DataFrame([
+        {**_base_leads_df().iloc[0].to_dict(), "CID": "119414", "Phone Opt-In": ""},
+        {**_base_leads_df().iloc[0].to_dict(), "CID": "119415", "Phone Opt-In": "No"},
+    ])
+
+    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert enriched.loc[0, "Phone Opt-In"] == "Yes"
+    assert enriched.loc[1, "Phone Opt-In"] == "Yes"
+
+
 def test_apply_complex_account_rules_matches_by_domain_regardless_of_cid():
     # Installed Technologies/Predictive Buying Stage files now cover every
     # CID in one upload -- matching is by domain alone, so a lead's CID
