@@ -48,6 +48,16 @@ def read_sheet_as_dataframe(path: str, sheet_name: str) -> pd.DataFrame:
     return pd.read_excel(path, sheet_name=sheet_name)
 
 
+def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
+    """Serializes a DataFrame to real .xlsx bytes, for st.download_button --
+    lets a user pull a list (refund/needs-review leads) into Excel to
+    inspect without it ever touching disk on the server side."""
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
+    return buffer.getvalue()
+
+
 _CSV_ENCODINGS = ("utf-8-sig", "cp1252", "latin1")
 
 

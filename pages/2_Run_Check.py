@@ -12,7 +12,7 @@ from core.checks.leadcap import validate_purchased_report_cids
 from core.errors import render_error
 from core.excel_io import (
     read_sheet_as_dataframe, append_leads, backup_file, require_columns, find_header_row, route_leads_by_cid,
-    read_leadfile, read_pacing_overview_table,
+    read_leadfile, read_pacing_overview_table, dataframe_to_excel_bytes,
 )
 from core.excel_recalc import recalculate_workbook
 from core.complex_account import (
@@ -48,6 +48,17 @@ def _cached_tal_index(path: str, mtime: float):
 def _cached_asset_specs(path: str, mtime: float):
     # See _cached_tal_index above — same reasoning for the mtime param name.
     return load_asset_specifications(path)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_sheet_df(path: str, sheet_name: str, mtime: float) -> pd.DataFrame:
+    # Every reference/accumulated file (exclusion, TAL, suppression, dedupe
+    # sources, plus the Accumulated Report itself) was being re-read from
+    # disk with pd.read_excel on every single Run Check click, even when
+    # nothing on disk had changed since the last click — by far the biggest
+    # chunk of "Running checks..." time for clients with large reference
+    # files. See _cached_tal_index above for why mtime isn't underscored.
+    return read_sheet_as_dataframe(path, sheet_name)
 
 
 profile_names = list_profile_names(get_clients_dir())
@@ -204,80 +215,107 @@ if st.button("Run Check") and new_leads_file:
         st.error("Map the New Leads columns above before running the check.")
         st.stop()
     try:
-        with st.spinner("Running checks..."):
-            new_leads = new_leads_df
-            accumulated_leads = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
+        # Ordered so the progress bar's text always names what's about to
+        # run, not what just finished -- reference-file loading is one
+        # combined stage since none of those loads are individually slow
+        # enough to need their own bar segment.
+        _stage_labels = ["Loading reference files"] + [
+            label for label, on in [
+                ("Checking Duplicates", profile.duplicate.enabled),
+                ("Checking Leadcap", profile.leadcap.enabled),
+                ("Checking Exclusion List", profile.exclusion.enabled),
+                ("Checking TAL", profile.tal.enabled),
+                ("Checking Suppression List", profile.suppression.enabled),
+                ("Checking Dedupe List", profile.dedupe_list.enabled),
+            ] if on
+        ]
+        _progress_bar = st.progress(0.0, text=f"{_stage_labels[0]}...")
 
-            complex_review = {}
-            if profile.complex_account.enabled:
-                # Only the conditions that can actually flag a lead (bad
-                # Capture Date, ambiguous Email Opt-in, an already-filled Asset
-                # URN/Form URL/Dell Asset URL that doesn't match the
-                # specifications file) run here, so they go through the same
-                # Refund/Needs Review flow as every other check. The
-                # column-filling rules (TAL mapping, Installed Technologies/
-                # Predictive Buying Stage, phone/date formatting) run later,
-                # only on whichever leads end up valid — see the "Finalize
-                # (fill columns)" step below.
-                _check_asset_specs = None
-                if profile.complex_account.specifications_path:
-                    _check_asset_specs = _cached_asset_specs(
-                        profile.complex_account.specifications_path,
-                        os.path.getmtime(profile.complex_account.specifications_path))
-                complex_review = check_complex_account_conditions(new_leads, _check_asset_specs)
+        def _advance_progress(label: str) -> None:
+            # `label` names the stage that's starting NOW (pipeline.py calls
+            # this right before running that check) -- its position in
+            # _stage_labels is exactly how far along the bar should be.
+            index = _stage_labels.index(label)
+            _progress_bar.progress(index / len(_stage_labels), text=f"{label}...")
 
-            reference_data: dict = {"purchased_reports": purchased_reports}
-            if profile.exclusion.enabled:
-                exclusion_sources_data: dict[str, pd.DataFrame] = {}
-                for source in profile.exclusion.sources:
-                    df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                    required_cols = [source.domain_column]
-                    if profile.exclusion.check_company_name:
-                        required_cols.append(source.company_column)
+        new_leads = new_leads_df
+        accumulated_leads = _cached_sheet_df(
+            profile.accumulated_report_path, profile.accumulated_tab_name,
+            os.path.getmtime(profile.accumulated_report_path))
+
+        complex_review = {}
+        if profile.complex_account.enabled:
+            # Only the conditions that can actually flag a lead (bad
+            # Capture Date, ambiguous Email Opt-in, an already-filled Asset
+            # URN/Form URL/Dell Asset URL that doesn't match the
+            # specifications file) run here, so they go through the same
+            # Refund/Needs Review flow as every other check. The
+            # column-filling rules (TAL mapping, Installed Technologies/
+            # Predictive Buying Stage, phone/date formatting) run later,
+            # only on whichever leads end up valid — see the "Finalize
+            # (fill columns)" step below.
+            _check_asset_specs = None
+            if profile.complex_account.specifications_path:
+                _check_asset_specs = _cached_asset_specs(
+                    profile.complex_account.specifications_path,
+                    os.path.getmtime(profile.complex_account.specifications_path))
+            complex_review = check_complex_account_conditions(new_leads, _check_asset_specs)
+
+        reference_data: dict = {"purchased_reports": purchased_reports}
+        if profile.exclusion.enabled:
+            exclusion_sources_data: dict[str, pd.DataFrame] = {}
+            for source in profile.exclusion.sources:
+                df = _cached_sheet_df(source.file_path, source.sheet_name, os.path.getmtime(source.file_path))
+                required_cols = [source.domain_column]
+                if profile.exclusion.check_company_name:
+                    required_cols.append(source.company_column)
+                require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
+                exclusion_sources_data[source.name] = df
+            reference_data["exclusion_sources"] = exclusion_sources_data
+        if profile.tal.enabled:
+            tal_sources_data: dict[str, pd.DataFrame] = {}
+            for source in profile.tal.sources:
+                df = _cached_sheet_df(source.file_path, source.sheet_name, os.path.getmtime(source.file_path))
+                required_cols = [source.domain_column]
+                if profile.tal.check_company_name:
+                    required_cols.append(source.company_column)
+                require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
+                tal_sources_data[source.name] = df
+            reference_data["tal_sources"] = tal_sources_data
+        if profile.suppression.enabled:
+            suppression_sources_data: dict[str, pd.DataFrame] = {}
+            for source in profile.suppression.sources:
+                df = _cached_sheet_df(source.file_path, source.sheet_name, os.path.getmtime(source.file_path))
+                required_cols = []
+                if profile.suppression.check_domain:
+                    required_cols.append(source.domain_column)
+                if profile.suppression.check_company_name:
+                    required_cols.append(source.company_column)
+                if profile.suppression.check_email:
+                    required_cols.append(source.email_column)
+                if required_cols:
                     require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
-                    exclusion_sources_data[source.name] = df
-                reference_data["exclusion_sources"] = exclusion_sources_data
-            if profile.tal.enabled:
-                tal_sources_data: dict[str, pd.DataFrame] = {}
-                for source in profile.tal.sources:
-                    df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                    required_cols = [source.domain_column]
-                    if profile.tal.check_company_name:
-                        required_cols.append(source.company_column)
-                    require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
-                    tal_sources_data[source.name] = df
-                reference_data["tal_sources"] = tal_sources_data
-            if profile.suppression.enabled:
-                suppression_sources_data: dict[str, pd.DataFrame] = {}
-                for source in profile.suppression.sources:
-                    df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                    required_cols = []
-                    if profile.suppression.check_domain:
-                        required_cols.append(source.domain_column)
-                    if profile.suppression.check_company_name:
-                        required_cols.append(source.company_column)
-                    if profile.suppression.check_email:
-                        required_cols.append(source.email_column)
-                    if required_cols:
-                        require_columns(df, required_cols, f"{source.file_path} [{source.sheet_name}]")
-                    suppression_sources_data[source.name] = df
-                reference_data["suppression_sources"] = suppression_sources_data
-            if profile.dedupe_list.enabled:
-                dedupe_sources_data: dict[str, pd.DataFrame] = {}
-                for source in profile.dedupe_list.sources:
-                    df = read_sheet_as_dataframe(source.file_path, source.sheet_name)
-                    require_columns(df, [source.email_column], f"{source.file_path} [{source.sheet_name}]")
-                    dedupe_sources_data[source.name] = df
-                reference_data["dedupe_sources"] = dedupe_sources_data
+                suppression_sources_data[source.name] = df
+            reference_data["suppression_sources"] = suppression_sources_data
+        if profile.dedupe_list.enabled:
+            dedupe_sources_data: dict[str, pd.DataFrame] = {}
+            for source in profile.dedupe_list.sources:
+                df = _cached_sheet_df(source.file_path, source.sheet_name, os.path.getmtime(source.file_path))
+                require_columns(df, [source.email_column], f"{source.file_path} [{source.sheet_name}]")
+                dedupe_sources_data[source.name] = df
+            reference_data["dedupe_sources"] = dedupe_sources_data
 
-            alias_groups = load_alias_groups(get_aliases_path())
-            result = run_pipeline(new_leads, profile, accumulated_leads, reference_data, alias_groups)
-            if complex_review:
-                merge_complex_account_review(result, complex_review)
+        alias_groups = load_alias_groups(get_aliases_path())
+        result = run_pipeline(new_leads, profile, accumulated_leads, reference_data, alias_groups,
+                               on_progress=_advance_progress)
+        if complex_review:
+            merge_complex_account_review(result, complex_review)
+        _progress_bar.progress(1.0, text="Done")
+        _progress_bar.empty()
 
-            st.session_state["run_new_leads"] = new_leads
-            st.session_state["run_result"] = result
-            st.session_state["run_result_for"] = _run_identity
+        st.session_state["run_new_leads"] = new_leads
+        st.session_state["run_result"] = result
+        st.session_state["run_result_for"] = _run_identity
     except Exception as exc:
         render_error(exc)
 
@@ -323,10 +361,27 @@ if "run_result" in st.session_state:
         # (built with the sticky "all approved" default below).
         st.session_state.setdefault("refund_editor_nonce", 0)
         st.session_state.setdefault("refund_all_approved_default", False)
-        if st.button("Select all as valid", key="refund_select_all"):
-            st.session_state["refund_all_approved_default"] = True
-            st.session_state["refund_editor_nonce"] += 1
-            st.rerun()
+        col_select_all, col_clear_all, col_download = st.columns(3)
+        with col_select_all:
+            if st.button("Select all as valid", key="refund_select_all", use_container_width=True):
+                st.session_state["refund_all_approved_default"] = True
+                st.session_state["refund_editor_nonce"] += 1
+                st.rerun()
+        with col_clear_all:
+            if st.button("Clear selection", key="refund_clear_all", use_container_width=True):
+                st.session_state["refund_all_approved_default"] = False
+                st.session_state["refund_editor_nonce"] += 1
+                st.rerun()
+        with col_download:
+            _refund_export_df = new_leads.loc[refund_indices].copy()
+            _refund_export_df.insert(0, "Refund Reason", [result.refund_reasons[idx] for idx in refund_indices])
+            st.download_button(
+                "⬇️ Download refund leads (Excel)",
+                data=dataframe_to_excel_bytes(_refund_export_df, sheet_name="Refund Leads"),
+                file_name=f"{client_name} - Refund Leads.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
 
         refund_table = pd.DataFrame([
             {
@@ -353,7 +408,85 @@ if "run_result" in st.session_state:
 
     if result.review_reasons:
         st.subheader("Needs Review")
+        st.caption("Tick leads below, then act on them in bulk — or use the buttons inside each "
+                   "lead's detail further down to act on it individually.")
         fm = profile.field_mapping
+        review_indices = list(result.review_reasons.keys())
+
+        # Same sticky-widget-state workaround as the Refund Reasons editor
+        # above (see its comment) — a nonce bump forces a fresh widget key
+        # so "select all"/"clear" actually changes what's checked.
+        st.session_state.setdefault("review_editor_nonce", 0)
+        st.session_state.setdefault("review_all_selected_default", False)
+        col_select_all, col_clear_all, col_download = st.columns(3)
+        with col_select_all:
+            if st.button("Select all", key="review_select_all", use_container_width=True):
+                st.session_state["review_all_selected_default"] = True
+                st.session_state["review_editor_nonce"] += 1
+                st.rerun()
+        with col_clear_all:
+            if st.button("Clear selection", key="review_clear_all", use_container_width=True):
+                st.session_state["review_all_selected_default"] = False
+                st.session_state["review_editor_nonce"] += 1
+                st.rerun()
+        with col_download:
+            _review_export_df = new_leads.loc[review_indices].copy()
+            _review_export_df.insert(0, "Review Reasons", [
+                "; ".join(str(d) for d in result.review_reasons[idx]) for idx in review_indices
+            ])
+            st.download_button(
+                "⬇️ Download needs-review leads (Excel)",
+                data=dataframe_to_excel_bytes(_review_export_df, sheet_name="Needs Review"),
+                file_name=f"{client_name} - Needs Review Leads.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+        review_table = pd.DataFrame([
+            {
+                "Select": st.session_state["review_all_selected_default"],
+                "Row": idx + 2,
+                "Email": new_leads.loc[idx].get(fm.email, ""),
+                "Company": new_leads.loc[idx].get(fm.company, ""),
+                "CID": new_leads.loc[idx].get(fm.cid, ""),
+                "Reasons": "; ".join(str(d) for d in result.review_reasons[idx]),
+            }
+            for idx in review_indices
+        ])
+        edited_review_table = st.data_editor(
+            review_table,
+            key=f"review_editor_{st.session_state['review_editor_nonce']}",
+            hide_index=True,
+            use_container_width=True,
+            disabled=["Row", "Email", "Company", "CID", "Reasons"],
+            column_config={"Select": st.column_config.CheckboxColumn(required=True)},
+        )
+        selected_review_indices = [
+            idx for idx, selected in zip(review_indices, edited_review_table["Select"]) if selected
+        ]
+
+        col_bulk_valid, col_bulk_refund = st.columns(2)
+        with col_bulk_valid:
+            if st.button(f"Approve {len(selected_review_indices)} selected as valid",
+                         key="review_bulk_approve", use_container_width=True,
+                         disabled=not selected_review_indices):
+                for idx in selected_review_indices:
+                    result.valid_indices.append(idx)
+                    del result.review_reasons[idx]
+                st.session_state["review_all_selected_default"] = False
+                st.session_state["review_editor_nonce"] += 1
+                st.rerun()
+        with col_bulk_refund:
+            if st.button(f"Mark {len(selected_review_indices)} selected as refund",
+                         key="review_bulk_refund", use_container_width=True,
+                         disabled=not selected_review_indices):
+                for idx in selected_review_indices:
+                    result.refund_reasons[idx] = "; ".join(str(d) for d in result.review_reasons[idx])
+                    del result.review_reasons[idx]
+                st.session_state["review_all_selected_default"] = False
+                st.session_state["review_editor_nonce"] += 1
+                st.rerun()
+
         for idx, details in list(result.review_reasons.items()):
             lead = new_leads.loc[idx]
             name = f"{lead.get(fm.first_name, '')} {lead.get(fm.last_name, '')}".strip()
@@ -365,14 +498,19 @@ if "run_result" in st.session_state:
                 f"· {company or '(no company)'} · CID {cid or '?'}"
             ):
                 st.caption(f"📧 {email}  |  🏢 {company}  |  🆔 CID {cid}")
-                for detail in details:
+                for detail_idx, detail in enumerate(details):
                     st.markdown(f"**{detail}**" + (f" — {detail.score:.0f}% similar" if detail.score is not None else ""))
                     if detail.lead_value or detail.candidate_value:
                         comp1, comp2 = st.columns(2)
-                        comp1.text_input("This lead's value", detail.lead_value, disabled=True, key=f"lead_val_{idx}_{detail.check}")
+                        # detail_idx (not detail.check) keys these -- several
+                        # details for the same lead commonly share the same
+                        # check name (e.g. two Complex Account asset-URL
+                        # mismatches at once), which would otherwise collide.
+                        comp1.text_input("This lead's value", detail.lead_value, disabled=True,
+                                          key=f"lead_val_{idx}_{detail_idx}")
                         comp2.text_input(
                             f"Compared against ({detail.candidate_context})" if detail.candidate_context else "Compared against",
-                            detail.candidate_value, disabled=True, key=f"cand_val_{idx}_{detail.check}",
+                            detail.candidate_value, disabled=True, key=f"cand_val_{idx}_{detail_idx}",
                         )
                 col1, col2 = st.columns(2)
                 if col1.button("Approve as valid", key=f"approve_{idx}", use_container_width=True):

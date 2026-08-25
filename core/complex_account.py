@@ -317,21 +317,28 @@ def check_asset_url_mismatches(
         expected_url1 = str(spec["url1"]).strip()
         expected_url2 = str(spec["url2"]).strip()
         expected_dell_url = str(spec["dell_url"]).strip()
+        context = f"specifications file entry for \"{row.get(ASSET_TITLE_COLUMN)}\""
 
-        mismatches = []
+        # One finding per mismatched field, not one combined "URN/Form
+        # URL/Dell Asset URL don't match" catch-all -- so the reviewer sees
+        # exactly which field is wrong (and what it should be) without
+        # having to guess from a generic heading.
         if urn != expected_urn:
-            mismatches.append(f"Asset URN is \"{urn}\", expected \"{expected_urn}\"")
+            review.setdefault(idx, []).append(ReviewDetail(
+                check="Complex Account", message="Asset URN doesn't match the specifications file",
+                lead_value=urn, candidate_value=expected_urn, candidate_context=context,
+            ))
         if form_url not in (expected_url1, expected_url2):
-            mismatches.append(f"Form URL \"{form_url}\" is neither Asset URL 1 nor Asset URL 2 for this asset")
-        if dell_url != expected_dell_url:
-            mismatches.append(f"Dell Asset URL is \"{dell_url}\", expected \"{expected_dell_url}\"")
-
-        if mismatches:
             review.setdefault(idx, []).append(ReviewDetail(
                 check="Complex Account",
-                message="Asset URN/Form URL/Dell Asset URL don't match the specifications file",
-                lead_value="; ".join(mismatches),
-                candidate_context=f"specifications file entry for \"{row.get(ASSET_TITLE_COLUMN)}\"",
+                message="Form URL doesn't match either Asset URL in the specifications file",
+                lead_value=form_url, candidate_value=f"{expected_url1} (or {expected_url2})",
+                candidate_context=context,
+            ))
+        if dell_url != expected_dell_url:
+            review.setdefault(idx, []).append(ReviewDetail(
+                check="Complex Account", message="Dell Asset URL doesn't match the specifications file",
+                lead_value=dell_url, candidate_value=expected_dell_url, candidate_context=context,
             ))
     return review
 

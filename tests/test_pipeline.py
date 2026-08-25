@@ -32,6 +32,42 @@ def test_valid_lead_passes_through_with_no_checks_enabled():
     assert result.review_reasons == {}
 
 
+def test_on_progress_called_once_per_enabled_check_in_order():
+    profile = _profile(
+        duplicate=DuplicateConfig(enabled=True),
+        exclusion=ExclusionConfig(enabled=True, sources=[
+            ReferenceSource(name="Global", file_path="unused.xlsx", sheet_name="Exclusion"),
+        ]),
+        suppression=SuppressionConfig(enabled=True, sources=[
+            ReferenceSource(name="Global", file_path="unused.xlsx", sheet_name="Suppression"),
+        ]),
+    )
+    new_leads = pd.DataFrame([{"emailaddress": "a@x.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1"}])
+    accumulated = pd.DataFrame(columns=["emailaddress", "firstname", "lastname", "company", "CID"])
+    seen_labels = []
+
+    run_pipeline(
+        new_leads, profile, accumulated,
+        reference_data={
+            "exclusion_sources": {"Global": pd.DataFrame(columns=["Account Name", "Domain"])},
+            "suppression_sources": {"Global": pd.DataFrame(columns=["Account Name", "Domain"])},
+        },
+        alias_groups=[], on_progress=seen_labels.append,
+    )
+
+    assert seen_labels == ["Checking Duplicates", "Checking Exclusion List", "Checking Suppression List"]
+
+
+def test_on_progress_is_optional_and_defaults_to_no_callback():
+    profile = _profile(duplicate=DuplicateConfig(enabled=True))
+    new_leads = pd.DataFrame([{"emailaddress": "a@x.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1"}])
+    accumulated = pd.DataFrame(columns=["emailaddress", "firstname", "lastname", "company", "CID"])
+
+    result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[])
+
+    assert result.valid_indices == [0]
+
+
 def test_lead_failing_duplicate_and_exclusion_lists_both_reasons():
     profile = _profile(
         duplicate=DuplicateConfig(enabled=True),

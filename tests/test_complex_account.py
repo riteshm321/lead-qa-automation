@@ -221,6 +221,9 @@ def test_check_asset_url_mismatches_passes_when_everything_matches():
 
 
 def test_check_asset_url_mismatches_flags_wrong_urn_and_dell_url():
+    # Two separate mismatches -> two separate findings, each naming exactly
+    # which field is wrong (not one combined "URN/Form URL/Dell Asset URL
+    # don't match" catch-all a reviewer would have to guess at).
     df = pd.DataFrame([{
         "Asset Title": "Fuel AI Innovation", "Asset URN": "WRONG_URN",
         "Form URL": "https://a.com/1", "Dell Asset URL": "https://wrong-dell.com",
@@ -228,8 +231,18 @@ def test_check_asset_url_mismatches_flags_wrong_urn_and_dell_url():
     review = check_asset_url_mismatches(df, _ASSET_SPECS)
 
     assert 0 in review
-    message = str(review[0][0])
-    assert "Asset URN/Form URL/Dell Asset URL" in message
+    messages = [str(d) for d in review[0]]
+    assert any("Asset URN doesn't match" in m for m in messages)
+    assert any("Dell Asset URL doesn't match" in m for m in messages)
+    assert not any("Form URL" in m for m in messages)  # Form URL matched url1 — not flagged
+
+    urn_detail = next(d for d in review[0] if "Asset URN" in d.message)
+    assert urn_detail.lead_value == "WRONG_URN"
+    assert urn_detail.candidate_value == "DT2503G0007_033"
+
+    dell_detail = next(d for d in review[0] if "Dell Asset URL" in d.message)
+    assert dell_detail.lead_value == "https://wrong-dell.com"
+    assert dell_detail.candidate_value == "https://dell.com/x"
 
 
 def test_check_asset_url_mismatches_accepts_either_asset_url():
@@ -246,7 +259,14 @@ def test_check_asset_url_mismatches_flags_wrong_form_url():
         "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
         "Form URL": "https://neither-url.com", "Dell Asset URL": "https://dell.com/x",
     }])
-    assert 0 in check_asset_url_mismatches(df, _ASSET_SPECS)
+    review = check_asset_url_mismatches(df, _ASSET_SPECS)
+
+    assert 0 in review
+    assert len(review[0]) == 1  # only Form URL is wrong -- not a combined finding
+    detail = review[0][0]
+    assert detail.message == "Form URL doesn't match either Asset URL in the specifications file"
+    assert detail.lead_value == "https://neither-url.com"
+    assert detail.candidate_value == "https://a.com/1 (or https://a.com/2)"
 
 
 def test_check_asset_url_mismatches_skips_unrecognized_asset_title():

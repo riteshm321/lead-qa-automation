@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Callable
 
 import pandas as pd
 
@@ -20,6 +21,7 @@ def run_pipeline(
     accumulated_leads: pd.DataFrame,
     reference_data: dict,
     alias_groups: list[list[str]],
+    on_progress: Callable[[str], None] | None = None,
 ) -> PipelineResult:
     fm = profile.field_mapping
     fail: dict[int, list[str]] = {}
@@ -31,25 +33,35 @@ def run_pipeline(
         for idx, reason in outcome.review.items():
             review.setdefault(idx, []).append(reason)
 
+    def report(label: str) -> None:
+        if on_progress is not None:
+            on_progress(label)
+
     if profile.duplicate.enabled:
+        report("Checking Duplicates")
         merge(duplicate.check_duplicates(new_leads, accumulated_leads, fm, profile.accumulated_field_mapping))
 
     if profile.leadcap.enabled:
+        report("Checking Leadcap")
         merge(leadcap.check_leadcap(new_leads, fm, profile.leadcap, reference_data.get("purchased_reports", {})))
 
     if profile.exclusion.enabled:
+        report("Checking Exclusion List")
         merge(exclusion.check_exclusion(new_leads, fm, profile.exclusion,
                                          reference_data.get("exclusion_sources", {}), alias_groups))
 
     if profile.tal.enabled:
+        report("Checking TAL")
         merge(tal.check_tal(new_leads, fm, profile.tal,
                              reference_data.get("tal_sources", {}), alias_groups))
 
     if profile.suppression.enabled:
+        report("Checking Suppression List")
         merge(suppression.check_suppression(new_leads, fm, profile.suppression,
                                              reference_data.get("suppression_sources", {}), alias_groups))
 
     if profile.dedupe_list.enabled:
+        report("Checking Dedupe List")
         merge(dedupe_list.check_dedupe_list(new_leads, fm, profile.dedupe_list,
                                              reference_data.get("dedupe_sources", {})))
 

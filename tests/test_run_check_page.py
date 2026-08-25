@@ -7,6 +7,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_jira_settings
+from core.check_result import ReviewDetail
 from core.jira_client import JiraError
 from core.models import ClientProfile, FieldMapping, DuplicateConfig, LeadTemplateTab, ComplexAccountConfig
 from core.pipeline import PipelineResult, run_pipeline
@@ -122,6 +123,158 @@ def test_approved_refund_lead_lands_in_accumulated_tab_not_just_refund(tmp_path,
     assert "bob@new.com" in acc_emails
     assert "existing@dup.com" in acc_emails  # approved despite being auto-flagged for refund
     assert refund_emails == set()  # nothing left in Refund tab once approved
+
+
+def test_review_lead_with_multiple_same_check_details_renders_without_key_collision(tmp_path, monkeypatch):
+    # Regression test: two ReviewDetail entries for the same lead sharing
+    # the same `check` value (e.g. two separate Complex Account asset-URL
+    # mismatches at once) used to collide on the same Streamlit widget key
+    # for their comparison text_inputs, raising StreamlitDuplicateElementKey.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm)
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[], refund_reasons={}, review_reasons={0: [
+        ReviewDetail(check="Complex Account", message="Asset URN doesn't match the specifications file",
+                     lead_value="WRONG_URN", candidate_value="RIGHT_URN", candidate_context="specs entry"),
+        ReviewDetail(check="Complex Account", message="Dell Asset URL doesn't match the specifications file",
+                     lead_value="https://wrong.com", candidate_value="https://right.com", candidate_context="specs entry"),
+    ]})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    assert not at.exception
+    text_inputs = {t.key: t.value for t in at.text_input}
+    assert text_inputs["lead_val_0_0"] == "WRONG_URN"
+    assert text_inputs["cand_val_0_0"] == "RIGHT_URN"
+    assert text_inputs["lead_val_0_1"] == "https://wrong.com"
+    assert text_inputs["cand_val_0_1"] == "https://right.com"
+
+
+def test_review_lead_individual_approve_and_refund_buttons(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm)
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+        {"Email_Address": "b@x.com", "First_Name": "B", "Last_Name": "Two", "Company_Name": "Y", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[], refund_reasons={}, review_reasons={
+        0: [ReviewDetail(check="Duplicate", message="Name & company prefix matches another lead")],
+        1: [ReviewDetail(check="Duplicate", message="Name & company prefix matches another lead")],
+    })
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    assert not at.exception
+
+    approve_button = next(b for b in at.button if b.key == "approve_0")
+    approve_button.click().run()
+    assert not at.exception
+
+    refund_button = next(b for b in at.button if b.key == "refund_1")
+    refund_button.click().run()
+    assert not at.exception
+
+    updated_result = at.session_state["run_result"]
+    assert updated_result.valid_indices == [0]
+    assert 1 in updated_result.refund_reasons
+    assert updated_result.review_reasons == {}
+
+
+def test_review_bulk_approve_selected_leads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm)
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+        {"Email_Address": "b@x.com", "First_Name": "B", "Last_Name": "Two", "Company_Name": "Y", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[], refund_reasons={}, review_reasons={
+        0: [ReviewDetail(check="Duplicate", message="reason a")],
+        1: [ReviewDetail(check="Duplicate", message="reason b")],
+    })
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    assert not at.exception
+
+    # AppTest has no widget accessor for st.data_editor -- same workaround
+    # as the Refund Reasons editor test above: patch it to return the
+    # edited table the real widget would produce for "both rows ticked".
+    edited_table = pd.DataFrame([
+        {"Select": True, "Row": 2, "Email": "a@x.com", "Company": "X", "CID": "1", "Reasons": "Duplicate - reason a"},
+        {"Select": True, "Row": 3, "Email": "b@x.com", "Company": "Y", "CID": "1", "Reasons": "Duplicate - reason b"},
+    ])
+    with patch("streamlit.data_editor", return_value=edited_table):
+        bulk_approve_button = next(b for b in at.button if b.key == "review_bulk_approve")
+        bulk_approve_button.click().run()
+    assert not at.exception
+
+    updated_result = at.session_state["run_result"]
+    assert sorted(updated_result.valid_indices) == [0, 1]
+    assert updated_result.review_reasons == {}
+
+
+def test_review_download_button_and_refund_download_button_present(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm)
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+        {"Email_Address": "b@x.com", "First_Name": "B", "Last_Name": "Two", "Company_Name": "Y", "CID": "1"},
+    ])
+    result = PipelineResult(
+        valid_indices=[], refund_reasons={0: "Duplicate - exact email"},
+        review_reasons={1: [ReviewDetail(check="Duplicate", message="reason b")]},
+    )
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    assert not at.exception
+    download_labels = [d.label for d in at.download_button]
+    assert any("refund leads" in label for label in download_labels)
+    assert any("needs-review leads" in label for label in download_labels)
 
 
 def test_unapproved_refund_lead_stays_refund_only(tmp_path, monkeypatch):

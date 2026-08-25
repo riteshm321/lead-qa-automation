@@ -5,7 +5,10 @@ import openpyxl
 import pandas as pd
 import pytest
 
-from core.excel_io import list_sheet_names, read_sheet_as_dataframe, backup_file, require_columns, append_leads
+from core.excel_io import (
+    list_sheet_names, read_sheet_as_dataframe, backup_file, require_columns, append_leads,
+    dataframe_to_excel_bytes,
+)
 from core.models import FieldMapping
 
 
@@ -32,6 +35,20 @@ def test_read_sheet_as_dataframe(tmp_path):
     df = read_sheet_as_dataframe(path, "Exclusion")
     assert list(df.columns) == ["Account Name", "Domain"]
     assert df.iloc[0]["Domain"] == "adecco.co.uk"
+
+
+def test_dataframe_to_excel_bytes_round_trips_through_a_real_workbook(tmp_path):
+    df = pd.DataFrame([{"Email": "a@x.com", "Reason": "Duplicate - exact email"}])
+
+    raw = dataframe_to_excel_bytes(df, sheet_name="Refund Leads")
+
+    out_path = str(tmp_path / "export.xlsx")
+    with open(out_path, "wb") as f:
+        f.write(raw)
+    assert list_sheet_names(out_path) == ["Refund Leads"]
+    read_back = read_sheet_as_dataframe(out_path, "Refund Leads")
+    assert read_back.iloc[0]["Email"] == "a@x.com"
+    assert read_back.iloc[0]["Reason"] == "Duplicate - exact email"
 
 
 def test_backup_file_creates_timestamped_copy_in_backup_subfolder(tmp_path):
