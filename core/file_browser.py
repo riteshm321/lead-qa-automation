@@ -8,7 +8,10 @@ def browse_for_file(file_types: list[tuple[str, str]] | None = None) -> str | No
         root.withdraw()
         root.wm_attributes("-topmost", 1)
         path = filedialog.askopenfilename(
-            filetypes=file_types or [("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
+            filetypes=file_types or [
+                ("Excel/CSV files", "*.xlsx *.xls *.csv"), ("Excel files", "*.xlsx *.xls"),
+                ("CSV files", "*.csv"), ("All files", "*.*"),
+            ]
         )
     finally:
         # Without this in a finally, an exception from the dialog itself

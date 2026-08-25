@@ -93,6 +93,53 @@ def test_lead_template_mapping_reads_from_first_tabs_own_file_when_shared_path_i
     assert "Email_Address" in email_select.options
 
 
+def test_exclusion_source_accepts_a_csv_file_and_reads_its_columns_and_saves(tmp_path, monkeypatch):
+    # Reference sources (Exclusion, TAL, Suppression, Dedupe) were Excel-only
+    # -- picking a .csv here used to either error or leave the sheet/column
+    # pickers empty. A CSV has no real sheets, so the picker must fall back
+    # to one fixed pseudo-sheet rather than breaking.
+    monkeypatch.chdir(tmp_path)
+    csv_path = str(tmp_path / "exclusion.csv")
+    with open(csv_path, "w", encoding="utf-8") as f:
+        f.write("Account Name,Domain\nExcluded Co,excluded.com\n")
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("CSV Test Client").run()
+    next(c for c in at.checkbox if c.label == "Enable Exclusion check").set_value(True).run()
+    assert not at.exception
+
+    add_button = next(b for b in at.button if b.label == "➕ Add Exclusion Source")
+    add_button.click().run()
+    assert not at.exception
+
+    next(t for t in at.text_input if t.label == "Name").set_value("Global").run()
+    file_path_input = next(t for t in at.text_input if t.label == "File path")
+    file_path_input.set_value(csv_path).run()
+    assert not at.exception
+
+    sheet_select = next(s for s in at.selectbox if s.label == "Sheet")
+    assert sheet_select.options == ["(CSV file)"]
+
+    domain_select = next(s for s in at.selectbox if s.label == "Domain column")
+    assert "Domain" in domain_select.options
+    assert "Account Name" in domain_select.options
+
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    save_button = next(b for b in at.button if "Save Client Profile" in b.label)
+    save_button.click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("CSV Test Client", get_clients_dir())
+    assert loaded.exclusion.enabled is True
+    assert loaded.exclusion.sources[0].file_path == csv_path
+    assert loaded.exclusion.sources[0].sheet_name == "(CSV file)"
+
+
 def test_complex_account_checkbox_reveals_file_path_fields_and_saves(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 

@@ -150,7 +150,16 @@ def _restore_worksheet_ext_list(path: str, sheet_name: str, ext_list_xml: bytes)
             zout.writestr(name, data)
 
 
+_CSV_PSEUDO_SHEET_NAME = "(CSV file)"
+
+
 def list_sheet_names(path: str) -> list[str]:
+    # A CSV has no sheets at all -- report one fixed pseudo-name so every
+    # caller (the Client Setup sheet picker, in particular) can treat a
+    # reference source's file as "always has at least one sheet to pick"
+    # without a CSV-specific branch of its own.
+    if path.lower().endswith(".csv"):
+        return [_CSV_PSEUDO_SHEET_NAME]
     wb = openpyxl.load_workbook(path, read_only=True)
     try:
         return wb.sheetnames
@@ -159,6 +168,12 @@ def list_sheet_names(path: str) -> list[str]:
 
 
 def read_sheet_as_dataframe(path: str, sheet_name: str) -> pd.DataFrame:
+    # sheet_name is meaningless for a CSV (there's only ever one "sheet")
+    # and ignored here -- callers pass whatever list_sheet_names()
+    # returned for this same path, i.e. _CSV_PSEUDO_SHEET_NAME.
+    if path.lower().endswith(".csv"):
+        with open(path, "rb") as f:
+            return read_csv_bytes_robust(f.read())
     return pd.read_excel(path, sheet_name=sheet_name)
 
 
@@ -175,18 +190,39 @@ def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> by
 _CSV_ENCODINGS = ("utf-8-sig", "cp1252", "latin1")
 
 
-def read_leadfile(uploaded_file) -> pd.DataFrame:
-    """Read an uploaded New Leads file — Excel or CSV — into a DataFrame.
-
-    Real-world CSV exports vary in ways plain read_csv() doesn't handle by
-    default: a UTF-8 byte-order mark from Excel's own CSV export, Windows-1252
-    encoding from older export tools, and semicolon (or tab/pipe) delimiters
-    from European-locale exports. Decoding bytes ourselves first, then
-    sniffing the delimiter from the clean decoded text, avoids a pandas
-    quirk where handing raw bytes + encoding= to read_csv(sep=None) can
-    silently corrupt non-ASCII characters during delimiter detection even
-    though the encoding itself is correct.
+def read_csv_bytes_robust(raw: bytes) -> pd.DataFrame:
+    """Parse raw CSV bytes handling real-world export quirks: a UTF-8
+    byte-order mark from Excel's own CSV export, Windows-1252 encoding
+    from older export tools, and semicolon (or tab/pipe) delimiters from
+    European-locale exports. Decoding bytes ourselves first, then sniffing
+    the delimiter from the clean decoded text, avoids a pandas quirk where
+    handing raw bytes + encoding= to read_csv(sep=None) can silently
+    corrupt non-ASCII characters during delimiter detection even though
+    the encoding itself is correct. Shared by every CSV entry point in
+    this app (New Leads, reference/exclusion/TAL/suppression/dedupe
+    sources, the Purchased Lead Report) so they all get the same handling.
     """
+    text = None
+    last_error: Exception | None = None
+    for encoding in _CSV_ENCODINGS:
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError as exc:
+            last_error = exc
+    if text is None:
+        raise last_error
+
+    try:
+        delimiter = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|").delimiter
+    except csv.Error:
+        delimiter = ","
+
+    return pd.read_csv(io.StringIO(text), sep=delimiter)
+
+
+def read_leadfile(uploaded_file) -> pd.DataFrame:
+    """Read an uploaded New Leads file — Excel or CSV — into a DataFrame."""
     name = getattr(uploaded_file, "name", "") or ""
     if not name.lower().endswith(".csv"):
         uploaded_file.seek(0)
@@ -217,25 +253,7 @@ def read_leadfile(uploaded_file) -> pd.DataFrame:
         return pd.read_excel(io.BytesIO(raw), sheet_name=sheet_name, header=header_row - 1)
 
     uploaded_file.seek(0)
-    raw = uploaded_file.read()
-
-    text = None
-    last_error: Exception | None = None
-    for encoding in _CSV_ENCODINGS:
-        try:
-            text = raw.decode(encoding)
-            break
-        except UnicodeDecodeError as exc:
-            last_error = exc
-    if text is None:
-        raise last_error
-
-    try:
-        delimiter = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|").delimiter
-    except csv.Error:
-        delimiter = ","
-
-    return pd.read_csv(io.StringIO(text), sep=delimiter)
+    return read_csv_bytes_robust(uploaded_file.read())
 
 
 def _win_long_path(path: str) -> str:

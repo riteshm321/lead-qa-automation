@@ -12,7 +12,7 @@ from core.checks.leadcap import validate_purchased_report_cids
 from core.errors import render_error
 from core.excel_io import (
     read_sheet_as_dataframe, append_leads, backup_file, require_columns, find_header_row, route_leads_by_cid,
-    read_leadfile, read_pacing_overview_table, dataframe_to_excel_bytes,
+    read_leadfile, read_pacing_overview_table, dataframe_to_excel_bytes, read_csv_bytes_robust,
 )
 from core.excel_recalc import recalculate_workbook
 from core.complex_account import (
@@ -182,7 +182,7 @@ if profile.leadcap.enabled:
 
     uploaded = st.file_uploader("Purchased Lead Report", type=["csv"], key=f"purchased_report_{_upload_key_suffix}")
     if uploaded:
-        df = pd.read_csv(uploaded)
+        df = read_csv_bytes_robust(uploaded.read())
         try:
             require_columns(df, leadcap_required_cols, "Purchased Lead Report")
             if profile.leadcap.segmented:

@@ -34,6 +34,31 @@ def test_read_sheet_as_dataframe(tmp_path):
     _make_workbook(path)
     df = read_sheet_as_dataframe(path, "Exclusion")
     assert list(df.columns) == ["Account Name", "Domain"]
+
+
+def test_list_sheet_names_for_csv_reports_one_pseudo_sheet(tmp_path):
+    path = str(tmp_path / "exclusion.csv")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("Account Name,Domain\nAdecco UK Ltd,adecco.co.uk\n")
+    assert list_sheet_names(path) == ["(CSV file)"]
+
+
+def test_read_sheet_as_dataframe_for_csv_ignores_sheet_name_argument(tmp_path):
+    path = str(tmp_path / "exclusion.csv")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("Account Name,Domain\nAdecco UK Ltd,adecco.co.uk\n")
+    df = read_sheet_as_dataframe(path, "(CSV file)")
+    assert list(df.columns) == ["Account Name", "Domain"]
+    assert df.iloc[0]["Domain"] == "adecco.co.uk"
+
+
+def test_read_sheet_as_dataframe_for_csv_handles_bom_and_semicolon_delimiter(tmp_path):
+    path = str(tmp_path / "exclusion.csv")
+    with open(path, "wb") as f:
+        f.write("﻿Account Name;Domain\nAdecco UK Ltd;adecco.co.uk\n".encode("utf-8-sig"))
+    df = read_sheet_as_dataframe(path, "(CSV file)")
+    assert list(df.columns) == ["Account Name", "Domain"]
+    assert df.iloc[0]["Domain"] == "adecco.co.uk"
     assert df.iloc[0]["Domain"] == "adecco.co.uk"
 
 
