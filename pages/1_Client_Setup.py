@@ -268,13 +268,53 @@ def _render_target_field_mapping(label: str, key_prefix: str, headers: list[str]
     return FieldMapping(email=email, first_name=first_name, last_name=last_name, company=company, cid=cid)
 
 
-existing = list_profile_names(get_clients_dir())
+@st.cache_data(show_spinner=False)
+def _cached_profile_names(clients_dir: str, dir_mtime: float) -> list[str]:
+    # dir_mtime must NOT be underscore-prefixed -- Streamlit excludes any
+    # parameter named with a leading underscore from the cache key hash.
+    # list_profile_names() opens and JSON-parses every client profile in
+    # the shared OneDrive clients folder to confirm each one really is a
+    # profile -- re-scanning all of them (currently 15+) on every single
+    # widget interaction, not just page navigation, was a real and growing
+    # source of sluggishness as the client list grows. Keyed on the
+    # directory's own mtime so a newly saved/removed profile still shows
+    # up on the very next rerun.
+    return list_profile_names(clients_dir)
+
+
+def _clients_dir_mtime(clients_dir: str) -> float:
+    try:
+        return os.path.getmtime(clients_dir)
+    except OSError:
+        return 0.0
+
+
+existing = _cached_profile_names(get_clients_dir(), _clients_dir_mtime(get_clients_dir()))
 mode = st.radio("Mode", ["Create new client", "Edit existing client"])
+
+@st.cache_data(show_spinner=False)
+def _cached_load_profile(name: str, clients_dir: str, mtime: float):
+    # mtime must NOT be underscore-prefixed -- see _cached_profile_names
+    # above for why. Re-reading the same client's profile from the shared
+    # OneDrive folder on every single widget interaction (not just when
+    # the client selection actually changes) was another redundant read
+    # on every rerun of this page.
+    return load_profile(name, clients_dir)
+
+
+def _profile_file_mtime(name: str, clients_dir: str) -> float:
+    try:
+        return os.path.getmtime(os.path.join(clients_dir, f"{name}.json"))
+    except OSError:
+        return 0.0
+
 
 if mode == "Edit existing client" and existing:
     selected_name = st.selectbox("Client", existing)
     try:
-        profile = load_profile(selected_name, get_clients_dir())
+        _clients_dir_now = get_clients_dir()
+        profile = _cached_load_profile(
+            selected_name, _clients_dir_now, _profile_file_mtime(selected_name, _clients_dir_now))
     except TypeError as exc:
         st.error(f"Could not load the profile for '{selected_name}' — it may be in an older format. "
                  f"Delete and re-create it in Client Setup. (Technical detail: {exc})")

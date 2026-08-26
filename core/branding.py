@@ -2,6 +2,7 @@ import streamlit as st
 
 from core import auth_gate
 from core.activity_tracker import compute_time_saved_summary, format_minutes
+from core.app_settings import get_shared_root_dir
 from core.resources import resource_path
 
 _LOGO_PATH = resource_path("assets/madison_logic_logo.svg")
@@ -66,8 +67,21 @@ def configure_page(page_title: str) -> dict:
     return user
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_time_saved_summary(shared_root: str) -> dict:
+    # Reads every user's activity file from the shared OneDrive folder --
+    # configure_page() runs at the top of every page, and Streamlit reruns
+    # the whole script on every single widget interaction (not just page
+    # navigation), so an uncached read here was hitting synced cloud
+    # storage dozens of times per minute across the whole app. A 30s TTL
+    # keeps the sidebar figure fresh without doing that on every click.
+    # Keyed on shared_root (not a no-arg cache) so switching the shared
+    # folder in Settings doesn't keep showing the old folder's numbers.
+    return compute_time_saved_summary()
+
+
 def _render_time_saved_card() -> None:
-    summary = compute_time_saved_summary()
+    summary = _cached_time_saved_summary(get_shared_root_dir())
     with st.sidebar.container(border=True):
         st.caption("⏱️ Time Saved (all users, till date)")
         st.markdown(f"**{summary['total_processes']}** client process(es) completed")

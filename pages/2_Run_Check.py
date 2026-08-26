@@ -62,7 +62,27 @@ def _cached_sheet_df(path: str, sheet_name: str, mtime: float) -> pd.DataFrame:
     return read_sheet_as_dataframe(path, sheet_name)
 
 
-profile_names = list_profile_names(get_clients_dir())
+@st.cache_data(show_spinner=False)
+def _cached_profile_names(clients_dir: str, dir_mtime: float) -> list[str]:
+    # dir_mtime must NOT be underscore-prefixed -- see _cached_tal_index
+    # above for why. list_profile_names() opens and JSON-parses every
+    # client profile in the shared OneDrive clients folder to confirm each
+    # one really is a profile -- re-scanning all of them (currently 15+)
+    # on every single widget interaction, not just page navigation, was a
+    # real and growing source of sluggishness as the client list grows.
+    # Keyed on the directory's own mtime so a newly saved/removed profile
+    # still shows up on the very next rerun.
+    return list_profile_names(clients_dir)
+
+
+def _clients_dir_mtime(clients_dir: str) -> float:
+    try:
+        return os.path.getmtime(clients_dir)
+    except OSError:
+        return 0.0
+
+
+profile_names = _cached_profile_names(get_clients_dir(), _clients_dir_mtime(get_clients_dir()))
 if not profile_names:
     st.warning("No client profiles found. Create one on the Client Setup page first.")
     st.stop()
@@ -78,8 +98,26 @@ with col_clear:
         st.session_state["upload_reset_counter"] = st.session_state.get("upload_reset_counter", 0) + 1
         st.rerun()
 
+@st.cache_data(show_spinner=False)
+def _cached_load_profile(name: str, clients_dir: str, mtime: float):
+    # mtime must NOT be underscore-prefixed -- see _cached_tal_index above
+    # for why. Re-reading the same client's profile from the shared
+    # OneDrive folder on every single widget interaction (not just when
+    # the client selection actually changes) was another redundant read
+    # on every rerun of this page.
+    return load_profile(name, clients_dir)
+
+
+def _profile_file_mtime(name: str, clients_dir: str) -> float:
+    try:
+        return os.path.getmtime(os.path.join(clients_dir, f"{name}.json"))
+    except OSError:
+        return 0.0
+
+
 try:
-    profile = load_profile(client_name, get_clients_dir())
+    _clients_dir_now = get_clients_dir()
+    profile = _cached_load_profile(client_name, _clients_dir_now, _profile_file_mtime(client_name, _clients_dir_now))
 except TypeError as exc:
     st.error(f"Could not load the profile for '{client_name}' — it may be in an older format. "
              f"Delete and re-create it in Client Setup. (Technical detail: {exc})")
