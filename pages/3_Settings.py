@@ -6,7 +6,8 @@ from core.app_settings import (
     get_aliases_path, get_clients_dir, get_jira_settings, get_shared_root_dir,
     load_app_settings, save_app_settings, save_jira_settings,
 )
-from core.auth import create_user, delete_user, load_users
+from core.activity_tracker import get_time_baseline, save_time_baseline, load_all_activity, format_minutes
+from core.auth import create_user, delete_user, load_users, update_user_role
 from core.branding import configure_page
 from core.file_browser import browse_for_folder
 from core.onedrive import is_onedrive_synced_path
@@ -115,6 +116,7 @@ if _current_user["is_admin"]:
         with st.form("add_user_form"):
             _new_username = st.text_input("Username")
             _new_password = st.text_input("Password", type="password")
+            _new_role = st.text_input("Role/Title", placeholder="e.g. Client Reporting Specialist")
             _new_is_admin = st.checkbox("Admin")
             _add_submitted = st.form_submit_button("Add account")
         if _add_submitted:
@@ -124,7 +126,7 @@ if _current_user["is_admin"]:
             elif _new_username in load_users():
                 st.error("That username already exists.")
             else:
-                create_user(_new_username, _new_password, _new_is_admin)
+                create_user(_new_username, _new_password, _new_is_admin, role=_new_role)
                 queue_toast_before_rerun(f"Added {_new_username}.")
                 st.rerun()
 
@@ -133,14 +135,59 @@ if _current_user["is_admin"]:
         _users = load_users()
         _admin_count = sum(1 for r in _users.values() if r.get("is_admin"))
         for _username, _record in _users.items():
-            _col_name, _col_role, _col_remove = st.columns([3, 2, 1])
-            _col_name.write(_username)
-            _col_role.write("Admin" if _record.get("is_admin") else "User")
-            _is_last_admin = _record.get("is_admin") and _admin_count <= 1
-            if _col_remove.button(
-                "Remove", key=f"remove_user_{_username}", disabled=_is_last_admin,
-                help="Can't remove the only remaining admin." if _is_last_admin else None,
-            ):
-                delete_user(_username)
-                queue_toast_before_rerun(f"Removed {_username}.")
-                st.rerun()
+            with st.container(border=True):
+                _col_name, _col_remove = st.columns([4, 1])
+                _col_name.markdown(f"**{_username}** — {'Admin' if _record.get('is_admin') else 'User'}")
+                _is_last_admin = _record.get("is_admin") and _admin_count <= 1
+                if _col_remove.button(
+                    "Remove", key=f"remove_user_{_username}", disabled=_is_last_admin, use_container_width=True,
+                    help="Can't remove the only remaining admin." if _is_last_admin else None,
+                ):
+                    delete_user(_username)
+                    queue_toast_before_rerun(f"Removed {_username}.")
+                    st.rerun()
+
+                _col_role_input, _col_role_save = st.columns([4, 1])
+                _new_role_value = _col_role_input.text_input(
+                    "Role/Title", value=_record.get("role", ""), key=f"role_edit_{_username}",
+                    label_visibility="collapsed", placeholder="e.g. Client Reporting Specialist",
+                )
+                if _col_role_save.button("Save", key=f"role_save_{_username}", use_container_width=True):
+                    update_user_role(_username, _new_role_value)
+                    queue_toast_before_rerun(f"Updated {_username}'s role.")
+                    st.rerun()
+
+    with st.expander("⏱️ Time saved tracking (admin only)", expanded=False):
+        st.caption(
+            "Drives the \"Time Saved\" card shown in the sidebar to everyone -- a client process is "
+            "counted once per successful Finalize/Confirm & Write. Changing these minutes immediately "
+            "changes the reported time saved for every process counted so far, not just future ones."
+        )
+        _baseline = get_time_baseline()
+        _col_auto, _col_manual = st.columns(2)
+        _automation_minutes = _col_auto.number_input(
+            "Automation time per process (minutes)", min_value=0, step=1,
+            value=_baseline["automation_minutes"], key="time_baseline_automation",
+        )
+        _manual_minutes = _col_manual.number_input(
+            "Manual time per process (minutes)", min_value=0, step=1,
+            value=_baseline["manual_minutes"], key="time_baseline_manual",
+        )
+        if st.button("Save time baseline", key="time_baseline_save"):
+            save_time_baseline(int(_automation_minutes), int(_manual_minutes))
+            queue_toast_before_rerun("Saved.")
+            st.rerun()
+
+        st.divider()
+        st.markdown("**Per-person breakdown**")
+        _activity = load_all_activity()
+        if not _activity:
+            st.caption("No client processes completed yet.")
+        else:
+            for _activity_username, _activity_record in sorted(_activity.items()):
+                _count = _activity_record.get("process_count", 0)
+                _saved = _count * (_baseline["manual_minutes"] - _baseline["automation_minutes"])
+                st.markdown(
+                    f"**{_activity_username}** — {_count} process(es), "
+                    f"{format_minutes(_saved)} saved (last: {_activity_record.get('last_updated', '—')})"
+                )

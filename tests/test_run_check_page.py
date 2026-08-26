@@ -249,6 +249,41 @@ def test_unapproved_refund_lead_stays_refund_only(tmp_path, monkeypatch):
     assert refund_rows[0][0] == "existing@dup.com"
 
 
+def test_successful_finalize_records_a_completed_process_for_the_logged_in_user(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    shared_root = str(tmp_path / "shared")
+    from core.app_settings import save_app_settings
+    save_app_settings({"shared_root_dir": shared_root})
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm)
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    from core.activity_tracker import load_all_activity
+    activity = load_all_activity()
+    # tests/conftest.py's autouse login bypass logs every page test in as
+    # "test-admin" -- that's who the completed process must be attributed to.
+    assert activity["test-admin"]["process_count"] == 1
+
+
 def test_select_all_as_valid_approves_every_refund_lead(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")

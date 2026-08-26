@@ -39,7 +39,7 @@ def test_bootstrap_form_creates_admin_and_logs_in(tmp_path, monkeypatch):
     at.button[0].click().run()
 
     assert not at.exception
-    assert at.session_state["auth_user"] == {"username": "ritesh", "is_admin": True}
+    assert at.session_state["auth_user"] == {"username": "ritesh", "is_admin": True, "role": ""}
     assert any("Lead QA" in t.value for t in at.title)
 
 
@@ -67,7 +67,7 @@ def test_login_with_correct_password_reaches_the_page(tmp_path, monkeypatch):
     at.button[0].click().run()
 
     assert not at.exception
-    assert at.session_state["auth_user"] == {"username": "ritesh", "is_admin": True}
+    assert at.session_state["auth_user"] == {"username": "ritesh", "is_admin": True, "role": ""}
     assert any("Lead QA" in t.value for t in at.title)
 
 

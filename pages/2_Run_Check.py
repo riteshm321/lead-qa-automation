@@ -6,6 +6,7 @@ import shutil
 import pandas as pd
 import streamlit as st
 
+from core.activity_tracker import record_process_completed
 from core.app_settings import get_aliases_path, get_clients_dir, get_jira_settings
 from core.branding import configure_page
 from core.checks.leadcap import validate_purchased_report_cids
@@ -30,7 +31,7 @@ from core.profile_store import list_profile_names, load_profile, save_profile
 from core.toast import queue_toast_before_rerun, show_pending_toast
 import requests
 
-configure_page("Run Check")
+_current_user = configure_page("Run Check")
 show_pending_toast()
 st.title("▶️ Run Check")
 
@@ -593,6 +594,12 @@ if "run_result" in st.session_state:
                 "different name, rename the leadfile column (or its header) to something closer to the "
                 "target column name and re-run."
             )
+        # One completed client process, attributed to whoever's logged in --
+        # counted here (not at the "Run Check"/"Finalize" button click)
+        # since this is the point a run actually became real, written work,
+        # not an attempt that got abandoned or hit an error partway through.
+        record_process_completed(_current_user["username"])
+
         # Both callers rerun right after this returns (the plain Finalize
         # path added its own rerun below to match), so the confirmation must
         # be queued rather than shown directly here — see core/toast.py.

@@ -35,13 +35,14 @@ def _hash_password(password: str, salt: bytes) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS).hex()
 
 
-def create_user(username: str, password: str, is_admin: bool) -> None:
+def create_user(username: str, password: str, is_admin: bool, role: str = "") -> None:
     users = load_users()
     salt = secrets.token_hex(16)
     users[username] = {
         "salt": salt,
         "hash": _hash_password(password, bytes.fromhex(salt)),
         "is_admin": is_admin,
+        "role": role.strip(),
     }
     save_users(users)
 
@@ -52,6 +53,13 @@ def delete_user(username: str) -> None:
     save_users(users)
 
 
+def update_user_role(username: str, role: str) -> None:
+    users = load_users()
+    if username in users:
+        users[username]["role"] = role.strip()
+        save_users(users)
+
+
 def authenticate(username: str, password: str) -> dict | None:
     record = load_users().get(username)
     if record is None:
@@ -59,4 +67,8 @@ def authenticate(username: str, password: str) -> dict | None:
     actual = _hash_password(password, bytes.fromhex(record["salt"]))
     if not secrets.compare_digest(actual, record["hash"]):
         return None
-    return {"username": username, "is_admin": bool(record.get("is_admin", False))}
+    return {
+        "username": username,
+        "is_admin": bool(record.get("is_admin", False)),
+        "role": record.get("role", ""),
+    }

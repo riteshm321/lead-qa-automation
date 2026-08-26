@@ -17,9 +17,10 @@ def require_login() -> dict:
     """Blocks the rest of the current page until someone is logged in.
 
     Call as the first thing on every page (configure_page does this).
-    Returns the logged-in user's {"username", "is_admin"} so the page can
-    continue; otherwise renders the login (or, on a fresh machine with no
-    accounts yet, one-time admin-creation) form and stops the script.
+    Returns the logged-in user's {"username", "is_admin", "role"} so the
+    page can continue; otherwise renders the login (or, on a fresh machine
+    with no accounts yet, one-time admin-creation) form and stops the
+    script.
     """
     user = get_current_user()
     if user is not None:
@@ -39,6 +40,7 @@ def _render_bootstrap_form() -> None:
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         confirm = st.text_input("Confirm password", type="password")
+        role = st.text_input("Your role/title", placeholder="e.g. Sr. Client Reporting Specialist")
         submitted = st.form_submit_button("Create admin account")
     if submitted:
         username = username.strip()
@@ -47,8 +49,8 @@ def _render_bootstrap_form() -> None:
         elif password != confirm:
             st.error("Passwords don't match.")
         else:
-            create_user(username, password, is_admin=True)
-            st.session_state[_SESSION_KEY] = {"username": username, "is_admin": True}
+            create_user(username, password, is_admin=True, role=role)
+            st.session_state[_SESSION_KEY] = {"username": username, "is_admin": True, "role": role.strip()}
             st.rerun()
 
 

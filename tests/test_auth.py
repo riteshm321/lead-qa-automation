@@ -12,7 +12,7 @@ def test_create_user_then_authenticate_succeeds_with_correct_password(tmp_path, 
 
     user = authenticate("ritesh", "correct-horse")
 
-    assert user == {"username": "ritesh", "is_admin": True}
+    assert user == {"username": "ritesh", "is_admin": True, "role": ""}
     assert has_any_users() is True
 
 

@@ -157,14 +157,62 @@ def test_admin_can_add_a_new_user_account(tmp_path, monkeypatch):
 
     username_input = next(w for w in at.text_input if w.label == "Username")
     password_input = next(w for w in at.text_input if w.label == "Password")
+    role_input = next(w for w in at.text_input if w.label == "Role/Title")
     username_input.set_value("colleague")
     password_input.set_value("their-password")
+    role_input.set_value("Client Reporting Specialist")
     add_button = next(b for b in at.button if b.label == "Add account")
     add_button.click().run()
 
     assert not at.exception
     from core.auth import load_users
-    assert "colleague" in load_users()
+    added = load_users()["colleague"]
+    assert added["role"] == "Client Reporting Specialist"
+
+
+def test_admin_can_edit_an_existing_users_role(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.auth import create_user
+    create_user("test-admin", "irrelevant", is_admin=True)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+
+    role_input = next(w for w in at.text_input if w.key == "role_edit_test-admin")
+    role_input.set_value("Sr. Client Reporting Specialist").run()
+    save_button = next(b for b in at.button if b.key == "role_save_test-admin")
+    save_button.click().run()
+
+    assert not at.exception
+    from core.auth import load_users
+    assert load_users()["test-admin"]["role"] == "Sr. Client Reporting Specialist"
+
+
+def test_admin_can_save_time_baseline_and_sees_per_person_breakdown(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    shared_root = str(tmp_path / "shared")
+    from core.app_settings import save_app_settings
+    save_app_settings({"shared_root_dir": shared_root})
+    from core.activity_tracker import record_process_completed
+    record_process_completed("test-admin")
+    record_process_completed("test-admin")
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+
+    automation_input = next(n for n in at.number_input if n.key == "time_baseline_automation")
+    manual_input = next(n for n in at.number_input if n.key == "time_baseline_manual")
+    automation_input.set_value(5).run()
+    manual_input.set_value(50).run()
+    save_button = next(b for b in at.button if b.key == "time_baseline_save")
+    save_button.click().run()
+
+    assert not at.exception
+    from core.activity_tracker import get_time_baseline
+    assert get_time_baseline() == {"automation_minutes": 5, "manual_minutes": 50}
+    assert any("test-admin" in m.value and "2 process" in m.value for m in at.markdown)
 
 
 def test_cannot_remove_the_only_remaining_admin(tmp_path, monkeypatch):
