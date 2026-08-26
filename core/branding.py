@@ -47,6 +47,9 @@ def configure_page(page_title: str) -> dict:
     user = auth_gate.require_login()
 
     st.sidebar.divider()
+    _render_time_saved_card()
+
+    st.sidebar.divider()
     with st.sidebar.container(border=True):
         st.caption("Logged in as")
         st.markdown(f"👤 **{user['username']}**")
@@ -56,10 +59,10 @@ def configure_page(page_title: str) -> dict:
         st.rerun()
 
     st.sidebar.divider()
-    _render_time_saved_card()
-
-    st.sidebar.divider()
-    st.sidebar.caption("Tool Made By Ritesh Majumdar, Sr. Client Reporting Specialist")
+    with st.sidebar.container(border=True):
+        st.caption("Tool Made By")
+        st.caption("👤 Ritesh Majumdar")
+        st.caption("💼 Sr. Client Reporting Specialist")
     return user
 
 
