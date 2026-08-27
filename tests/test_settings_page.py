@@ -150,6 +150,8 @@ def test_admin_can_add_a_new_user_account(tmp_path, monkeypatch):
     # tests/conftest.py's autouse bypass logs every page test in as an
     # admin, so the "Manage user accounts" panel is always available here.
     monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings
+    save_app_settings({"shared_root_dir": str(tmp_path / "shared")})
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
@@ -172,6 +174,8 @@ def test_admin_can_add_a_new_user_account(tmp_path, monkeypatch):
 
 def test_admin_can_edit_an_existing_users_role(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings
+    save_app_settings({"shared_root_dir": str(tmp_path / "shared")})
     from core.auth import create_user
     create_user("test-admin", "irrelevant", is_admin=True)
 
@@ -217,6 +221,8 @@ def test_admin_can_save_time_baseline_and_sees_per_person_breakdown(tmp_path, mo
 
 def test_cannot_remove_the_only_remaining_admin(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings
+    save_app_settings({"shared_root_dir": str(tmp_path / "shared")})
     from core.auth import create_user
     create_user("test-admin", "irrelevant", is_admin=True)
 

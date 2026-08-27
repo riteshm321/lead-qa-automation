@@ -3,28 +3,45 @@ import json
 import os
 import secrets
 
+from core.app_settings import get_shared_root_dir
 from core.atomic_io import atomic_write_json
 
-# Local to this machine, not under get_shared_root_dir() -- like the Jira
-# API token in app_settings.py, credentials are a secret that must never
-# end up inside a OneDrive folder a whole team syncs. When this app moves
-# to a hosted server, this file-based store gets replaced by a real
-# identity system; for now, one machine == one set of accounts.
-_CREDENTIALS_PATH = "auth/credentials.json"
+# Under the shared OneDrive root (not local-per-machine like the Jira API
+# token in app_settings.py) -- accounts must be visible from every
+# machine on the team, which is the whole point of named logins for the
+# activity tracker. A hashed+salted password (600k PBKDF2 iterations,
+# below) isn't directly usable by anyone who reads the file the way a raw
+# API token would be, so unlike the Jira token this is safe to share.
+# When this app moves to a hosted server, this file-based store gets
+# replaced by a real identity system.
+_CREDENTIALS_SUBPATH = os.path.join("auth", "credentials.json")
 
 # OWASP's 2023 minimum for PBKDF2-HMAC-SHA256.
 _PBKDF2_ITERATIONS = 600_000
 
 
+def _credentials_path() -> str:
+    root = get_shared_root_dir()
+    return os.path.join(root, _CREDENTIALS_SUBPATH) if root else ""
+
+
 def load_users() -> dict:
-    if not os.path.isfile(_CREDENTIALS_PATH):
+    path = _credentials_path()
+    if not path or not os.path.isfile(path):
         return {}
-    with open(_CREDENTIALS_PATH, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def save_users(users: dict) -> None:
-    atomic_write_json(_CREDENTIALS_PATH, users)
+    path = _credentials_path()
+    if not path:
+        # No shared team folder configured on this machine yet -- nowhere
+        # to durably put accounts. require_login() gates on this and
+        # always sets up the shared folder before any account-creation UI
+        # ever renders, so this should never actually be reached.
+        return
+    atomic_write_json(path, users)
 
 
 def has_any_users() -> bool:
