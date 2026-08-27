@@ -2,6 +2,7 @@
 import datetime
 import os
 import shutil
+import time
 
 import pandas as pd
 import streamlit as st
@@ -250,6 +251,11 @@ if profile.complex_account.enabled:
         "Predictive Buying Stage file", type=["csv"], key=f"complex_pbs_file_{_upload_key_suffix}")
 
 if st.button("Run Check") and new_leads_file:
+    # Marks the start of this attempt's "automated time" for the Time Saved
+    # tracker (see _finalize_write below) -- reset on every Run Check click
+    # so a re-check after fixing something only counts time from the click
+    # that actually led to this Finalize, not any earlier abandoned attempt.
+    st.session_state["run_check_started_at"] = time.time()
     if not mapping_valid:
         st.error("Map the New Leads columns above before running the check.")
         st.stop()
@@ -634,9 +640,15 @@ if "run_result" in st.session_state:
             )
         # One completed client process, attributed to whoever's logged in --
         # counted here (not at the "Run Check"/"Finalize" button click)
-        # since this is the point a run actually became real, written work,
-        # not an attempt that got abandoned or hit an error partway through.
-        record_process_completed(_current_user["username"])
+        # since this is the point a run actually became real, written work.
+        # The automated time is the real elapsed time from that Run Check
+        # click to this Finalize click -- absent (e.g. finalize triggered
+        # without ever clicking Run Check in this session) means 0 rather
+        # than a guess.
+        _started_at = st.session_state.get("run_check_started_at")
+        _automated_minutes = (time.time() - _started_at) / 60 if _started_at else 0.0
+        record_process_completed(
+            _current_user["username"], _automated_minutes, is_complex_account=profile.complex_account.enabled)
 
         # Both callers rerun right after this returns (the plain Finalize
         # path added its own rerun below to match), so the confirmation must

@@ -32,10 +32,9 @@ def test_sidebar_time_saved_card_reflects_recorded_activity(tmp_path, monkeypatc
     shared_root = str(tmp_path / "shared")
     from core.app_settings import save_app_settings
     save_app_settings({"shared_root_dir": shared_root})
-    from core.activity_tracker import record_process_completed, save_time_baseline
-    save_time_baseline(automation_minutes=10, manual_minutes=40)
-    record_process_completed("alice")
-    record_process_completed("bob")
+    from core.activity_tracker import record_process_completed
+    record_process_completed("alice", 3.0, is_complex_account=False)
+    record_process_completed("bob", 3.0, is_complex_account=False)
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
@@ -43,4 +42,4 @@ def test_sidebar_time_saved_card_reflects_recorded_activity(tmp_path, monkeypatc
     assert not at.exception
     sidebar_markdown = "\n".join(m.value for m in at.sidebar.markdown)
     assert "2" in sidebar_markdown  # 2 total processes across both users
-    assert "1h" in sidebar_markdown  # 2 * 30 min saved = 1h
+    assert "30m" in sidebar_markdown  # 2 * 15 min saved = 30m

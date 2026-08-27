@@ -3,7 +3,7 @@ import zipfile
 
 import openpyxl
 import pandas as pd
-from openpyxl.styles import Font
+from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.table import Table
 
 from core.excel_io import (
@@ -368,6 +368,32 @@ def test_append_leads_highlight_fill_clears_previous_run_highlight(tmp_path):
     # Row 2 was highlighted by the first call — the second call must clear it.
     assert ws.cell(row=2, column=1).fill.fill_type is None
     # Row 3 (this run's new lead) is now the one highlighted.
+    assert ws.cell(row=3, column=1).fill.fgColor.rgb == "00C6E0B4"
+
+
+def test_append_leads_highlight_fill_clears_a_differently_colored_fill_too(tmp_path):
+    # Regression test: a row highlighted a different color than this run's
+    # highlight_fill -- e.g. manually colored in Excel, or left over from a
+    # differently-configured earlier run -- must still be cleared. Only
+    # matching the exact highlight_fill hex left stale colors behind.
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company"])
+    template.append([100, "old@x.com", "Old", "Lead", "X"])
+    for col_idx in range(1, 6):
+        template.cell(row=2, column=col_idx).fill = PatternFill(
+            start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+    wb.save(path)
+
+    leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y"},
+    ])
+    append_leads(path, "Report", leads_df, _field_mapping(), run_date="2026-08-08", highlight_fill="C6E0B4")
+
+    ws = openpyxl.load_workbook(path)["Report"]
+    assert ws.cell(row=2, column=1).fill.fill_type is None
     assert ws.cell(row=3, column=1).fill.fgColor.rgb == "00C6E0B4"
 
 

@@ -193,29 +193,19 @@ def test_admin_can_edit_an_existing_users_role(tmp_path, monkeypatch):
     assert load_users()["test-admin"]["role"] == "Sr. Client Reporting Specialist"
 
 
-def test_admin_can_save_time_baseline_and_sees_per_person_breakdown(tmp_path, monkeypatch):
+def test_admin_sees_per_person_time_saved_breakdown(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     shared_root = str(tmp_path / "shared")
     from core.app_settings import save_app_settings
     save_app_settings({"shared_root_dir": shared_root})
     from core.activity_tracker import record_process_completed
-    record_process_completed("test-admin")
-    record_process_completed("test-admin")
+    record_process_completed("test-admin", 3.0, is_complex_account=False)
+    record_process_completed("test-admin", 2.0, is_complex_account=False)
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    assert not at.exception
-
-    automation_input = next(n for n in at.number_input if n.key == "time_baseline_automation")
-    manual_input = next(n for n in at.number_input if n.key == "time_baseline_manual")
-    automation_input.set_value(5).run()
-    manual_input.set_value(50).run()
-    save_button = next(b for b in at.button if b.key == "time_baseline_save")
-    save_button.click().run()
 
     assert not at.exception
-    from core.activity_tracker import get_time_baseline
-    assert get_time_baseline() == {"automation_minutes": 5, "manual_minutes": 50}
     assert any("test-admin" in m.value and "2 process" in m.value for m in at.markdown)
 
 

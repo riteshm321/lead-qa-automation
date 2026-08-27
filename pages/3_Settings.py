@@ -6,7 +6,7 @@ from core.app_settings import (
     get_aliases_path, get_clients_dir, get_jira_settings, get_shared_root_dir,
     load_app_settings, save_app_settings, save_jira_settings,
 )
-from core.activity_tracker import get_time_baseline, save_time_baseline, load_all_activity, format_minutes
+from core.activity_tracker import load_all_activity, format_minutes
 from core.auth import create_user, delete_user, load_users, update_user_role
 from core.branding import configure_page
 from core.file_browser import browse_for_folder
@@ -160,33 +160,19 @@ if _current_user["is_admin"]:
     with st.expander("⏱️ Time saved tracking (admin only)", expanded=False):
         st.caption(
             "Drives the \"Time Saved\" card shown in the sidebar to everyone -- a client process is "
-            "counted once per successful Finalize/Confirm & Write. Changing these minutes immediately "
-            "changes the reported time saved for every process counted so far, not just future ones."
+            "counted once per successful Finalize/Confirm & Write, with the automated time measured "
+            "live (from that run's Run Check click to Finalize) and the manual-equivalent time assumed "
+            "to be 15 minutes more (30 for Complex Account clients)."
         )
-        _baseline = get_time_baseline()
-        _col_auto, _col_manual = st.columns(2)
-        _automation_minutes = _col_auto.number_input(
-            "Automation time per process (minutes)", min_value=0, step=1,
-            value=_baseline["automation_minutes"], key="time_baseline_automation",
-        )
-        _manual_minutes = _col_manual.number_input(
-            "Manual time per process (minutes)", min_value=0, step=1,
-            value=_baseline["manual_minutes"], key="time_baseline_manual",
-        )
-        if st.button("Save time baseline", key="time_baseline_save"):
-            save_time_baseline(int(_automation_minutes), int(_manual_minutes))
-            queue_toast_before_rerun("Saved.")
-            st.rerun()
-
-        st.divider()
-        st.markdown("**Per-person breakdown**")
         _activity = load_all_activity()
         if not _activity:
             st.caption("No client processes completed yet.")
         else:
             for _activity_username, _activity_record in sorted(_activity.items()):
                 _count = _activity_record.get("process_count", 0)
-                _saved = _count * (_baseline["manual_minutes"] - _baseline["automation_minutes"])
+                _automated = _activity_record.get("total_automated_minutes", 0.0)
+                _manual = _activity_record.get("total_manual_minutes", 0.0)
+                _saved = _manual - _automated
                 st.markdown(
                     f"**{_activity_username}** — {_count} process(es), "
                     f"{format_minutes(_saved)} saved (last: {_activity_record.get('last_updated', '—')})"
