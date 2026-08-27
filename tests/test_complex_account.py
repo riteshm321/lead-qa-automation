@@ -21,6 +21,9 @@ def _upload(name: str, text: str) -> io.BytesIO:
     return f
 
 
+FM = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+
+
 def test_load_tal_index_and_match_unambiguous(tmp_path):
     tal_path = str(tmp_path / "tal.csv")
     pd.DataFrame([
@@ -194,30 +197,56 @@ def test_format_phone_strips_punctuation_and_inserts_space():
 
 
 def test_load_asset_specifications(tmp_path):
+    # Real header text: wraps onto a second line and carries bracketed
+    # "[to be filled in by ...]" annotations -- matched by substring, not
+    # exact text, so this proves that robustness, not just the happy path.
     path = str(tmp_path / "specs.xlsx")
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.append(["Asset Name", "URN ", "Asset URL 1", "Asset URL 2", "Dell URL"])
-    ws.append(["Fuel AI Innovation", "DT2503G0007_033", "https://a.com/1", "https://a.com/2", "https://dell.com/x"])
+    ws.append([
+        "Asset Name\n[to be filled in by EssenceMediacom]",
+        "URN \n[to be filled in by EssenceMediacom]",
+        "Publisher Link [AU]_BHRS\n[to be filled in by Publisher]",
+        "Publisher Link INDIA]_ECS\n[to be filled in by Publisher]",
+        "Dell Link",
+    ])
+    ws.append([
+        "Fuel AI Innovation", "DT2503G0007_033",
+        "https://a.com/au", "https://a.com/india", "https://dell.com/x",
+    ])
     wb.save(path)
 
     specs = load_asset_specifications(path)
+
     assert "fuel ai innovation" in specs
     assert specs["fuel ai innovation"]["urn"] == "DT2503G0007_033"
+    assert specs["fuel ai innovation"]["au_link"] == "https://a.com/au"
+    assert specs["fuel ai innovation"]["india_link"] == "https://a.com/india"
+    assert specs["fuel ai innovation"]["dell_url"] == "https://dell.com/x"
 
 
 _ASSET_SPECS = {
-    "fuel ai innovation": {"urn": "DT2503G0007_033", "url1": "https://a.com/1",
-                            "url2": "https://a.com/2", "dell_url": "https://dell.com/x"},
+    "fuel ai innovation": {
+        "urn": "DT2503G0007_033", "au_link": "https://a.com/au",
+        "india_link": "https://a.com/india", "dell_url": "https://dell.com/x",
+    },
 }
 
 
-def test_check_asset_url_mismatches_passes_when_everything_matches():
+def test_check_asset_url_mismatches_passes_when_everything_matches_for_india_cid():
     df = pd.DataFrame([{
-        "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
-        "Form URL": "https://a.com/2", "Dell Asset URL": "https://dell.com/x",
+        "CID": "119414", "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
+        "Form URL": "https://a.com/india", "Dell Asset URL": "https://dell.com/x",
     }])
-    assert check_asset_url_mismatches(df, _ASSET_SPECS) == {}
+    assert check_asset_url_mismatches(df, _ASSET_SPECS, FM) == {}
+
+
+def test_check_asset_url_mismatches_passes_when_everything_matches_for_au_cid():
+    df = pd.DataFrame([{
+        "CID": "119415", "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
+        "Form URL": "https://a.com/au", "Dell Asset URL": "https://dell.com/x",
+    }])
+    assert check_asset_url_mismatches(df, _ASSET_SPECS, FM) == {}
 
 
 def test_check_asset_url_mismatches_flags_wrong_urn_and_dell_url():
@@ -225,16 +254,16 @@ def test_check_asset_url_mismatches_flags_wrong_urn_and_dell_url():
     # which field is wrong (not one combined "URN/Form URL/Dell Asset URL
     # don't match" catch-all a reviewer would have to guess at).
     df = pd.DataFrame([{
-        "Asset Title": "Fuel AI Innovation", "Asset URN": "WRONG_URN",
-        "Form URL": "https://a.com/1", "Dell Asset URL": "https://wrong-dell.com",
+        "CID": "119414", "Asset Title": "Fuel AI Innovation", "Asset URN": "WRONG_URN",
+        "Form URL": "https://a.com/india", "Dell Asset URL": "https://wrong-dell.com",
     }])
-    review = check_asset_url_mismatches(df, _ASSET_SPECS)
+    review = check_asset_url_mismatches(df, _ASSET_SPECS, FM)
 
     assert 0 in review
     messages = [str(d) for d in review[0]]
     assert any("Asset URN doesn't match" in m for m in messages)
     assert any("Dell Asset URL doesn't match" in m for m in messages)
-    assert not any("Form URL" in m for m in messages)  # Form URL matched url1 — not flagged
+    assert not any("Form URL" in m for m in messages)  # matched the india_link — not flagged
 
     urn_detail = next(d for d in review[0] if "Asset URN" in d.message)
     assert urn_detail.lead_value == "WRONG_URN"
@@ -245,39 +274,68 @@ def test_check_asset_url_mismatches_flags_wrong_urn_and_dell_url():
     assert dell_detail.candidate_value == "https://dell.com/x"
 
 
-def test_check_asset_url_mismatches_accepts_either_asset_url():
+def test_check_asset_url_mismatches_flags_wrong_form_url_for_india_cid():
     df = pd.DataFrame([{
-        "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
-        "Form URL": "https://a.com/1",  # url1, not url2 — both are valid
-        "Dell Asset URL": "https://dell.com/x",
+        "CID": "119414", "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
+        "Form URL": "https://wrong.com", "Dell Asset URL": "https://dell.com/x",
     }])
-    assert check_asset_url_mismatches(df, _ASSET_SPECS) == {}
-
-
-def test_check_asset_url_mismatches_flags_wrong_form_url():
-    df = pd.DataFrame([{
-        "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
-        "Form URL": "https://neither-url.com", "Dell Asset URL": "https://dell.com/x",
-    }])
-    review = check_asset_url_mismatches(df, _ASSET_SPECS)
+    review = check_asset_url_mismatches(df, _ASSET_SPECS, FM)
 
     assert 0 in review
     assert len(review[0]) == 1  # only Form URL is wrong -- not a combined finding
     detail = review[0][0]
-    assert detail.message == "Form URL doesn't match either Asset URL in the specifications file"
-    assert detail.lead_value == "https://neither-url.com"
-    assert detail.candidate_value == "https://a.com/1 (or https://a.com/2)"
+    assert "Form URL doesn't match" in detail.message
+    assert detail.lead_value == "https://wrong.com"
+    assert detail.candidate_value == "https://a.com/india"
 
 
-def test_check_asset_url_mismatches_skips_unrecognized_asset_title():
+def test_check_asset_url_mismatches_flags_wrong_form_url_for_au_cid():
     df = pd.DataFrame([{
-        "Asset Title": "Some Unknown Asset", "Asset URN": "whatever",
-        "Form URL": "https://whatever.com", "Dell Asset URL": "https://whatever-dell.com",
+        "CID": "119415", "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
+        "Form URL": "https://wrong.com", "Dell Asset URL": "https://dell.com/x",
+    }])
+    review = check_asset_url_mismatches(df, _ASSET_SPECS, FM)
+
+    assert 0 in review
+    assert review[0][0].candidate_value == "https://a.com/au"
+
+
+def test_check_asset_url_mismatches_skips_form_url_check_for_other_cids():
+    # No rule was specified for any CID besides 119414/119415 -- Form URL
+    # isn't checked at all for them, even though it matches neither link.
+    df = pd.DataFrame([{
+        "CID": "999999", "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
+        "Form URL": "https://totally-wrong.com", "Dell Asset URL": "https://dell.com/x",
+    }])
+    assert check_asset_url_mismatches(df, _ASSET_SPECS, FM) == {}
+
+
+def test_check_asset_url_mismatches_skips_form_url_check_without_field_mapping():
+    df = pd.DataFrame([{
+        "CID": "119414", "Asset Title": "Fuel AI Innovation", "Asset URN": "DT2503G0007_033",
+        "Form URL": "https://totally-wrong.com", "Dell Asset URL": "https://dell.com/x",
     }])
     assert check_asset_url_mismatches(df, _ASSET_SPECS) == {}
 
 
-FM = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+def test_check_asset_url_mismatches_flags_asset_title_not_found_in_specifications():
+    df = pd.DataFrame([{
+        "CID": "119414", "Asset Title": "Some Unknown Asset", "Asset URN": "whatever",
+        "Form URL": "https://whatever.com", "Dell Asset URL": "https://whatever-dell.com",
+    }])
+    review = check_asset_url_mismatches(df, _ASSET_SPECS, FM)
+
+    assert 0 in review
+    assert len(review[0]) == 1
+    assert "not found in the specifications file" in review[0][0].message
+    assert review[0][0].lead_value == "Some Unknown Asset"
+
+
+def test_check_asset_url_mismatches_does_not_flag_a_blank_asset_title():
+    df = pd.DataFrame([{
+        "CID": "119414", "Asset Title": "", "Asset URN": "", "Form URL": "", "Dell Asset URL": "",
+    }])
+    assert check_asset_url_mismatches(df, _ASSET_SPECS, FM) == {}
 
 
 def _base_leads_df() -> pd.DataFrame:
@@ -322,7 +380,7 @@ def test_apply_complex_account_rules_end_to_end():
     it_map = {"wipro.com": "AWS, Azure"}
     pbs_map = {"wipro.com": "Awareness"}
 
-    enriched, review = apply_complex_account_rules(df, FM, tal_index, it_map, pbs_map)
+    enriched, review, _ = apply_complex_account_rules(df, FM, tal_index, it_map, pbs_map)
 
     assert review == {}
     row = enriched.iloc[0]
@@ -335,8 +393,9 @@ def test_apply_complex_account_rules_end_to_end():
     assert row["Capture Date"] == datetime.date(2026, 8, 17)
     assert row["Email Opt-in"] == "Yes"
     assert row["Business Phone"] == "91 9819719038"
-    # Asset URN/Form URL/Dell Asset URL are a check now (check_asset_url_mismatches),
-    # not a fill — apply_complex_account_rules must leave them untouched.
+    # No asset_specs passed here -> the Asset URN/Form URL/Dell Asset URL
+    # correction step (see the dedicated correction tests below) is a
+    # no-op, leaving these untouched.
     assert row["Asset URN"] == "WRONG"
     assert row["Form URL"] == "https://wrong.com"
     assert row["Dell Asset URL"] == "https://wrong-dell.com"
@@ -344,6 +403,86 @@ def test_apply_complex_account_rules_end_to_end():
     assert row["Asset download day"] == 17
     assert row["Asset download month"] == "August"
     assert row["Asset download year"] == 2026
+
+
+def test_apply_complex_account_rules_corrects_urn_dell_url_and_form_url_for_india_cid():
+    df = _base_leads_df()  # CID 119414, wrong Asset URN/Form URL/Dell Asset URL
+
+    enriched, _, corrections = apply_complex_account_rules(
+        df, FM, None, {}, {}, asset_specs=_ASSET_SPECS)
+
+    assert enriched.loc[0, "Asset URN"] == "DT2503G0007_033"
+    assert enriched.loc[0, "Dell Asset URL"] == "https://dell.com/x"
+    assert enriched.loc[0, "Form URL"] == "https://a.com/india"  # CID 119414 -> india_link
+    assert 0 in corrections
+    joined = "; ".join(corrections[0])
+    assert "Asset URN" in joined and "WRONG" in joined and "DT2503G0007_033" in joined
+    assert "Dell Asset URL" in joined
+    assert "Form URL" in joined
+
+
+def test_apply_complex_account_rules_corrects_form_url_using_au_link_for_119415():
+    df = pd.DataFrame([{**_base_leads_df().iloc[0].to_dict(), "CID": "119415"}])
+
+    enriched, _, corrections = apply_complex_account_rules(
+        df, FM, None, {}, {}, asset_specs=_ASSET_SPECS)
+
+    assert enriched.loc[0, "Form URL"] == "https://a.com/au"
+    assert any("Form URL" in c for c in corrections[0])
+
+
+def test_apply_complex_account_rules_does_not_touch_already_correct_values():
+    df = pd.DataFrame([{
+        **_base_leads_df().iloc[0].to_dict(),
+        "Asset URN": "DT2503G0007_033", "Dell Asset URL": "https://dell.com/x",
+        "Form URL": "https://a.com/india",
+    }])
+
+    _, _, corrections = apply_complex_account_rules(df, FM, None, {}, {}, asset_specs=_ASSET_SPECS)
+
+    assert corrections == {}
+
+
+def test_apply_complex_account_rules_skips_correction_for_unrecognized_asset():
+    df = pd.DataFrame([{**_base_leads_df().iloc[0].to_dict(), "Asset Title": "Unknown Asset"}])
+
+    enriched, _, corrections = apply_complex_account_rules(
+        df, FM, None, {}, {}, asset_specs=_ASSET_SPECS)
+
+    assert corrections == {}
+    assert enriched.loc[0, "Asset URN"] == "WRONG"  # nothing to correct against
+
+
+def test_apply_complex_account_rules_skips_correction_for_other_cids():
+    df = pd.DataFrame([{**_base_leads_df().iloc[0].to_dict(), "CID": "999999"}])
+
+    enriched, _, corrections = apply_complex_account_rules(
+        df, FM, None, {}, {}, asset_specs=_ASSET_SPECS)
+
+    # Asset URN/Dell Asset URL are still corrected (not CID-scoped)...
+    assert enriched.loc[0, "Asset URN"] == "DT2503G0007_033"
+    # ...but Form URL has no rule for this CID, so it's left untouched.
+    assert enriched.loc[0, "Form URL"] == "https://wrong.com"
+    assert not any("Form URL" in c for c in corrections.get(0, []))
+
+
+def test_apply_complex_account_rules_no_op_without_asset_specs():
+    df = _base_leads_df()
+
+    _, _, corrections = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert corrections == {}
+
+
+def test_apply_complex_account_rules_clears_mail_optin_and_signal_notes():
+    df = pd.DataFrame([{
+        **_base_leads_df().iloc[0].to_dict(), "Mail Opt-In": "Yes", "Signal Notes": "some note",
+    }])
+
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert enriched.loc[0, "Mail Opt-In"] == ""
+    assert enriched.loc[0, "Signal Notes"] == ""
 
 
 def test_apply_complex_account_rules_matches_leads_from_different_cids_off_one_shared_map():
@@ -357,7 +496,7 @@ def test_apply_complex_account_rules_matches_leads_from_different_cids_off_one_s
     it_map = {"wipro.com": "AWS, Azure", "acme.com": "GCP"}
     pbs_map = {"wipro.com": "Awareness", "acme.com": "Consideration"}
 
-    enriched, _ = apply_complex_account_rules(df, FM, None, it_map, pbs_map)
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, it_map, pbs_map)
 
     col_it = "Additional Data Point (poll questions, dynamic data, etc)  2"
     col_pbs = "Additional Data Point (poll questions, dynamic data, etc)  3"
@@ -379,7 +518,7 @@ def test_apply_complex_account_rules_sets_agreed_contacted_by_cid():
          "Agreed to be contacted by Dell Technologies": ""},
     ])
 
-    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     col = "Agreed to be contacted by Dell Technologies"
     assert enriched.loc[0, col] == "No"
@@ -396,7 +535,7 @@ def test_apply_complex_account_rules_matches_agreed_contacted_cid_when_column_up
     ])
     df["CID"] = df["CID"].astype(float)
 
-    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     assert enriched.loc[0, "Agreed to be contacted by Dell Technologies"] == "Yes"
 
@@ -407,7 +546,7 @@ def test_apply_complex_account_rules_sets_phone_optin_yes_for_every_lead_regardl
         {**_base_leads_df().iloc[0].to_dict(), "CID": "119415", "Phone Opt-In": "No"},
     ])
 
-    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     assert enriched.loc[0, "Phone Opt-In"] == "Yes"
     assert enriched.loc[1, "Phone Opt-In"] == "Yes"
@@ -423,7 +562,7 @@ def test_apply_complex_account_rules_matches_by_domain_regardless_of_cid():
     it_map = {"wipro.com": "AWS, Azure"}
     pbs_map = {"wipro.com": "Awareness"}
 
-    enriched, _ = apply_complex_account_rules(df, FM, None, it_map, pbs_map)
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, it_map, pbs_map)
 
     row = enriched.iloc[0]
     assert row["Additional Data Point (poll questions, dynamic data, etc)  2"] == "Installed Technologies: AWS, Azure"
@@ -435,7 +574,7 @@ def test_apply_complex_account_rules_flags_bad_capture_date_and_optin_for_review
     df.loc[0, "Capture Date"] = "not a date"
     df.loc[0, "Email Opt-in"] = "Maybe"
 
-    enriched, review = apply_complex_account_rules(df, FM, None, {}, {})
+    enriched, review, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     assert 0 in review
     assert all(isinstance(r, ReviewDetail) for r in review[0])
@@ -452,7 +591,7 @@ def test_apply_complex_account_rules_leaves_blank_top_topics_cell_blank():
     df = _base_leads_df()
     df.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  1"] = float("nan")
 
-    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     value = enriched.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  1"]
     assert pd.isna(value)
@@ -463,7 +602,7 @@ def test_apply_complex_account_rules_clears_columns_when_domain_not_in_uploaded_
     # No entry for "wipro.com" in either map (e.g. no file uploaded this
     # run) -> its columns get cleared to blank rather than left with stale
     # placeholder text.
-    enriched, _ = apply_complex_account_rules(df, FM, None, {}, {})
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     assert enriched.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  2"] == ""
     assert enriched.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  3"] == ""
@@ -478,7 +617,7 @@ def test_apply_complex_account_rules_tolerates_header_whitespace_and_case_variat
     # "Capture Date" -- the exact-match column lookup must still find it,
     # rather than silently skipping the whole date/day/month block.
     df = _base_leads_df().rename(columns={"Capture Date": "CaptureDate"})
-    enriched, review = apply_complex_account_rules(df, FM, None, {}, {})
+    enriched, review, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     assert review == {}
     assert enriched.loc[0, "Capture Date"] == datetime.date(2026, 8, 17)

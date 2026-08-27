@@ -298,7 +298,7 @@ if st.button("Run Check") and new_leads_file:
                 _check_asset_specs = _cached_asset_specs(
                     profile.complex_account.specifications_path,
                     os.path.getmtime(profile.complex_account.specifications_path))
-            complex_review = check_complex_account_conditions(new_leads, _check_asset_specs)
+            complex_review = check_complex_account_conditions(new_leads, _check_asset_specs, field_mapping)
 
         reference_data: dict = {"purchased_reports": purchased_reports}
         if profile.exclusion.enabled:
@@ -695,10 +695,20 @@ if "run_result" in st.session_state:
                             complex_pbs_file, "Targeted Accounts", "Predictive Buying Stage",
                             skip_values={"No Active Signals"})
 
-                    enriched_valid, _ = apply_complex_account_rules(
+                    # Recomputed here (not reused from the Run Check click
+                    # above) since each button click is its own script run —
+                    # cheap thanks to _cached_asset_specs.
+                    _fill_asset_specs = None
+                    if profile.complex_account.specifications_path:
+                        _fill_asset_specs = _cached_asset_specs(
+                            profile.complex_account.specifications_path,
+                            os.path.getmtime(profile.complex_account.specifications_path))
+
+                    enriched_valid, _, complex_corrections = apply_complex_account_rules(
                         new_leads.loc[final_valid_indices], field_mapping,
-                        tal_index, installed_tech_map, pbs_map)
+                        tal_index, installed_tech_map, pbs_map, asset_specs=_fill_asset_specs)
                     st.session_state["complex_enriched_leads"] = enriched_valid
+                    st.session_state["complex_corrections"] = complex_corrections
                     st.session_state["complex_final_refund_reasons"] = final_refund_reasons
                     st.session_state["complex_final_refund_indices"] = final_refund_indices
                 st.rerun()
@@ -707,6 +717,16 @@ if "run_result" in st.session_state:
 
         if "complex_enriched_leads" in st.session_state:
             enriched_valid = st.session_state["complex_enriched_leads"]
+            _complex_corrections = st.session_state.get("complex_corrections", {})
+            if _complex_corrections:
+                _correction_lines = []
+                for _idx, _changes in _complex_corrections.items():
+                    _correction_lines.append(f"Row {_idx + 2}: " + "; ".join(_changes))
+                st.warning(
+                    f"⚠️ {len(_complex_corrections)} lead(s) had an Asset URN/Dell Asset URL/Form URL value "
+                    "that didn't match the specifications file — corrected automatically:\n\n"
+                    + "\n\n".join(_correction_lines)
+                )
             st.subheader("Preview: filled columns (nothing written yet)")
             _preview_cols = [c for c in [
                 field_mapping.cid, field_mapping.email, field_mapping.first_name, field_mapping.last_name,
@@ -725,14 +745,15 @@ if "run_result" in st.session_state:
                             enriched_valid, new_leads.loc[_refund_indices], _refund_reasons)
                         _finalize_jira_summary(
                             len(new_leads), len(enriched_valid), len(_refund_indices), lead_template_links_used)
-                        for key in ("run_result", "run_new_leads", "complex_enriched_leads",
+                        for key in ("run_result", "run_new_leads", "complex_enriched_leads", "complex_corrections",
                                     "complex_final_refund_reasons", "complex_final_refund_indices"):
                             st.session_state.pop(key, None)
                     st.rerun()
                 except Exception as exc:
                     render_error(exc)
             if col_discard.button("Discard and re-fill", use_container_width=True):
-                for key in ("complex_enriched_leads", "complex_final_refund_reasons", "complex_final_refund_indices"):
+                for key in ("complex_enriched_leads", "complex_corrections",
+                            "complex_final_refund_reasons", "complex_final_refund_indices"):
                     st.session_state.pop(key, None)
                 st.rerun()
     elif not result.review_reasons and st.button("Finalize"):

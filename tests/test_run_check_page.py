@@ -882,6 +882,81 @@ def test_complex_account_two_stage_finalize_previews_then_writes(tmp_path, monke
     assert written["Business Phone"] == "91 9819719038"
 
 
+def test_complex_account_finalize_corrects_mismatched_asset_urls_and_warns(tmp_path, monkeypatch):
+    # End-to-end: a lead with a wrong Asset URN/Form URL/Dell Asset URL vs.
+    # the specifications file gets corrected during "Finalize (fill
+    # columns)" (not just flagged), the correction is surfaced as a
+    # warning, and the corrected values are what actually get written on
+    # "Confirm & Write".
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email", "First", "Last", "Company", "CID", "Asset Title", "Asset URN", "Form URL",
+               "Dell Asset URL"])
+    wb.create_sheet("Refund").append(
+        ["Email", "First", "Last", "Company", "CID", "Asset Title", "Asset URN", "Form URL", "Dell Asset URL"])
+    wb.save(acc_path)
+
+    specs_path = str(tmp_path / "specs.xlsx")
+    wb2 = openpyxl.Workbook()
+    ws2 = wb2.active
+    ws2.append([
+        "Asset Name\n[to be filled in by EssenceMediacom]", "URN \n[to be filled in by EssenceMediacom]",
+        "Publisher Link [AU]_BHRS\n[to be filled in by Publisher]",
+        "Publisher Link INDIA]_ECS\n[to be filled in by Publisher]", "Dell Link",
+    ])
+    ws2.append([
+        "Fuel AI Innovation", "DT2503G0007_033", "https://a.com/au", "https://a.com/india", "https://dell.com/x",
+    ])
+    wb2.save(specs_path)
+
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        complex_account=ComplexAccountConfig(enabled=True, specifications_path=specs_path),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email": "a@wipro.com", "First": "A", "Last": "One", "Company": "Wipro", "CID": "119414",
+         "Asset Title": "Fuel AI Innovation", "Asset URN": "WRONG_URN",
+         "Form URL": "https://wrong.com", "Dell Asset URL": "https://wrong-dell.com"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    assert not at.exception
+
+    fill_button = next(b for b in at.button if b.label == "Finalize (fill columns)")
+    fill_button.click().run()
+    assert not at.exception
+
+    assert at.session_state["complex_corrections"][0]
+    warning_text = "\n".join(w.value for w in at.warning)
+    assert "corrected automatically" in warning_text
+    assert "Asset URN" in warning_text
+
+    confirm_button = next(b for b in at.button if b.label == "Confirm & Write")
+    confirm_button.click().run()
+    assert not at.exception
+
+    wb_final = openpyxl.load_workbook(acc_path)
+    row = next(wb_final["Accumulated"].iter_rows(min_row=2, max_row=2, values_only=True))
+    headers = next(wb_final["Accumulated"].iter_rows(min_row=1, max_row=1, values_only=True))
+    written = dict(zip(headers, row))
+    assert written["Asset URN"] == "DT2503G0007_033"
+    assert written["Dell Asset URL"] == "https://dell.com/x"
+    assert written["Form URL"] == "https://a.com/india"
+
+
 def test_completed_checks_status_shown_for_enabled_checks_only(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
@@ -913,10 +988,11 @@ def test_completed_checks_status_shown_for_enabled_checks_only(tmp_path, monkeyp
     assert "Leadcap" not in status_captions[0]  # not enabled for this client
 
 
-def test_complex_account_flags_asset_url_mismatch_for_review_not_autocorrect(tmp_path, monkeypatch):
-    # Regression test: Asset URN/Form URL/Dell Asset URL are already filled
-    # in the leadfile — the tool must only flag a mismatch against the
-    # specifications file for review, never silently rewrite them.
+def test_complex_account_flags_asset_url_mismatch_for_review_check_does_not_mutate(tmp_path, monkeypatch):
+    # Regression test: at Run Check time, a mismatch against the
+    # specifications file must only be flagged for review, never silently
+    # rewritten -- the actual correction happens later, in
+    # apply_complex_account_rules, only for leads approved as valid.
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
     _make_accumulated_report(acc_path)
@@ -924,8 +1000,14 @@ def test_complex_account_flags_asset_url_mismatch_for_review_not_autocorrect(tmp
     specs_path = str(tmp_path / "specs.xlsx")
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.append(["Asset Name", "URN ", "Asset URL 1", "Asset URL 2", "Dell URL"])
-    ws.append(["Fuel AI Innovation", "DT2503G0007_033", "https://a.com/1", "https://a.com/2", "https://dell.com/x"])
+    ws.append([
+        "Asset Name\n[to be filled in by EssenceMediacom]", "URN \n[to be filled in by EssenceMediacom]",
+        "Publisher Link [AU]_BHRS\n[to be filled in by Publisher]",
+        "Publisher Link INDIA]_ECS\n[to be filled in by Publisher]", "Dell Link",
+    ])
+    ws.append([
+        "Fuel AI Innovation", "DT2503G0007_033", "https://a.com/au", "https://a.com/india", "https://dell.com/x",
+    ])
     wb.save(specs_path)
 
     fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
@@ -937,9 +1019,9 @@ def test_complex_account_flags_asset_url_mismatch_for_review_not_autocorrect(tmp
     save_profile(profile, get_clients_dir())
 
     new_leads = pd.DataFrame([
-        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1",
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "119414",
          "Asset Title": "Fuel AI Innovation", "Asset URN": "WRONG_URN",
-         "Form URL": "https://a.com/1", "Dell Asset URL": "https://dell.com/x"},
+         "Form URL": "https://a.com/india", "Dell Asset URL": "https://dell.com/x"},
     ])
 
     # This exercises the same functions pages/2_Run_Check.py's "Run Check"
@@ -951,10 +1033,12 @@ def test_complex_account_flags_asset_url_mismatch_for_review_not_autocorrect(tmp
 
     accumulated_leads = pd.read_excel(acc_path, sheet_name="Accumulated")
     asset_specs = load_asset_specifications(specs_path)
-    complex_review = check_complex_account_conditions(new_leads, asset_specs)
+    complex_review = check_complex_account_conditions(new_leads, asset_specs, fm)
     result = run_pipeline(new_leads, profile, accumulated_leads, {}, [])
     merge_complex_account_review(result, complex_review)
 
     assert 0 not in result.valid_indices
     assert 0 in result.review_reasons
     assert any("Asset URN" in str(d) for d in result.review_reasons[0])
+    # The check step must never rewrite the leadfile's value itself.
+    assert new_leads.loc[0, "Asset URN"] == "WRONG_URN"
