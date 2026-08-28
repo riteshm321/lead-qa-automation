@@ -115,9 +115,11 @@ def _render_time_saved_card() -> None:
     # rendered as literal text instead of real HTML.
     card_html = textwrap.dedent(f"""\
         <style>
-        .ts-header {{ display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 0.95rem; }}
+        .ts-header {{
+            display: flex; align-items: center; justify-content: center; gap: 6px;
+            font-weight: 600; font-size: 0.95rem; text-align: center;
+        }}
         .ts-header .ts-icon {{ color: {_ACCENT}; display: flex; }}
-        .ts-header .ts-sub {{ font-weight: 400; opacity: 0.65; font-size: 0.78rem; }}
         .ts-count {{ margin: 6px 0 10px 0; font-size: 0.82rem; opacity: 0.85; }}
         .ts-count strong {{ color: {_ACCENT}; opacity: 1; }}
         .ts-stats {{ display: flex; justify-content: space-between; gap: 4px; text-align: center; }}
@@ -133,8 +135,7 @@ def _render_time_saved_card() -> None:
         .ts-footer .ts-icon {{ color: {_SAVED_COLOR}; display: flex; flex-shrink: 0; }}
         .ts-footer strong {{ color: {_SAVED_COLOR}; }}
         </style>
-        <div class="ts-header"><span class="ts-icon">{_ICON_TIMER}</span>Time Saved
-            <span class="ts-sub">(all users, till date)</span></div>
+        <div class="ts-header"><span class="ts-icon">{_ICON_TIMER}</span>Time Saved</div>
         <div class="ts-count"><strong>{summary['total_processes']}</strong> client process(es) completed</div>
         <div class="ts-stats">
         <div class="ts-stat">
