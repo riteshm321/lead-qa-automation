@@ -14,6 +14,17 @@ from core.app_settings import get_shared_root_dir
 _MANUAL_EXTRA_MINUTES = 15
 _MANUAL_EXTRA_MINUTES_COMPLEX_ACCOUNT = 30
 
+# Processes completed before this measured-time design existed only recorded
+# a bare count -- no automated/manual minutes at all. Rather than showing
+# those historical processes as contributing 0 minutes (misleading: the
+# process count includes them, so the time totals should too), backfill them
+# using the fixed per-process baseline this app used at the time (see the
+# now-removed Settings "Time saved tracking" baseline editor) -- the closest
+# real estimate available for work that was never individually timed.
+_LEGACY_BASELINE_FILE = "settings.json"
+_LEGACY_DEFAULT_AUTOMATION_MINUTES = 10
+_LEGACY_DEFAULT_MANUAL_MINUTES = 40
+
 
 def _activity_dir() -> str:
     root = get_shared_root_dir()
@@ -58,23 +69,51 @@ def record_process_completed(username: str, automated_minutes: float, is_complex
     atomic_write_json(path, existing)
 
 
+def _legacy_baseline_minutes() -> tuple[float, float]:
+    path = os.path.join(_activity_dir(), _LEGACY_BASELINE_FILE) if _activity_dir() else ""
+    if path and os.path.isfile(path):
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return (
+            data.get("automation_minutes", _LEGACY_DEFAULT_AUTOMATION_MINUTES),
+            data.get("manual_minutes", _LEGACY_DEFAULT_MANUAL_MINUTES),
+        )
+    return _LEGACY_DEFAULT_AUTOMATION_MINUTES, _LEGACY_DEFAULT_MANUAL_MINUTES
+
+
 def load_all_activity() -> dict[str, dict]:
     """{username: {"process_count", "total_automated_minutes",
     "total_manual_minutes", "last_updated"}} for every user who has
     completed at least one process -- one file per user (see
     record_process_completed) so two people finalizing at nearly the same
     moment on different machines never race on the same file the way a
-    single shared counter would under OneDrive's own sync model."""
+    single shared counter would under OneDrive's own sync model.
+
+    A record from before this measured-time design (bare process_count,
+    no minutes) is migrated in place the first time it's read -- backfilled
+    with the legacy baseline (see _legacy_baseline_minutes) and written back,
+    so it only happens once and future record_process_completed() calls
+    accumulate onto real numbers instead of re-defaulting to 0."""
     users_dir = os.path.join(_activity_dir(), "users") if _activity_dir() else ""
     if not users_dir or not os.path.isdir(users_dir):
         return {}
+    legacy_automation = legacy_manual = None
     activity: dict[str, dict] = {}
     for entry in os.listdir(users_dir):
         if not entry.endswith(".json"):
             continue
         username = entry[: -len(".json")]
-        with open(os.path.join(users_dir, entry), "r", encoding="utf-8") as f:
-            activity[username] = json.load(f)
+        user_path = os.path.join(users_dir, entry)
+        with open(user_path, "r", encoding="utf-8") as f:
+            record = json.load(f)
+        if "total_automated_minutes" not in record:
+            if legacy_automation is None:
+                legacy_automation, legacy_manual = _legacy_baseline_minutes()
+            count = record.get("process_count", 0)
+            record["total_automated_minutes"] = count * legacy_automation
+            record["total_manual_minutes"] = count * legacy_manual
+            atomic_write_json(user_path, record)
+        activity[username] = record
     return activity
 
 
