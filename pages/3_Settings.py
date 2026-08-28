@@ -1,6 +1,5 @@
 import os
 
-import pandas as pd
 import streamlit as st
 
 from core.app_settings import (
@@ -163,7 +162,8 @@ if _current_user["is_admin"]:
             "Drives the \"Time Saved\" card shown in the sidebar to everyone -- a client process is "
             "counted once per successful Finalize/Confirm & Write, with the automated time measured "
             "live (from that run's Run Check click to Finalize) and the manual-equivalent time assumed "
-            "to be 15 minutes more (30 for Complex Account clients)."
+            "to be 15 minutes more (30 for Complex Account clients). See the **Activity Log** page for "
+            "the full per-process detail -- which client, and exactly when."
         )
         _activity = load_all_activity()
         if not _activity:
@@ -182,17 +182,3 @@ if _current_user["is_admin"]:
                     f"{_stats['plain_count']} Lead QA, {_stats['complex_account_count']} Complex Account · "
                     f"{_stats['distinct_clients']} distinct client(s)"
                 )
-                _log = _activity_record.get("log", [])
-                if _log:
-                    with st.expander(f"Show {_activity_username}'s process log ({len(_log)})"):
-                        _log_df = pd.DataFrame([
-                            {
-                                "Client": _entry.get("client", "—"),
-                                "When": _entry.get("timestamp", "—"),
-                                "Automated": format_minutes(_entry.get("automated_minutes", 0.0)),
-                                "Manual": format_minutes(_entry.get("manual_minutes", 0.0)),
-                                "Complex Account": "Yes" if _entry.get("is_complex_account") else "",
-                            }
-                            for _entry in reversed(_log)
-                        ])
-                        st.dataframe(_log_df, hide_index=True, width="stretch")

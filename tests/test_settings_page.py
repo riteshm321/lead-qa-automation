@@ -208,10 +208,7 @@ def test_admin_sees_per_person_time_saved_breakdown(tmp_path, monkeypatch):
     assert not at.exception
     assert any("test-admin" in m.value and "2 process" in m.value for m in at.markdown)
     assert any("1 Lead QA, 1 Complex Account" in c.value for c in at.caption)
-    log_expander = next(e for e in at.expander if "test-admin's process log" in e.label)
-    log_table = log_expander.dataframe[0].value
-    assert set(log_table["Client"]) == {"Acme", "Beta Corp"}
-    assert "Yes" in list(log_table["Complex Account"])
+    assert any("Activity Log" in c.value for c in at.caption)
 
 
 def test_cannot_remove_the_only_remaining_admin(tmp_path, monkeypatch):
