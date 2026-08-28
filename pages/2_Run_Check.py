@@ -648,7 +648,8 @@ if "run_result" in st.session_state:
         _started_at = st.session_state.get("run_check_started_at")
         _automated_minutes = (time.time() - _started_at) / 60 if _started_at else 0.0
         record_process_completed(
-            _current_user["username"], _automated_minutes, is_complex_account=profile.complex_account.enabled)
+            _current_user["username"], client_name, _automated_minutes,
+            is_complex_account=profile.complex_account.enabled)
 
         # Both callers rerun right after this returns (the plain Finalize
         # path added its own rerun below to match), so the confirmation must

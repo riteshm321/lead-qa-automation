@@ -199,14 +199,19 @@ def test_admin_sees_per_person_time_saved_breakdown(tmp_path, monkeypatch):
     from core.app_settings import save_app_settings
     save_app_settings({"shared_root_dir": shared_root})
     from core.activity_tracker import record_process_completed
-    record_process_completed("test-admin", 3.0, is_complex_account=False)
-    record_process_completed("test-admin", 2.0, is_complex_account=False)
+    record_process_completed("test-admin", "Acme", 3.0, is_complex_account=False)
+    record_process_completed("test-admin", "Beta Corp", 2.0, is_complex_account=True)
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
 
     assert not at.exception
     assert any("test-admin" in m.value and "2 process" in m.value for m in at.markdown)
+    assert any("1 Lead QA, 1 Complex Account" in c.value for c in at.caption)
+    log_expander = next(e for e in at.expander if "test-admin's process log" in e.label)
+    log_table = log_expander.dataframe[0].value
+    assert set(log_table["Client"]) == {"Acme", "Beta Corp"}
+    assert "Yes" in list(log_table["Complex Account"])
 
 
 def test_cannot_remove_the_only_remaining_admin(tmp_path, monkeypatch):

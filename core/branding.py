@@ -49,14 +49,15 @@ def configure_page(page_title: str) -> dict:
     )
     user = auth_gate.require_login()
 
-    st.sidebar.divider()
+    # No divider directly above the Time Saved card -- it sits right after
+    # the page nav links, closer to the top of the sidebar rather than
+    # pushed down by an extra divider's worth of gap.
     _render_time_saved_card()
 
-    st.sidebar.divider()
     with st.sidebar.container(border=True):
         st.caption("Logged in as")
-        st.markdown(f"👤 **{user['username']}**")
-        st.markdown(f"💼 {user['role']}" if user.get("role") else "💼 Admin" if user["is_admin"] else "💼 User")
+        st.caption(f"👤 {user['username']}")
+        st.caption(f"💼 {user['role']}" if user.get("role") else "💼 Admin" if user["is_admin"] else "💼 User")
     if st.sidebar.button("Log out", key="_logout_button", use_container_width=True):
         auth_gate.logout()
         st.rerun()
@@ -106,6 +107,8 @@ def _render_time_saved_card() -> None:
     automated = format_minutes(summary["total_automated_minutes"])
     saved = format_minutes(summary["total_saved_minutes"])
     pct = round(summary["percent_saved"], 1)
+    count = summary["total_processes"]
+    count_noun = f"{'Client' if count == 1 else 'Clients'} QA/{'Upload' if count == 1 else 'Uploads'} Done"
 
     # Every line must start at column 0 -- Markdown treats a run of lines
     # indented 4+ spaces as a code block unless they're literally inside an
@@ -120,7 +123,7 @@ def _render_time_saved_card() -> None:
             font-weight: 600; font-size: 0.95rem; text-align: center;
         }}
         .ts-header .ts-icon {{ color: {_ACCENT}; display: flex; }}
-        .ts-count {{ margin: 6px 0 10px 0; font-size: 0.82rem; opacity: 0.85; }}
+        .ts-count {{ margin: 6px 0 16px 0; font-size: 0.82rem; opacity: 0.85; text-align: center; }}
         .ts-count strong {{ color: {_ACCENT}; opacity: 1; }}
         .ts-stats {{ display: flex; justify-content: space-between; gap: 4px; text-align: center; }}
         .ts-stat {{ flex: 1; }}
@@ -130,13 +133,13 @@ def _render_time_saved_card() -> None:
         .ts-stat-value.ts-saved {{ color: {_SAVED_COLOR}; font-weight: 700; }}
         .ts-footer {{
             margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(128, 128, 128, 0.25);
-            font-size: 0.75rem; display: flex; align-items: center; gap: 5px;
+            font-size: 0.8rem; display: flex; align-items: center; justify-content: center; gap: 5px;
         }}
         .ts-footer .ts-icon {{ color: {_SAVED_COLOR}; display: flex; flex-shrink: 0; }}
         .ts-footer strong {{ color: {_SAVED_COLOR}; }}
         </style>
         <div class="ts-header"><span class="ts-icon">{_ICON_TIMER}</span>Time Saved</div>
-        <div class="ts-count"><strong>{summary['total_processes']}</strong> client process(es) completed</div>
+        <div class="ts-count"><strong>{count}</strong> {count_noun}</div>
         <div class="ts-stats">
         <div class="ts-stat">
         <div class="ts-stat-icon">{_ICON_CLOCK}</div>
@@ -154,8 +157,7 @@ def _render_time_saved_card() -> None:
         <div class="ts-stat-value ts-saved">{saved}</div>
         </div>
         </div>
-        <div class="ts-footer"><span class="ts-icon">{_ICON_CHECK}</span>
-            <strong>{pct}% time saved</strong>&nbsp;— you saved {saved} vs. manual work</div>
+        <div class="ts-footer"><span class="ts-icon">{_ICON_CHECK}</span><strong>{pct}% time saved</strong></div>
         """)
     with st.sidebar.container(border=True):
         st.markdown(card_html, unsafe_allow_html=True)

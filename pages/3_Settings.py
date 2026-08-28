@@ -1,12 +1,13 @@
 import os
 
+import pandas as pd
 import streamlit as st
 
 from core.app_settings import (
     get_aliases_path, get_clients_dir, get_jira_settings, get_shared_root_dir,
     load_app_settings, save_app_settings, save_jira_settings,
 )
-from core.activity_tracker import load_all_activity, format_minutes
+from core.activity_tracker import load_all_activity, get_user_stats, format_minutes
 from core.auth import create_user, delete_user, load_users, update_user_role
 from core.branding import configure_page
 from core.file_browser import browse_for_folder
@@ -170,10 +171,28 @@ if _current_user["is_admin"]:
         else:
             for _activity_username, _activity_record in sorted(_activity.items()):
                 _count = _activity_record.get("process_count", 0)
-                _automated = _activity_record.get("total_automated_minutes", 0.0)
-                _manual = _activity_record.get("total_manual_minutes", 0.0)
-                _saved = _manual - _automated
+                _stats = get_user_stats(_activity_record)
                 st.markdown(
                     f"**{_activity_username}** — {_count} process(es), "
-                    f"{format_minutes(_saved)} saved (last: {_activity_record.get('last_updated', '—')})"
+                    f"{format_minutes(_stats['total_saved_minutes'])} saved "
+                    f"(last: {_activity_record.get('last_updated', '—')})"
                 )
+                st.caption(
+                    f"Avg {format_minutes(_stats['avg_automated_minutes'])}/process · "
+                    f"{_stats['plain_count']} Lead QA, {_stats['complex_account_count']} Complex Account · "
+                    f"{_stats['distinct_clients']} distinct client(s)"
+                )
+                _log = _activity_record.get("log", [])
+                if _log:
+                    with st.expander(f"Show {_activity_username}'s process log ({len(_log)})"):
+                        _log_df = pd.DataFrame([
+                            {
+                                "Client": _entry.get("client", "—"),
+                                "When": _entry.get("timestamp", "—"),
+                                "Automated": format_minutes(_entry.get("automated_minutes", 0.0)),
+                                "Manual": format_minutes(_entry.get("manual_minutes", 0.0)),
+                                "Complex Account": "Yes" if _entry.get("is_complex_account") else "",
+                            }
+                            for _entry in reversed(_log)
+                        ])
+                        st.dataframe(_log_df, hide_index=True, width="stretch")

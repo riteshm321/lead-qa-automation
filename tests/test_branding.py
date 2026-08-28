@@ -24,7 +24,7 @@ def test_sidebar_time_saved_card_shows_zero_with_no_activity(tmp_path, monkeypat
     assert not at.exception
     sidebar_markdown = "\n".join(m.value for m in at.sidebar.markdown)
     assert "0" in sidebar_markdown
-    assert "client process" in sidebar_markdown
+    assert "Clients QA/Uploads Done" in sidebar_markdown
 
 
 def test_sidebar_time_saved_card_reflects_recorded_activity(tmp_path, monkeypatch):
@@ -33,8 +33,8 @@ def test_sidebar_time_saved_card_reflects_recorded_activity(tmp_path, monkeypatc
     from core.app_settings import save_app_settings
     save_app_settings({"shared_root_dir": shared_root})
     from core.activity_tracker import record_process_completed
-    record_process_completed("alice", 3.0, is_complex_account=False)
-    record_process_completed("bob", 3.0, is_complex_account=False)
+    record_process_completed("alice", "Acme", 3.0, is_complex_account=False)
+    record_process_completed("bob", "Acme", 3.0, is_complex_account=False)
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()

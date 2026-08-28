@@ -35,9 +35,13 @@ def _user_file(username: str) -> str:
     return os.path.join(_activity_dir(), "users", f"{username}.json")
 
 
-def record_process_completed(username: str, automated_minutes: float, is_complex_account: bool = False) -> None:
-    """Increments the logged-in user's completed-client-process counter and
-    accumulates the real, measured time this process took.
+def record_process_completed(
+        username: str, client_name: str, automated_minutes: float, is_complex_account: bool = False) -> None:
+    """Increments the logged-in user's completed-client-process counter,
+    accumulates the real, measured time this process took, and appends one
+    entry to that user's process log -- so an admin can see not just how
+    much time a user has saved, but which clients they've actually worked
+    on and when (see load_all_activity/get_user_stats).
 
     Call once per successful Finalize/Confirm & Write -- a completed write
     to the Accumulated Report, not just a Run Check click. `automated_minutes`
@@ -56,16 +60,24 @@ def record_process_completed(username: str, automated_minutes: float, is_complex
     extra = _MANUAL_EXTRA_MINUTES_COMPLEX_ACCOUNT if is_complex_account else _MANUAL_EXTRA_MINUTES
     automated_minutes = max(0.0, automated_minutes)
     manual_minutes = automated_minutes + extra
+    timestamp = datetime.datetime.now().isoformat(timespec="seconds")
 
     path = _user_file(username)
-    existing = {"process_count": 0, "total_automated_minutes": 0.0, "total_manual_minutes": 0.0}
+    existing = {"process_count": 0, "total_automated_minutes": 0.0, "total_manual_minutes": 0.0, "log": []}
     if os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as f:
             existing = json.load(f)
     existing["process_count"] = existing.get("process_count", 0) + 1
     existing["total_automated_minutes"] = existing.get("total_automated_minutes", 0.0) + automated_minutes
     existing["total_manual_minutes"] = existing.get("total_manual_minutes", 0.0) + manual_minutes
-    existing["last_updated"] = datetime.datetime.now().isoformat(timespec="seconds")
+    existing["last_updated"] = timestamp
+    existing.setdefault("log", []).append({
+        "client": client_name,
+        "timestamp": timestamp,
+        "automated_minutes": automated_minutes,
+        "manual_minutes": manual_minutes,
+        "is_complex_account": is_complex_account,
+    })
     atomic_write_json(path, existing)
 
 
@@ -83,17 +95,23 @@ def _legacy_baseline_minutes() -> tuple[float, float]:
 
 def load_all_activity() -> dict[str, dict]:
     """{username: {"process_count", "total_automated_minutes",
-    "total_manual_minutes", "last_updated"}} for every user who has
+    "total_manual_minutes", "last_updated", "log"}} for every user who has
     completed at least one process -- one file per user (see
     record_process_completed) so two people finalizing at nearly the same
     moment on different machines never race on the same file the way a
     single shared counter would under OneDrive's own sync model.
 
-    A record from before this measured-time design (bare process_count,
-    no minutes) is migrated in place the first time it's read -- backfilled
-    with the legacy baseline (see _legacy_baseline_minutes) and written back,
-    so it only happens once and future record_process_completed() calls
-    accumulate onto real numbers instead of re-defaulting to 0."""
+    "log" is a list of {"client", "timestamp", "automated_minutes",
+    "manual_minutes", "is_complex_account"}, one entry per process, newest
+    last -- lets an admin see not just totals but which client each
+    process was for. A record from before per-client logging existed (or
+    from before measured-time tracking existed at all) is migrated in
+    place the first time it's read and written back, so it only happens
+    once: missing minute totals are backfilled from the legacy baseline
+    (see _legacy_baseline_minutes) with no matching log entries (the
+    client isn't known for that historical work), and a missing "log" key
+    is simply initialized empty so future processes start logging normally.
+    """
     users_dir = os.path.join(_activity_dir(), "users") if _activity_dir() else ""
     if not users_dir or not os.path.isdir(users_dir):
         return {}
@@ -106,15 +124,40 @@ def load_all_activity() -> dict[str, dict]:
         user_path = os.path.join(users_dir, entry)
         with open(user_path, "r", encoding="utf-8") as f:
             record = json.load(f)
+        migrated = False
         if "total_automated_minutes" not in record:
             if legacy_automation is None:
                 legacy_automation, legacy_manual = _legacy_baseline_minutes()
             count = record.get("process_count", 0)
             record["total_automated_minutes"] = count * legacy_automation
             record["total_manual_minutes"] = count * legacy_manual
+            migrated = True
+        if "log" not in record:
+            record["log"] = []
+            migrated = True
+        if migrated:
             atomic_write_json(user_path, record)
         activity[username] = record
     return activity
+
+
+def get_user_stats(record: dict) -> dict:
+    """Derived per-user stats for the admin breakdown -- everything not
+    already a flat field on the activity record. Computed on read rather
+    than stored, so it always reflects the record's current log/totals."""
+    log = record.get("log", [])
+    process_count = record.get("process_count", 0)
+    total_automated = record.get("total_automated_minutes", 0.0)
+    total_manual = record.get("total_manual_minutes", 0.0)
+    complex_count = sum(1 for entry in log if entry.get("is_complex_account"))
+    return {
+        "avg_automated_minutes": (total_automated / process_count) if process_count else 0.0,
+        "total_saved_minutes": total_manual - total_automated,
+        "complex_account_count": complex_count,
+        "plain_count": len(log) - complex_count,
+        "distinct_clients": len({entry["client"] for entry in log if entry.get("client")}),
+        "logged_process_count": len(log),
+    }
 
 
 def format_minutes(minutes: float) -> str:
