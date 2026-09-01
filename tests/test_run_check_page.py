@@ -1042,3 +1042,104 @@ def test_complex_account_flags_asset_url_mismatch_for_review_check_does_not_muta
     assert any("Asset URN" in str(d) for d in result.review_reasons[0])
     # The check step must never rewrite the leadfile's value itself.
     assert new_leads.loc[0, "Asset URN"] == "WRONG_URN"
+
+
+def test_run_check_blocks_leadcap_clients_missing_the_purchased_report(tmp_path, monkeypatch):
+    # AppTest can't drive a real file upload -- pre-seed the upload cache
+    # (see core/upload_cache.py) exactly as resolve_upload() would after a
+    # real New Leads upload, but leave the Purchased Lead Report slot
+    # empty, simulating a leadcap client where only the leadfile was
+    # selected.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    from core.models import LeadcapConfig
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        leadcap=LeadcapConfig(enabled=True, flat_cap=5, purchased_report_cid_column="CID",
+                               purchased_report_email_column="Email_Address"),
+    )
+    save_profile(profile, get_clients_dir())
+
+    leads_csv = b"Email_Address,First_Name,Last_Name,Company_Name,CID\nbob@new.com,Bob,Lee,Beta,1\n"
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_check_upload_cache"] = {
+        "Test Client": {"new_leads": {"name": "leads.csv", "data": leads_csv}},
+    }
+    at.run()
+
+    assert any("Using previously selected file" in c.value and "leads.csv" in c.value for c in at.caption)
+
+    run_button = next(b for b in at.button if b.label == "Run Check")
+    run_button.click().run()
+
+    assert not at.exception
+    assert any("upload the Purchased Lead Report" in e.value for e in at.error)
+    assert "run_result" not in at.session_state
+
+
+def test_run_check_uses_cached_files_for_both_leadcap_uploads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    from core.models import LeadcapConfig
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        leadcap=LeadcapConfig(enabled=True, flat_cap=5, purchased_report_cid_column="CID",
+                               purchased_report_email_column="Email_Address"),
+    )
+    save_profile(profile, get_clients_dir())
+
+    leads_csv = b"Email_Address,First_Name,Last_Name,Company_Name,CID\nbob@new.com,Bob,Lee,Beta,1\n"
+    purchased_csv = b"CID,Email_Address\n1,bob@new.com\n"
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_check_upload_cache"] = {
+        "Test Client": {
+            "new_leads": {"name": "leads.csv", "data": leads_csv},
+            "purchased_report": {"name": "purchased.csv", "data": purchased_csv},
+        },
+    }
+    at.run()
+
+    assert any("leads.csv" in c.value for c in at.caption)
+    assert any("purchased.csv" in c.value for c in at.caption)
+
+    run_button = next(b for b in at.button if b.label == "Run Check")
+    run_button.click().run()
+
+    assert not at.exception
+    assert not at.error
+    assert "run_result" in at.session_state
+
+
+def test_switching_clients_does_not_reuse_the_other_clients_cached_file(tmp_path, monkeypatch):
+    # The upload cache is keyed by client name -- selecting a client that
+    # has never had a file uploaded in this session must start empty, even
+    # if a *different* client already has one cached.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile_a = ClientProfile(name="Client A", accumulated_report_path=acc_path, field_mapping=fm)
+    profile_b = ClientProfile(name="Client B", accumulated_report_path=acc_path, field_mapping=fm)
+    save_profile(profile_a, get_clients_dir())
+    save_profile(profile_b, get_clients_dir())
+
+    leads_csv = b"Email_Address,First_Name,Last_Name,Company_Name,CID\nbob@new.com,Bob,Lee,Beta,1\n"
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_check_upload_cache"] = {
+        "Client A": {"new_leads": {"name": "leads.csv", "data": leads_csv}},
+    }
+    at.run()
+    at.selectbox[0].set_value("Client B").run()
+
+    assert not at.exception
+    assert not any("Using previously selected file" in c.value for c in at.caption)

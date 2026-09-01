@@ -30,6 +30,7 @@ from core.models import FieldMapping
 from core.pipeline import run_pipeline, apply_refund_overrides
 from core.profile_store import list_profile_names, load_profile, save_profile
 from core.toast import queue_toast_before_rerun, show_pending_toast
+from core.upload_cache import resolve_upload
 import requests
 
 _current_user = configure_page("Run Check")
@@ -156,6 +157,7 @@ for _step_num, (_step_col, _step_label) in enumerate(zip(_step_cols, _step_label
 st.divider()
 
 _upload_key_suffix = st.session_state.get("upload_reset_counter", 0)
+_upload_cache = st.session_state.setdefault("run_check_upload_cache", {})
 
 _enabled_checks = ", ".join(
     label for label, on in [
@@ -167,7 +169,12 @@ _enabled_checks = ", ".join(
 st.caption(f"Mode: **{profile.client_mode}** · Enabled checks: {_enabled_checks}")
 st.divider()
 
-new_leads_file = st.file_uploader("New Leads file", type=["xlsx", "csv"], key=f"new_leads_upload_{_upload_key_suffix}")
+_new_leads_widget = st.file_uploader(
+    "New Leads file", type=["xlsx", "csv"], key=f"new_leads_upload_{client_name}_{_upload_key_suffix}")
+new_leads_file, _new_leads_name, _new_leads_from_cache = resolve_upload(
+    _new_leads_widget, _upload_cache, client_name, "new_leads")
+if _new_leads_from_cache:
+    st.caption(f"📎 Using previously selected file: **{_new_leads_name}**")
 
 new_leads_df = None
 new_leads_headers: list[str] = []
@@ -220,7 +227,12 @@ if profile.leadcap.enabled:
         st.caption(f"Upload a single Purchased Lead Report covering all CIDs ({', '.join(all_cids)}) — "
                    "each segment's cap is checked against its own CIDs from this one file.")
 
-    uploaded = st.file_uploader("Purchased Lead Report", type=["csv"], key=f"purchased_report_{_upload_key_suffix}")
+    _purchased_widget = st.file_uploader(
+        "Purchased Lead Report", type=["csv"], key=f"purchased_report_{client_name}_{_upload_key_suffix}")
+    uploaded, _purchased_name, _purchased_from_cache = resolve_upload(
+        _purchased_widget, _upload_cache, client_name, "purchased_report")
+    if _purchased_from_cache:
+        st.caption(f"📎 Using previously selected file: **{_purchased_name}**")
     if uploaded:
         df = read_csv_bytes_robust(uploaded.read())
         try:
@@ -236,6 +248,9 @@ if profile.leadcap.enabled:
                 purchased_reports["_flat_"] = df
         except ValueError as exc:
             render_error(exc)
+
+    if not purchased_reports:
+        st.error("Leadcap is enabled for this client — upload the Purchased Lead Report before running the check.")
 
 complex_it_file = None
 complex_pbs_file = None
@@ -258,6 +273,9 @@ if st.button("Run Check") and new_leads_file:
     st.session_state["run_check_started_at"] = time.time()
     if not mapping_valid:
         st.error("Map the New Leads columns above before running the check.")
+        st.stop()
+    if profile.leadcap.enabled and not purchased_reports:
+        st.error("Leadcap is enabled for this client — upload the Purchased Lead Report before running the check.")
         st.stop()
     try:
         # Ordered so the progress bar's text always names what's about to
