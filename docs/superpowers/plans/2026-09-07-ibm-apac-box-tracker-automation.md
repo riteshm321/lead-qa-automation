@@ -33,7 +33,7 @@
 - Produces: `load_tal_segment_index(tal_path: str, domain_column: str = "company_domain") -> dict[str, str]` and `fill_blank_segments(leads_df: pd.DataFrame, email_column: str, segment_index: dict[str, str], segment_column: str = "Segment") -> pd.DataFrame`, both importable from `core.complex_account`.
 - Consumes: `_norm_domain` (existing, same file) and `extract_domain` (existing import, same file).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_complex_account.py`:
 
@@ -96,12 +96,12 @@ def test_fill_blank_segments_only_fills_blanks_by_domain():
     assert result.loc[2, "Segment"] == ""
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_complex_account.py -k "tal_segment_index or fill_blank_segments" -v`
 Expected: FAIL with `ImportError`/`AttributeError` (`load_tal_segment_index`/`fill_blank_segments` don't exist yet).
 
-- [ ] **Step 3: Implement the two functions**
+- [x] **Step 3: Implement the two functions**
 
 Add to `core/complex_account.py`, after `apply_tal_mapping` (so it sits alongside the other TAL-related functions):
 
@@ -186,12 +186,12 @@ def fill_blank_segments(
     return df
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_complex_account.py -k "tal_segment_index or fill_blank_segments" -v`
 Expected: PASS
 
-- [ ] **Step 5: Wire it into `apply_complex_account_rules` as an optional parameter**
+- [x] **Step 5: Wire it into `apply_complex_account_rules` as an optional parameter**
 
 Modify the signature (around line 443) to add one new parameter:
 
@@ -214,7 +214,7 @@ Update the docstring's summary line to add: `tal_segment_index (if given) backfi
         df = fill_blank_segments(df, field_mapping.email, tal_segment_index)
 ```
 
-- [ ] **Step 6: Write a test for the wiring**
+- [x] **Step 6: Write a test for the wiring**
 
 Add to `tests/test_complex_account.py`:
 
@@ -237,12 +237,12 @@ def test_apply_complex_account_rules_backfills_blank_segment(tmp_path):
     assert enriched.loc[0, "Segment"] == "SelectT"
 ```
 
-- [ ] **Step 7: Run the full complex-account test file and verify all pass**
+- [x] **Step 7: Run the full complex-account test file and verify all pass**
 
 Run: `python -m pytest tests/test_complex_account.py -v`
 Expected: PASS (all tests, including pre-existing ones — this change is purely additive).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add core/complex_account.py tests/test_complex_account.py
@@ -263,13 +263,13 @@ git commit -m "Add TAL Segment backfill for multi-tab TAL workbooks (IBM APAC)"
 - Produces: `BoxTrackerConfig` dataclass (fields below), a `box_tracker: BoxTrackerConfig` field on `ClientProfile`, round-tripped by `save_profile`/`load_profile`.
 - Consumes: existing `atomic_write_json`/dataclass patterns already used for `ComplexAccountConfig`.
 
-- [ ] **Step 1: Check what profile round-trip tests already exist**
+- [x] **Step 1: Check what profile round-trip tests already exist**
 
 Run: `python -m pytest --collect-only -q | grep -i profile_store`
 
 If a file like `tests/test_profile_store.py` exists, add the new test there in Step 6 below. If not, add it to whichever existing test file already covers `save_profile`/`load_profile` round-tripping `ComplexAccountConfig` (search `tests/` for `ComplexAccountConfig` to find it) — do not create a new test file for one test.
 
-- [ ] **Step 2: Add the dataclass**
+- [x] **Step 2: Add the dataclass**
 
 In `core/models.py`, add after `ComplexAccountConfig`:
 
@@ -292,7 +292,7 @@ class BoxTrackerConfig:
     cid_campaign_map: dict[str, str] = field(default_factory=dict)
 ```
 
-- [ ] **Step 3: Add the field to `ClientProfile`**
+- [x] **Step 3: Add the field to `ClientProfile`**
 
 In `core/models.py`, add to `ClientProfile` right after `complex_account: ComplexAccountConfig = field(default_factory=ComplexAccountConfig)`:
 
@@ -300,7 +300,7 @@ In `core/models.py`, add to `ClientProfile` right after `complex_account: Comple
     box_tracker: BoxTrackerConfig = field(default_factory=BoxTrackerConfig)
 ```
 
-- [ ] **Step 4: Wire it into `profile_store.py`**
+- [x] **Step 4: Wire it into `profile_store.py`**
 
 In `core/profile_store.py`, add `BoxTrackerConfig` to the import from `core.models` (alongside `ComplexAccountConfig`), then in `load_profile`, add right after the `complex_account=ComplexAccountConfig(**(data.get("complex_account") or {}))` line:
 
@@ -310,12 +310,12 @@ In `core/profile_store.py`, add `BoxTrackerConfig` to the import from `core.mode
 
 (Both go inside the same `ClientProfile(...)` constructor call — add as a new keyword argument.)
 
-- [ ] **Step 5: Run the full test suite to check nothing broke**
+- [x] **Step 5: Run the full test suite to check nothing broke**
 
 Run: `python -m pytest tests/ -k "profile_store or client_setup" -v`
 Expected: PASS (this is purely additive — every existing profile lacks `box_tracker` in its JSON, and `data.get("box_tracker") or {}` handles that as an empty dict, defaulting the new dataclass).
 
-- [ ] **Step 6: Write the round-trip test**
+- [x] **Step 6: Write the round-trip test**
 
 Add (to the file identified in Step 1):
 
@@ -363,12 +363,12 @@ def test_box_tracker_config_defaults_when_absent_from_saved_json(tmp_path):
     assert loaded.box_tracker.cid_campaign_map == {}
 ```
 
-- [ ] **Step 7: Run the new tests to verify they pass**
+- [x] **Step 7: Run the new tests to verify they pass**
 
 Run: `python -m pytest <file from Step 1> -k "box_tracker" -v`
 Expected: PASS
 
-- [ ] **Step 8: Add the Client Setup UI section**
+- [x] **Step 8: Add the Client Setup UI section**
 
 In `pages/1_Client_Setup.py`, find the existing Complex Account section (the `complex_account_enabled` checkbox and its `if complex_account_enabled:` block — around line 658). Add a new, separate section right after it (still inside whatever outer `if` scopes that block, so it only shows for a client being edited):
 
@@ -413,16 +413,16 @@ Then in the `ClientProfile(...)` construction further down (near where `complex_
 
 And add `BoxTrackerConfig` to this file's existing `from core.models import (...)` line.
 
-- [ ] **Step 9: Manually verify in the running app**
+- [x] **Step 9: Manually verify in the running app**
 
 Start the app (`streamlit run Summary.py`), open Client Setup, edit (or create) a client, enable "This client uses a Box Tracker", enter a mirror path and a couple of CID/Campaign lines, save, then re-open that same client and confirm the fields are pre-filled with what was saved.
 
-- [ ] **Step 10: Run the full test suite**
+- [x] **Step 10: Run the full test suite**
 
 Run: `python -m pytest -q`
 Expected: PASS
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add core/models.py core/profile_store.py pages/1_Client_Setup.py tests/
@@ -441,7 +441,7 @@ git commit -m "Add BoxTrackerConfig (CID/Campaign map + mirror workbook path) to
 - Produces: `current_week_label(today: datetime.date) -> str`, `read_pacing_diffs(mirror_path: str, pacing_tab: str = "Pacing") -> dict[str, int]`, both importable from `core.box_tracker`. `read_pacing_diffs` returns `{campaign_name: diff_value}` for every campaign column present in the mirror's Pacing summary block.
 - Consumes: `openpyxl` (already a project dependency).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_box_tracker.py`:
 
@@ -504,12 +504,12 @@ def test_read_pacing_diffs_is_dynamic_to_however_many_columns_exist(tmp_path):
     assert len(diffs) == 4
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_box_tracker.py -v`
 Expected: FAIL with `ModuleNotFoundError` (`core.box_tracker` doesn't exist yet).
 
-- [ ] **Step 3: Implement `core/box_tracker.py`**
+- [x] **Step 3: Implement `core/box_tracker.py`**
 
 ```python
 """Automation for IBM APAC's Box-hosted lead-approval tracker workbook.
@@ -574,12 +574,12 @@ def read_pacing_diffs(mirror_path: str, pacing_tab: str = "Pacing") -> dict[str,
         wb.close()
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_box_tracker.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add core/box_tracker.py tests/test_box_tracker.py
@@ -598,7 +598,7 @@ git commit -m "Add Pacing summary block reader and current-week resolver for Box
 - Produces: `pick_leads_for_approval(accumulated_df, cid_column, status_column, cid_campaign_map, diffs, buffer=5) -> tuple[pd.DataFrame, dict[str, int]]` (picked rows, {CID: shortfall_amount} for any CID that came up short) and `sent_for_approval_label(today) -> str`, both in `core.box_tracker`.
 - Consumes: `read_pacing_diffs`'s output shape (`{campaign_name: diff}`) and `BoxTrackerConfig.cid_campaign_map`'s shape (`{cid: campaign_name}`) from Task 2/3.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_box_tracker.py`:
 
@@ -666,12 +666,12 @@ def test_pick_leads_for_approval_ignores_cids_with_no_campaign_mapping():
     assert shortfall == {}
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_box_tracker.py -k pick_leads_for_approval -v`
 Expected: FAIL (`ImportError`).
 
-- [ ] **Step 3: Implement, appending to `core/box_tracker.py`**
+- [x] **Step 3: Implement, appending to `core/box_tracker.py`**
 
 ```python
 def sent_for_approval_label(today: datetime.date) -> str:
@@ -718,12 +718,12 @@ def pick_leads_for_approval(
     return pd.concat(picked_frames), shortfall
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_box_tracker.py -v`
 Expected: PASS (all tests in the file, including Task 3's).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add core/box_tracker.py tests/test_box_tracker.py
@@ -744,7 +744,7 @@ git commit -m "Add diff-based lead picking with per-CID shortfall reporting"
 
 This is deliberately a NEW, simpler writer rather than reusing `core/excel_io.py`'s `append_leads` — that function's header-matching is built around the accumulated/Lead-Template FieldMapping role model (email/first/last/company/cid), which doesn't fit the Approval Sheet's or Response Details' arbitrary business columns. Matching by exact header text (normalized) is sufficient here since these are the tool's own mirror files with known, fixed headers.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_box_tracker.py`:
 
@@ -821,12 +821,12 @@ def test_set_pacing_delivered_overwrites_not_adds(tmp_path):
     assert wb2["Pacing"].cell(row=3, column=7).value == 15
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_box_tracker.py -k "append_mirror_rows or set_pacing_delivered" -v`
 Expected: FAIL (`ImportError`).
 
-- [ ] **Step 3: Implement, appending to `core/box_tracker.py`**
+- [x] **Step 3: Implement, appending to `core/box_tracker.py`**
 
 ```python
 def append_mirror_rows(mirror_path: str, tab_name: str, rows: list[dict], header_row: int = 1) -> None:
@@ -916,12 +916,12 @@ def set_pacing_delivered(
         wb.close()
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_box_tracker.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add core/box_tracker.py tests/test_box_tracker.py
@@ -942,7 +942,7 @@ git commit -m "Add mirror-workbook row appender and Pacing Delivered-cell setter
 
 This page only handles the picking → Approval Sheet mirror → Pacing (instance 1) stage. The manual "cleared for Lead Template" gate and the batch upload-status reconciliation (Refund + Response Details mirror + Pacing instance 2) are Task 7 — kept separate since Task 6 alone is a complete, independently useful, testable slice (you can run it and get a real Approval Sheet mirror to paste, without Task 7 existing yet).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_box_tracker_page.py`:
 
@@ -1055,12 +1055,12 @@ def test_pick_and_send_reports_shortfall(tmp_path, monkeypatch):
     assert any("118741" in w.value and "short" in w.value.lower() for w in at.warning)
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `python -m pytest tests/test_box_tracker_page.py -v`
 Expected: FAIL (page doesn't exist).
 
-- [ ] **Step 3: Implement `pages/5_Box_Tracker.py`**
+- [x] **Step 3: Implement `pages/5_Box_Tracker.py`**
 
 ```python
 # pages/5_Box_Tracker.py
@@ -1169,21 +1169,21 @@ if st.button("Pick leads and send for approval", key="pick_and_send_button"):
 
 Note for the implementer: the row-matching between `picked_df`'s index and the Accumulated worksheet's rows (the `(row[0].row - 2) in picked_cids_by_row` line) assumes `read_sheet_as_dataframe` preserves the same 0-based row order as the worksheet's data rows starting at row 2 — verify this against `read_sheet_as_dataframe`'s actual implementation in `core/excel_io.py` before trusting it, and adjust to whatever row-identity mechanism that function actually guarantees (e.g. it may be safer to match back by a unique column like email rather than positional index, if `read_sheet_as_dataframe` does any filtering/reordering). Confirm and fix this in Step 4 if the test in Step 1 reveals a mismatch.
 
-- [ ] **Step 4: Run the test, fix row-identity matching if needed, run again**
+- [x] **Step 4: Run the test, fix row-identity matching if needed, run again**
 
 Run: `python -m pytest tests/test_box_tracker_page.py -v`
 Expected: PASS once the Accumulated Status-marking correctly targets the picked rows (see the note in Step 3).
 
-- [ ] **Step 5: Manually verify in the running app**
+- [x] **Step 5: Manually verify in the running app**
 
 Start the app, go to Box Tracker, select the test client, click "Pick leads and send for approval", then open the mirror workbook and confirm: the Approval Sheet has the new rows with today's date, the Accumulated Report's Status column shows "Sent for Approval - ..." for exactly those leads, and the Pacing tab's current week D column shows the count sent.
 
-- [ ] **Step 6: Run the full test suite**
+- [x] **Step 6: Run the full test suite**
 
 Run: `python -m pytest -q`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add pages/5_Box_Tracker.py tests/test_box_tracker_page.py
@@ -1203,7 +1203,7 @@ git commit -m "Add Box Tracker page: pick leads by Pacing diff, write Approval S
 
 **Note on scope:** per the Global Constraints, Lead Template column mapping is deferred — this task's "cleared for Lead Template" step only marks which leads are cleared (an in-memory/session marker) so the reconciliation step below knows which leads it's reconciling; it never writes a Lead Template file.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_box_tracker_page.py`:
 
@@ -1268,12 +1268,12 @@ def test_upload_reconciliation_moves_rejected_to_refund_and_logs_accepted(tmp_pa
 
 Note for the implementer: the exact assertion for "accepted lead logged to Response Details" needs to check the `Company` column (Response Details has no Email column per the real sheet's headers from Task 2's docs) — fix the last assertion to check `values` contains lead1's Company value ("X") in the Company column position, once the actual UI/session-state keys for the reject-checkbox/reason-input are finalized in Step 3 (the keys above, `reject_{email}`/`reject_reason_{email}`, are this plan's proposed convention — keep them if reasonable, adjust the test to match if the implementer picks different key names, as long as they're descriptive and collision-free per lead).
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `python -m pytest tests/test_box_tracker_page.py -k reconciliation -v`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the reconciliation section, appended to `pages/5_Box_Tracker.py`**
+- [x] **Step 3: Implement the reconciliation section, appended to `pages/5_Box_Tracker.py`**
 
 ```python
 st.divider()
@@ -1358,21 +1358,21 @@ else:
 
 Note for the implementer: `append_leads`' exact keyword-argument shape must be double-checked against its current signature in `core/excel_io.py` before relying on the call above (it may need `target_field_mapping` or other arguments depending on how `Refund`'s columns compare to `profile.field_mapping`'s roles — follow the same call shape `pages/2_Run_Check.py`'s `_finalize_write` already uses for its own Refund-tab write).
 
-- [ ] **Step 4: Run the test, fix the Response Details assertion and any call-shape mismatches, run again**
+- [x] **Step 4: Run the test, fix the Response Details assertion and any call-shape mismatches, run again**
 
 Run: `python -m pytest tests/test_box_tracker_page.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Manually verify in the running app**
+- [x] **Step 5: Manually verify in the running app**
 
 Run the "Pick and send" step, manually edit the Accumulated Report to simulate a client decision if needed, then run the reconciliation step with one lead checked as rejected (with a reason) and confirm: the Refund tab gets that lead with the reason, the mirror's Response Details tab gets the accepted lead(s), and Pacing's current-week D column is overwritten to the final accepted count.
 
-- [ ] **Step 6: Run the full test suite**
+- [x] **Step 6: Run the full test suite**
 
 Run: `python -m pytest -q`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add pages/5_Box_Tracker.py tests/test_box_tracker_page.py
