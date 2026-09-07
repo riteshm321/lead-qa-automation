@@ -15,10 +15,10 @@ def _make_accumulated(path: str, rows: list[dict]) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Accumulated"
-    ws.append(["Email", "First", "Last", "Company", "CID", "Status", "LOB"])
+    ws.append(["Email", "First", "Last", "Company", "CID", "Status", "LOB", "Asset Title", "Country"])
     for row in rows:
         ws.append([row["Email"], row["First"], row["Last"], row["Company"], row["CID"],
-                    row.get("Status", ""), row.get("LOB", "")])
+                    row.get("Status", ""), row.get("LOB", ""), row.get("Asset Title", ""), row.get("Country", "")])
     wb.create_sheet("Refund").append(["Email", "First", "Last", "Company", "CID", "Status", "Refund Reason"])
     wb.save(path)
 
@@ -44,11 +44,20 @@ def _make_mirror(path: str) -> None:
     wb.save(path)
 
 
-def _make_lead_template(path: str) -> None:
+def _make_lead_template(path: str, existing_rows: list[list] | None = None) -> None:
+    # Mirrors the real IBM APAC Lead Template's actual header shape --
+    # note there's no CID column at all; AID/NC_*/campaign_code are the
+    # same for every row in the file, carried by whatever's already there
+    # (even a template/example row with no real lead, per the CXO file).
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Template"
-    ws.append(["Email", "First", "Last", "Company", "CID", "micro_audience", "Industry"])
+    ws.title = "LEAD_TEMPLATE"
+    ws.append([
+        "AID", "NC_EMAIL_DETAIL", "NC_TELE_DETAIL", "user_transaction_date", "campaign_code",
+        "asset_title", "country", "micro_audience", "Industry", "First", "Last", "Email", "Company",
+    ])
+    for row in (existing_rows or []):
+        ws.append(row)
     wb.save(path)
 
 
@@ -150,17 +159,22 @@ def test_pick_and_send_takes_all_leads_and_skips_pacing_for_skipped_campaign(tmp
     assert pacing_ws.cell(row=4, column=7).value == 0
 
 
-def test_write_cleared_leads_to_lead_template_fills_micro_audience_and_industry(tmp_path, monkeypatch):
+def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
     mirror_path = str(tmp_path / "mirror.xlsx")
     template_path = str(tmp_path / "bob_template.xlsx")
     _make_accumulated(acc_path, [
         {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Sent for Approval - 07-Sep"},
+         "Status": "Sent for Approval - 07-Sep", "Asset Title": "Omdia Universe", "Country": "IN"},
     ])
     _make_mirror(mirror_path)
-    _make_lead_template(template_path)
+    # An existing lead from a previous cycle -- carries the AID/NC_*/
+    # campaign_code every new row must reuse, and must itself be wiped.
+    _make_lead_template(template_path, existing_rows=[
+        ["L-22SD7", "UC", "UC", "2026-08-20 06:55:41", "PVLAP", "Old Asset", "IN", "Platform_SWE", "All",
+         "Old", "Lead", "old.lead@x.com", "Old Co"],
+    ])
     _save_profile(acc_path, mirror_path, cid_lead_template_path={"118741": template_path})
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
@@ -175,10 +189,19 @@ def test_write_cleared_leads_to_lead_template_fills_micro_audience_and_industry(
 
     assert not at.exception
 
-    template_df = pd.read_excel(template_path, sheet_name="Template")
-    assert template_df.loc[0, "Email"] == "lead1@x.com"
-    assert template_df.loc[0, "micro_audience"] == "Platform_SWE"  # CID 118741 = Bob
-    assert template_df.loc[0, "Industry"] == "All"
+    template_df = pd.read_excel(template_path, sheet_name="LEAD_TEMPLATE")
+    assert len(template_df) == 1  # the old lead was wiped, not appended alongside
+    row = template_df.iloc[0]
+    assert row["Email"] == "lead1@x.com"
+    assert row["micro_audience"] == "Platform_SWE"  # CID 118741 = Bob
+    assert row["Industry"] == "All"
+    assert row["AID"] == "L-22SD7"  # carried over from the old row before it was wiped
+    assert row["NC_EMAIL_DETAIL"] == "UC"
+    assert row["NC_TELE_DETAIL"] == "UC"
+    assert row["campaign_code"] == "PVLAP"
+    assert row["asset_title"] == "Omdia Universe"  # from Accumulated's own Asset Title
+    assert row["country"] == "IN"
+    assert str(row["user_transaction_date"]).count(":") == 2  # HH:MM:SS present
 
     accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
     status = accumulated_df.loc[accumulated_df["Email"] == "lead1@x.com", "Status"].iloc[0]
@@ -195,7 +218,10 @@ def test_write_cleared_leads_copies_lob_for_wxo_cids(tmp_path, monkeypatch):
          "Status": "Sent for Approval - 07-Sep", "LOB": "Cloud Infra"},
     ])
     _make_mirror(mirror_path)
-    _make_lead_template(template_path)
+    _make_lead_template(template_path, existing_rows=[
+        ["L-22SD8", "UC", "UC", "2026-08-11 07:25:59", "PAIAP", "Old Asset", "IN", "AI Leaders", "All",
+         "Old", "Lead", "old.lead@x.com", "Old Co"],
+    ])
     _save_profile(acc_path, mirror_path, cid_lead_template_path={"119750": template_path})
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
@@ -205,8 +231,9 @@ def test_write_cleared_leads_copies_lob_for_wxo_cids(tmp_path, monkeypatch):
     at.button(key="write_lead_template_button").click().run()
 
     assert not at.exception
-    template_df = pd.read_excel(template_path, sheet_name="Template")
+    template_df = pd.read_excel(template_path, sheet_name="LEAD_TEMPLATE")
     assert template_df.loc[0, "micro_audience"] == "Cloud Infra"
+    assert template_df.loc[0, "campaign_code"] == "PAIAP"  # carried over from the template's own row
 
 
 def test_write_cleared_leads_warns_when_no_template_path_configured(tmp_path, monkeypatch):

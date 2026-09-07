@@ -229,16 +229,68 @@ _MICRO_AUDIENCE_FROM_LOB_CIDS = {"119750", "119751"}  # WXO IN, WXO AU
 _LEAD_TEMPLATE_INDUSTRY_VALUE = "All"
 
 
+# Every Lead Template row also carries four identifier columns that are
+# the same for EVERY row in a given file (AID, NC_EMAIL_DETAIL,
+# NC_TELE_DETAIL, campaign_code) but aren't derived from the leadfile at
+# all -- see read_lead_template_constants, which reads them from the
+# template's own existing row before its data gets cleared.
+_LEAD_TEMPLATE_CONSTANT_COLUMNS = ["AID", "NC_EMAIL_DETAIL", "NC_TELE_DETAIL", "campaign_code"]
+_LEAD_TEMPLATE_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def read_lead_template_constants(template_path: str, sheet_name: str) -> dict[str, object]:
+    """Reads AID/NC_EMAIL_DETAIL/NC_TELE_DETAIL/campaign_code from the
+    first row (top to bottom) whose AID cell isn't blank -- these four
+    values are identical for every row in a given Lead Template file, so
+    whatever the file's own existing data (or, for a segment with no real
+    leads yet, its template/example row -- see the module docstring's note
+    on the CXO file) already carries is exactly what new rows need too.
+    Must be called BEFORE clearing the file's existing rows (see
+    append_leads' clear_existing), since that's the only place these
+    values live -- nothing here is configured anywhere.
+
+    Returns {} if no row has a non-blank AID at all (a template that's
+    never had this row populated even once has no known values to reuse).
+    """
+    wb = openpyxl.load_workbook(template_path, read_only=True, data_only=True)
+    try:
+        ws = wb[sheet_name]
+        headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        col_idx = {name: headers.index(name) for name in _LEAD_TEMPLATE_CONSTANT_COLUMNS if name in headers}
+        aid_idx = col_idx.get("AID")
+        if aid_idx is None:
+            return {}
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if aid_idx < len(row) and row[aid_idx] not in (None, ""):
+                return {name: row[idx] for name, idx in col_idx.items() if idx < len(row)}
+        return {}
+    finally:
+        wb.close()
+
+
 def add_lead_template_columns(
     leads_df: pd.DataFrame, cid_column: str, lob_column: str = "LOB",
+    template_constants: dict[str, object] | None = None,
+    asset_title_column: str = "Asset Title", country_column: str = "Country",
+    now: datetime.datetime | None = None,
 ) -> pd.DataFrame:
-    """Adds/fills the Lead Template's "micro_audience" and "Industry"
-    columns on a copy of leads_df, per CID:
+    """Adds/fills every Lead Template-only column on a copy of leads_df:
 
     - micro_audience: the leadfile's own LOB value for
       _MICRO_AUDIENCE_FROM_LOB_CIDS, else the fixed value from
       _MICRO_AUDIENCE_BY_CID (blank for any other, unmapped CID).
     - Industry: always _LEAD_TEMPLATE_INDUSTRY_VALUE ("All"), for every CID.
+    - template_constants (if given): AID/NC_EMAIL_DETAIL/NC_TELE_DETAIL/
+      campaign_code (see read_lead_template_constants), set the same on
+      every row.
+    - asset_title/country (if template_constants was given and the
+      leadfile has these columns): passed through from the leadfile's own
+      Asset Title/Country columns under the Lead Template's lowercase
+      header names.
+    - user_transaction_date (if template_constants was given): `now`
+      (defaults to datetime.datetime.now()) formatted "YYYY-MM-DD
+      HH:MM:SS" -- a plain string, not an Excel-native datetime, per the
+      Lead Template's own placeholder text specifying that exact format.
     """
     df = leads_df.copy()
     micro_audience = []
@@ -250,4 +302,14 @@ def add_lead_template_columns(
             micro_audience.append(_MICRO_AUDIENCE_BY_CID.get(cid, ""))
     df["micro_audience"] = micro_audience
     df["Industry"] = _LEAD_TEMPLATE_INDUSTRY_VALUE
+
+    if template_constants:
+        for name, value in template_constants.items():
+            df[name] = value
+        if asset_title_column in df.columns:
+            df["asset_title"] = df[asset_title_column]
+        if country_column in df.columns:
+            df["country"] = df[country_column]
+        df["user_transaction_date"] = (now or datetime.datetime.now()).strftime(_LEAD_TEMPLATE_DATE_FORMAT)
+
     return df

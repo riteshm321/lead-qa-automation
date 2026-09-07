@@ -9,7 +9,7 @@ from core.app_settings import get_clients_dir
 from core.box_tracker import (
     read_pacing_diffs, pick_leads_for_approval, sent_for_approval_label,
     cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
-    append_mirror_rows, set_pacing_delivered, add_lead_template_columns,
+    append_mirror_rows, set_pacing_delivered, add_lead_template_columns, read_lead_template_constants,
 )
 from core.branding import configure_page
 from core.excel_io import read_sheet_as_dataframe, append_leads, find_header_row
@@ -132,9 +132,10 @@ st.divider()
 st.subheader("2. Write cleared leads to the Lead Template")
 st.caption(
     "Once the client gives the green flag for some or all leads sent for approval: check which ones "
-    "are cleared, and the tool fills in micro_audience/Industry and writes them into that CID's Lead "
-    "Template file (routed by CID — see Client Setup). You then upload them to the client portal by "
-    "hand."
+    "are cleared, and the tool fills in micro_audience/Industry/AID/campaign_code/etc. and writes them "
+    "into that CID's Lead Template file (routed by CID — see Client Setup). **Any existing leads "
+    "already in that file are wiped first** — new leads always start fresh at row 2. You then upload "
+    "them to the client portal by hand."
 )
 
 try:
@@ -165,12 +166,11 @@ else:
             cleared_df = _awaiting_clearance_df[
                 _awaiting_clearance_df[_clear_email_col].astype(str).isin(cleared_emails)
             ]
-            enriched_df = add_lead_template_columns(cleared_df, profile.field_mapping.cid)
 
             written_cids: list[str] = []
             written_emails: set[str] = set()
             missing_template_cids: set[str] = set()
-            for cid, group in enriched_df.groupby(enriched_df[profile.field_mapping.cid].astype(str)):
+            for cid, group in cleared_df.groupby(cleared_df[profile.field_mapping.cid].astype(str)):
                 template_path = profile.box_tracker.cid_lead_template_path.get(cid)
                 if not template_path:
                     missing_template_cids.add(cid)
@@ -178,6 +178,15 @@ else:
                 template_wb = openpyxl.load_workbook(template_path, read_only=True)
                 sheet_name = template_wb.active.title
                 template_wb.close()
+
+                # Must read AID/NC_*/campaign_code BEFORE clear_existing wipes
+                # the file's only source of those values (see
+                # read_lead_template_constants) -- they're the same for
+                # every row in this one file, never derived from the leadfile.
+                template_constants = read_lead_template_constants(template_path, sheet_name)
+                enriched_group = add_lead_template_columns(
+                    group, profile.field_mapping.cid, template_constants=template_constants)
+
                 expected = [v for v in [
                     profile.field_mapping.email, profile.field_mapping.first_name,
                     profile.field_mapping.last_name, profile.field_mapping.company,
@@ -185,8 +194,8 @@ else:
                 ] if v]
                 header_row = find_header_row(template_path, sheet_name, expected)
                 append_leads(
-                    template_path, sheet_name, group, profile.field_mapping,
-                    datetime.date.today(), header_row=header_row,
+                    template_path, sheet_name, enriched_group, profile.field_mapping,
+                    datetime.date.today(), header_row=header_row, clear_existing=True,
                 )
                 written_cids.append(cid)
                 written_emails.update(group[_clear_email_col].astype(str))

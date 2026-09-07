@@ -7,6 +7,7 @@ from core.box_tracker import (
     current_week_label, read_pacing_diffs, pick_leads_for_approval, sent_for_approval_label,
     append_mirror_rows, set_pacing_delivered, add_lead_template_columns,
     cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
+    read_lead_template_constants,
 )
 
 
@@ -262,3 +263,79 @@ def test_add_lead_template_columns_blank_for_unmapped_cid():
 
     assert result.loc[0, "micro_audience"] == ""
     assert result.loc[0, "Industry"] == "All"
+
+
+def test_add_lead_template_columns_injects_template_constants_and_passthroughs():
+    leads_df = pd.DataFrame([
+        {"CID": "118741", "LOB": "Software", "Asset Title": "Omdia Universe", "Country": "IN"},
+    ])
+    template_constants = {
+        "AID": "L-22SD7", "NC_EMAIL_DETAIL": "UC", "NC_TELE_DETAIL": "UC", "campaign_code": "PVLAP",
+    }
+
+    result = add_lead_template_columns(
+        leads_df, "CID", template_constants=template_constants,
+        now=datetime.datetime(2026, 9, 7, 14, 30, 5),
+    )
+
+    assert result.loc[0, "AID"] == "L-22SD7"
+    assert result.loc[0, "NC_EMAIL_DETAIL"] == "UC"
+    assert result.loc[0, "NC_TELE_DETAIL"] == "UC"
+    assert result.loc[0, "campaign_code"] == "PVLAP"
+    assert result.loc[0, "asset_title"] == "Omdia Universe"
+    assert result.loc[0, "country"] == "IN"
+    assert result.loc[0, "user_transaction_date"] == "2026-09-07 14:30:05"
+
+
+def test_add_lead_template_columns_without_template_constants_adds_nothing_extra():
+    # Backward-compatible default -- callers that don't pass
+    # template_constants (or asset_title/country columns aren't present)
+    # still just get micro_audience/Industry, same as before.
+    leads_df = pd.DataFrame([{"CID": "118741"}])
+
+    result = add_lead_template_columns(leads_df, "CID")
+
+    assert "AID" not in result.columns
+    assert "asset_title" not in result.columns
+    assert "user_transaction_date" not in result.columns
+
+
+def test_read_lead_template_constants_reads_the_first_row_with_a_non_blank_aid(tmp_path):
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "LEAD_TEMPLATE"
+    ws.append(["AID", "NC_EMAIL_DETAIL", "NC_TELE_DETAIL", "user_transaction_date", "campaign_code", "email"])
+    ws.append(["L-22SD7", "UC", "UC", None, "PVLAP", "lead1@x.com"])
+    ws.append(["L-22SD7", "UC", "UC", None, "PVLAP", "lead2@x.com"])
+    wb.save(path)
+
+    constants = read_lead_template_constants(path, "LEAD_TEMPLATE")
+
+    assert constants == {"AID": "L-22SD7", "NC_EMAIL_DETAIL": "UC", "NC_TELE_DETAIL": "UC", "campaign_code": "PVLAP"}
+
+
+def test_read_lead_template_constants_uses_a_template_only_row_with_no_real_lead_yet(tmp_path):
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "LEAD_TEMPLATE"
+    ws.append(["AID", "NC_EMAIL_DETAIL", "NC_TELE_DETAIL", "campaign_code", "email"])
+    ws.append(["L-22UMP", "UC", "UC", "CXOAP", None])  # template row, no real lead
+    ws.append([None, None, None, None, None])  # leftover dropdown-list debris row
+    wb.save(path)
+
+    constants = read_lead_template_constants(path, "LEAD_TEMPLATE")
+
+    assert constants == {"AID": "L-22UMP", "NC_EMAIL_DETAIL": "UC", "NC_TELE_DETAIL": "UC", "campaign_code": "CXOAP"}
+
+
+def test_read_lead_template_constants_returns_empty_when_no_row_has_an_aid(tmp_path):
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "LEAD_TEMPLATE"
+    ws.append(["AID", "NC_EMAIL_DETAIL", "NC_TELE_DETAIL", "campaign_code", "email"])
+    wb.save(path)
+
+    assert read_lead_template_constants(path, "LEAD_TEMPLATE") == {}
