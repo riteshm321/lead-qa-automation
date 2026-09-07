@@ -65,9 +65,22 @@ def sent_for_approval_label(today: datetime.date) -> str:
     return f"Sent for Approval - {today.strftime('%d-%b')}"
 
 
+def cleared_for_upload_label(today: datetime.date) -> str:
+    return f"Cleared for Upload - {today.strftime('%d-%b')}"
+
+
+def uploaded_accepted_label(today: datetime.date) -> str:
+    return f"Accepted - Uploaded - {today.strftime('%d-%b')}"
+
+
+def uploaded_rejected_label(today: datetime.date) -> str:
+    return f"Rejected - Refunded - {today.strftime('%d-%b')}"
+
+
 def pick_leads_for_approval(
     accumulated_df: pd.DataFrame, cid_column: str, status_column: str,
     cid_campaign_map: dict[str, str], diffs: dict[str, int], buffer: int = 5,
+    uncapped_campaigns: set[str] = frozenset(),
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     """Picks which blank-Status Accumulated leads go to the client for
     approval this cycle: for every CID with a known campaign mapping AND
@@ -78,21 +91,31 @@ def pick_leads_for_approval(
     entry in diffs (that campaign column doesn't exist in the Pacing
     summary block yet), is skipped entirely -- there's no target count to
     pick towards, so picking arbitrarily would be a guess, not a decision.
+    The one exception is uncapped_campaigns: a campaign listed there takes
+    EVERY available blank-Status lead for its CID(s) regardless of (or
+    absence of) a Diff value, and never appears in shortfall, since there's
+    no target to fall short of -- for a segment that's only just gone
+    live with no established Pacing history yet (see
+    BoxTrackerConfig.pacing_skipped_campaigns).
 
     Returns (picked_df, shortfall) where shortfall is {cid: amount_short}
-    for every CID that had fewer than its target available -- picking
-    still proceeds with whatever was available, this is purely a report
-    for the caller to surface, never a reason to stop.
+    for every capped CID that had fewer than its target available --
+    picking still proceeds with whatever was available, this is purely a
+    report for the caller to surface, never a reason to stop.
     """
     picked_frames = []
     shortfall: dict[str, int] = {}
     is_blank_status = accumulated_df[status_column].fillna("").astype(str).str.strip() == ""
 
     for cid, campaign in cid_campaign_map.items():
+        candidates = accumulated_df[is_blank_status & (accumulated_df[cid_column].astype(str) == cid)]
+        if campaign in uncapped_campaigns:
+            if not candidates.empty:
+                picked_frames.append(candidates)
+            continue
         if campaign not in diffs:
             continue
         target = diffs[campaign] + buffer
-        candidates = accumulated_df[is_blank_status & (accumulated_df[cid_column].astype(str) == cid)]
         picked = candidates.head(target)
         if len(picked) < target:
             shortfall[cid] = target - len(picked)
@@ -189,3 +212,42 @@ def set_pacing_delivered(
         wb.save(mirror_path)
     finally:
         wb.close()
+
+
+# Fixed per-CID business rule for IBM APAC's Lead Template "micro_audience"
+# column -- not derived from the leadfile at all for these CIDs, same
+# pattern as Dell's AGREED_CONTACTED_BY_CID in core/complex_account.py.
+_MICRO_AUDIENCE_BY_CID = {
+    "118741": "Platform_SWE",  # Bob
+    "118742": "All",           # CXO
+    "118743": "AI Leaders",    # wxO (AI Pod) IN
+    "118745": "AI Leaders",    # wxO (AI Pod) AU
+}
+# These two CIDs instead copy the leadfile's own LOB column value through
+# as micro_audience, rather than a fixed string.
+_MICRO_AUDIENCE_FROM_LOB_CIDS = {"119750", "119751"}  # WXO IN, WXO AU
+_LEAD_TEMPLATE_INDUSTRY_VALUE = "All"
+
+
+def add_lead_template_columns(
+    leads_df: pd.DataFrame, cid_column: str, lob_column: str = "LOB",
+) -> pd.DataFrame:
+    """Adds/fills the Lead Template's "micro_audience" and "Industry"
+    columns on a copy of leads_df, per CID:
+
+    - micro_audience: the leadfile's own LOB value for
+      _MICRO_AUDIENCE_FROM_LOB_CIDS, else the fixed value from
+      _MICRO_AUDIENCE_BY_CID (blank for any other, unmapped CID).
+    - Industry: always _LEAD_TEMPLATE_INDUSTRY_VALUE ("All"), for every CID.
+    """
+    df = leads_df.copy()
+    micro_audience = []
+    for _, row in df.iterrows():
+        cid = str(row.get(cid_column, "")).strip()
+        if cid in _MICRO_AUDIENCE_FROM_LOB_CIDS:
+            micro_audience.append(row.get(lob_column, ""))
+        else:
+            micro_audience.append(_MICRO_AUDIENCE_BY_CID.get(cid, ""))
+    df["micro_audience"] = micro_audience
+    df["Industry"] = _LEAD_TEMPLATE_INDUSTRY_VALUE
+    return df

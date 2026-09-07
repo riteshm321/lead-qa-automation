@@ -1381,9 +1381,46 @@ git commit -m "Add portal-upload reconciliation: Refund tab, Response Details mi
 
 ---
 
+## Task 8 (added 2026-09-07): Lead Template writing, per-CID `micro_audience`/`Industry`
+
+**Files:**
+- Modified: `core/models.py` (`BoxTrackerConfig.cid_lead_template_path`, `.pacing_skipped_campaigns`)
+- Modified: `core/box_tracker.py` (`add_lead_template_columns`, `cleared_for_upload_label`,
+  `uploaded_accepted_label`, `uploaded_rejected_label`, `pick_leads_for_approval`'s new
+  `uncapped_campaigns` parameter)
+- Modified: `pages/1_Client_Setup.py` (Lead Template CID map + Pacing-skip list UI)
+- Modified: `pages/5_Box_Tracker.py` (new "2. Write cleared leads to the Lead Template" stage)
+- Tests: `tests/test_box_tracker.py`, `tests/test_box_tracker_page.py`, `tests/test_profile_store.py`,
+  `tests/test_client_setup_page.py`
+
+**What shipped:**
+- `add_lead_template_columns` fills `micro_audience` per a fixed CID map (`_MICRO_AUDIENCE_BY_CID`:
+  118741→Platform_SWE, 118742→All, 118743→AI Leaders, 118745→AI Leaders) or, for CIDs 119750/119751
+  (WXO IN/AU), copies the leadfile's own `LOB` column through instead of a fixed string. `Industry` is
+  always `"All"`.
+- `BoxTrackerConfig.cid_lead_template_path` routes each CID's cleared leads to its own Lead Template
+  file (4 live segments = 4 files, filenames identify which), editable in Client Setup the same way as
+  the CID→Campaign map.
+- New Status lifecycle, since the Lead Template write introduces a real intermediate stage between
+  "sent for approval" and "reconciled": `"Sent for Approval - {date}"` →
+  `"Cleared for Upload - {date}"` (set when cleared leads are written to their Lead Template) →
+  terminal `"Accepted - Uploaded - {date}"` / `"Rejected - Refunded - {date}"` (set at reconciliation).
+  The reconciliation stage's filter moved from the `Sent for Approval` prefix to `Cleared for Upload`,
+  since only leads that actually went through the Lead Template step should be reconciled.
+- `pacing_skipped_campaigns` (editable per-client in Client Setup) makes `pick_leads_for_approval`
+  take ALL available blank-Status leads for that campaign (ignoring the Diff+buffer cap and any
+  shortfall reporting), and both pick-time and reconciliation-time `set_pacing_delivered` calls skip
+  campaigns on this list entirely — used for CXO, which just went live with no established Pacing
+  history yet. Removing a campaign from this list later resumes normal diff-based picking and Pacing
+  writes for it with no code change.
+- Lead Template writing reuses the existing, tested `append_leads`/`find_header_row` from
+  `core/excel_io.py` (the same functions the normal Lead QA & Upload flow uses) rather than the
+  mirror-specific `append_mirror_rows` — Lead Template files are real leadfile-shaped targets with
+  FieldMapping-role columns (email/first/last/company/cid) plus the two IBM-specific extra columns,
+  not the tool's own fixed-shape mirror sheets.
+
 ## Explicitly Out of Scope (for a later plan)
 
 - Any live Box or Google Sheets API integration — everything above writes only to the local mirror workbook.
-- Lead Template column mapping/writing for IBM APAC.
 - Automated detection of the Approval Sheet's own `Approval` column — the user has said this is a manual, out-of-band decision for now.
-- Anything for the 3 additional campaign columns (CXO, both Hashicorp Solutions rows) beyond what the CID map already supports for Response Details' Campaign Name — they'll be picked up automatically for diff-based picking the moment the user adds their columns to the mirror's Pacing summary block, per Task 3/4's dynamic design, so no further code change is anticipated, but this should be verified against the real file once those columns exist.
+- Anything for the 2 remaining Hashicorp Solutions campaign columns beyond what the CID map already supports for Response Details' Campaign Name — they'll be picked up automatically for diff-based picking the moment the user adds their columns to the mirror's Pacing summary block, per Task 3/4's dynamic design, so no further code change is anticipated, but this should be verified against the real file once those columns exist.

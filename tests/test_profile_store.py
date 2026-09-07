@@ -290,3 +290,30 @@ def test_load_profile_defaults_box_tracker_for_old_schema_json(tmp_path):
     loaded = load_profile("OldClient7", clients_dir=clients_dir)
     assert loaded.box_tracker.enabled is False
     assert loaded.box_tracker.cid_campaign_map == {}
+
+
+def test_box_tracker_lead_template_map_and_pacing_skip_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.box_tracker = BoxTrackerConfig(
+        enabled=True,
+        cid_lead_template_path={"118741": "sample_data/bob_template.xlsx"},
+        pacing_skipped_campaigns=["CXO"],
+    )
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+
+    assert loaded.box_tracker.cid_lead_template_path == {"118741": "sample_data/bob_template.xlsx"}
+    assert loaded.box_tracker.pacing_skipped_campaigns == ["CXO"]
+
+
+def test_load_profile_defaults_lead_template_map_and_pacing_skip_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldClient8.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "OldClient8", "accumulated_report_path": "sample_data/x.xlsx"}, f)
+
+    loaded = load_profile("OldClient8", clients_dir=clients_dir)
+    assert loaded.box_tracker.cid_lead_template_path == {}
+    assert loaded.box_tracker.pacing_skipped_campaigns == []

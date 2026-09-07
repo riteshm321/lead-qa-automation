@@ -117,6 +117,20 @@ class BoxTrackerConfig:
     # picked leads into the right Pacing/Approval-Sheet bucket and to fill
     # Response Details' Campaign Name column.
     cid_campaign_map: dict[str, str] = field(default_factory=dict)
+    # {CID: Lead Template file path} -- each live segment has its own
+    # template file (filename identifies which segment it's for), so
+    # writing cleared leads there is routed by the lead's own CID rather
+    # than a single shared path like the normal Lead QA & Upload flow uses.
+    cid_lead_template_path: dict[str, str] = field(default_factory=dict)
+    # Campaign names (matching cid_campaign_map's values) to pick ALL
+    # available blank-Status leads for -- ignoring the Pacing Diff target
+    # entirely -- and to skip the Pacing Delivered-cell write for, both at
+    # pick time and at reconciliation time. For a segment that's only just
+    # gone live (e.g. CXO) with no established Pacing history yet, forcing
+    # it through the diff-based cap (which would be 0 or undefined) isn't
+    # right; the pacing numbers get turned back on for it later by simply
+    # removing it from this list.
+    pacing_skipped_campaigns: list[str] = field(default_factory=list)
 
 
 @dataclass

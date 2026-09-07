@@ -5,7 +5,8 @@ import pandas as pd
 
 from core.box_tracker import (
     current_week_label, read_pacing_diffs, pick_leads_for_approval, sent_for_approval_label,
-    append_mirror_rows, set_pacing_delivered,
+    append_mirror_rows, set_pacing_delivered, add_lead_template_columns,
+    cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
 )
 
 
@@ -64,6 +65,13 @@ def test_sent_for_approval_label_format():
     assert sent_for_approval_label(datetime.date(2026, 9, 7)) == "Sent for Approval - 07-Sep"
 
 
+def test_status_label_formats_for_the_rest_of_the_lifecycle():
+    d = datetime.date(2026, 9, 7)
+    assert cleared_for_upload_label(d) == "Cleared for Upload - 07-Sep"
+    assert uploaded_accepted_label(d) == "Accepted - Uploaded - 07-Sep"
+    assert uploaded_rejected_label(d) == "Rejected - Refunded - 07-Sep"
+
+
 def _accumulated_df(rows):
     return pd.DataFrame(rows)
 
@@ -119,6 +127,37 @@ def test_pick_leads_for_approval_ignores_cids_with_no_campaign_mapping():
     assert picked.empty
     assert shortfall == {"118741": 18}
     assert "999999" not in shortfall
+
+
+def test_pick_leads_for_approval_takes_all_available_for_uncapped_campaigns():
+    # A newly-live segment (e.g. CXO) with no established Pacing history
+    # yet -- forcing it through the diff+buffer cap (0, or no entry at
+    # all) isn't right; it should take every available blank-Status lead
+    # instead, and never appear in shortfall (there's no target to fall
+    # short of).
+    accumulated = _accumulated_df([{"CID": "118742", "Status": ""} for _ in range(7)])
+
+    picked, shortfall = pick_leads_for_approval(
+        accumulated, "CID", "Status", {"118742": "CXO"}, diffs={}, buffer=5,
+        uncapped_campaigns={"CXO"},
+    )
+
+    assert len(picked) == 7
+    assert shortfall == {}
+
+
+def test_pick_leads_for_approval_uncapped_still_respects_blank_status():
+    accumulated = _accumulated_df([
+        {"CID": "118742", "Status": "Sent for Approval - 01-Sep"},
+        {"CID": "118742", "Status": ""},
+    ])
+
+    picked, _ = pick_leads_for_approval(
+        accumulated, "CID", "Status", {"118742": "CXO"}, diffs={}, buffer=5,
+        uncapped_campaigns={"CXO"},
+    )
+
+    assert len(picked) == 1
 
 
 def test_append_mirror_rows_matches_by_header_and_appends_after_last_row(tmp_path):
@@ -188,3 +227,38 @@ def test_set_pacing_delivered_overwrites_not_adds(tmp_path):
 
     wb2 = openpyxl.load_workbook(path)
     assert wb2["Pacing"].cell(row=3, column=7).value == 15
+
+
+def test_add_lead_template_columns_uses_the_fixed_cid_map():
+    leads_df = pd.DataFrame([
+        {"CID": "118741", "LOB": "Software"},   # Bob
+        {"CID": "118742", "LOB": "Finance"},    # CXO
+        {"CID": "118743", "LOB": "Ops"},        # wxO (AI Pod) IN
+        {"CID": "118745", "LOB": "Ops"},        # wxO (AI Pod) AU
+    ])
+
+    result = add_lead_template_columns(leads_df, "CID")
+
+    assert list(result["micro_audience"]) == ["Platform_SWE", "All", "AI Leaders", "AI Leaders"]
+    assert list(result["Industry"]) == ["All", "All", "All", "All"]
+
+
+def test_add_lead_template_columns_copies_lob_for_wxo_cids():
+    leads_df = pd.DataFrame([
+        {"CID": "119750", "LOB": "Cloud Infra"},  # WXO IN
+        {"CID": "119751", "LOB": "Data & AI"},    # WXO AU
+    ])
+
+    result = add_lead_template_columns(leads_df, "CID")
+
+    assert list(result["micro_audience"]) == ["Cloud Infra", "Data & AI"]
+    assert list(result["Industry"]) == ["All", "All"]
+
+
+def test_add_lead_template_columns_blank_for_unmapped_cid():
+    leads_df = pd.DataFrame([{"CID": "999999", "LOB": "Anything"}])
+
+    result = add_lead_template_columns(leads_df, "CID")
+
+    assert result.loc[0, "micro_audience"] == ""
+    assert result.loc[0, "Industry"] == "All"

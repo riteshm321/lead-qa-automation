@@ -687,6 +687,8 @@ with tab_complex:
             "This client uses a Box Tracker", value=profile.box_tracker.enabled if profile else False)
         box_tracker_mirror_path = ""
         box_tracker_cid_map: dict[str, str] = {}
+        box_tracker_lead_template_map: dict[str, str] = {}
+        box_tracker_pacing_skipped: list[str] = []
         if box_tracker_enabled:
             box_tracker_mirror_path = _path_input_with_browse(
                 "Local mirror workbook path", "box_tracker_mirror_path_input",
@@ -705,6 +707,35 @@ with tab_complex:
                     continue
                 _cid, _name = _line.split(",", 1)
                 box_tracker_cid_map[_cid.strip()] = _name.strip()
+
+            st.caption(
+                "CID → Lead Template file path, one per line, format `CID,file path` — each live "
+                "segment has its own template file, routed to by the lead's own CID:"
+            )
+            _existing_template_map_text = "\n".join(
+                f"{cid},{path}" for cid, path in
+                (profile.box_tracker.cid_lead_template_path.items() if profile else [])
+            )
+            _template_map_text = st.text_area(
+                "CID to Lead Template path mapping", value=_existing_template_map_text,
+                key="box_tracker_lead_template_map_input", label_visibility="collapsed", height=120)
+            for _line in _template_map_text.splitlines():
+                _line = _line.strip()
+                if not _line or "," not in _line:
+                    continue
+                _cid, _path = _line.split(",", 1)
+                box_tracker_lead_template_map[_cid.strip()] = _path.strip()
+
+            st.caption(
+                "Campaign names to skip Pacing updates for (one per line) — for a segment that's just "
+                "gone live with no established Pacing history yet, picks ALL available blank-Status "
+                "leads instead of the Diff-based cap, and never writes to Pacing's Delivered cell:"
+            )
+            _existing_skip_text = "\n".join(profile.box_tracker.pacing_skipped_campaigns if profile else [])
+            _skip_text = st.text_area(
+                "Campaigns to skip Pacing updates for", value=_existing_skip_text,
+                key="box_tracker_pacing_skipped_input", label_visibility="collapsed", height=68)
+            box_tracker_pacing_skipped = [line.strip() for line in _skip_text.splitlines() if line.strip()]
         else:
             st.caption("Box Tracker is disabled for this client.")
 
@@ -803,6 +834,8 @@ if st.button("💾 Save Client Profile", type="primary"):
                 enabled=box_tracker_enabled,
                 mirror_workbook_path=box_tracker_mirror_path if box_tracker_enabled else "",
                 cid_campaign_map=box_tracker_cid_map if box_tracker_enabled else {},
+                cid_lead_template_path=box_tracker_lead_template_map if box_tracker_enabled else {},
+                pacing_skipped_campaigns=box_tracker_pacing_skipped if box_tracker_enabled else [],
             ),
         )
         saved_path = save_profile(new_profile, get_clients_dir())
