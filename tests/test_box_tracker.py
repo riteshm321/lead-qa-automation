@@ -1,0 +1,190 @@
+import datetime
+
+import openpyxl
+import pandas as pd
+
+from core.box_tracker import (
+    current_week_label, read_pacing_diffs, pick_leads_for_approval, sent_for_approval_label,
+    append_mirror_rows, set_pacing_delivered,
+)
+
+
+def test_current_week_label_finds_the_most_recent_monday():
+    # 2026-09-09 is a Wednesday; that week's Monday is 2026-09-07.
+    assert current_week_label(datetime.date(2026, 9, 9)) == "Week of 7"
+
+
+def test_current_week_label_when_today_is_the_monday():
+    assert current_week_label(datetime.date(2026, 9, 7)) == "Week of 7"
+
+
+def _make_pacing_workbook(path: str) -> None:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing"
+    # Summary block starting at row 13, matching the real Box tracker's
+    # layout: row 13 = campaign name headers, row 14 = Pending,
+    # row 15 = Delivered, row 16 = Diff.
+    ws["B13"] = "Bob"
+    ws["C13"] = "wxO (AI Pod) IN"
+    ws["D13"] = "wxO (AI Pod) AU"
+    ws["A14"], ws["B14"], ws["C14"], ws["D14"] = "Pending", 333, 179, 74
+    ws["A15"], ws["B15"], ws["C15"], ws["D15"] = "Delivered", 320, 166, 63
+    ws["A16"], ws["B16"], ws["C16"], ws["D16"] = "Diff", 13, 13, 11
+    wb.save(path)
+
+
+def test_read_pacing_diffs_reads_every_campaign_column(tmp_path):
+    path = str(tmp_path / "mirror.xlsx")
+    _make_pacing_workbook(path)
+
+    diffs = read_pacing_diffs(path)
+
+    assert diffs == {"Bob": 13, "wxO (AI Pod) IN": 13, "wxO (AI Pod) AU": 11}
+
+
+def test_read_pacing_diffs_is_dynamic_to_however_many_columns_exist(tmp_path):
+    # Adding a 4th campaign column must be picked up with no code change --
+    # this is a Global Constraint of the whole feature, not just a nicety.
+    path = str(tmp_path / "mirror.xlsx")
+    _make_pacing_workbook(path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Pacing"]
+    ws["E13"] = "CXO"
+    ws["E14"], ws["E15"], ws["E16"] = 50, 40, 10
+    wb.save(path)
+
+    diffs = read_pacing_diffs(path)
+
+    assert diffs["CXO"] == 10
+    assert len(diffs) == 4
+
+
+def test_sent_for_approval_label_format():
+    assert sent_for_approval_label(datetime.date(2026, 9, 7)) == "Sent for Approval - 07-Sep"
+
+
+def _accumulated_df(rows):
+    return pd.DataFrame(rows)
+
+
+def test_pick_leads_for_approval_picks_diff_plus_five_per_campaign():
+    accumulated = _accumulated_df([
+        {"CID": "118741", "Status": ""} for _ in range(20)
+    ] + [
+        {"CID": "118743", "Status": ""} for _ in range(20)
+    ])
+    cid_campaign_map = {"118741": "Bob", "118743": "wxO (AI Pod) IN"}
+    diffs = {"Bob": 13, "wxO (AI Pod) IN": 13}
+
+    picked, shortfall = pick_leads_for_approval(
+        accumulated, "CID", "Status", cid_campaign_map, diffs, buffer=5)
+
+    assert len(picked[picked["CID"] == "118741"]) == 18  # 13 + 5
+    assert len(picked[picked["CID"] == "118743"]) == 18
+    assert shortfall == {}
+
+
+def test_pick_leads_for_approval_ignores_leads_with_a_non_blank_status():
+    accumulated = _accumulated_df([
+        {"CID": "118741", "Status": "Sent for Approval - 01-Sep"},
+        {"CID": "118741", "Status": ""},
+    ])
+    picked, _ = pick_leads_for_approval(
+        accumulated, "CID", "Status", {"118741": "Bob"}, {"Bob": 0}, buffer=5)
+
+    assert len(picked) == 1
+
+
+def test_pick_leads_for_approval_reports_shortfall_by_cid():
+    accumulated = _accumulated_df([{"CID": "118741", "Status": ""} for _ in range(3)])
+    diffs = {"Bob": 13}  # needs 13 + 5 = 18, only 3 available
+
+    picked, shortfall = pick_leads_for_approval(
+        accumulated, "CID", "Status", {"118741": "Bob"}, diffs, buffer=5)
+
+    assert len(picked) == 3
+    assert shortfall == {"118741": 15}  # needed 18, short by 15
+
+
+def test_pick_leads_for_approval_ignores_cids_with_no_campaign_mapping():
+    # A CID not in cid_campaign_map (999999 here) has no way to know its
+    # target count -- must be left alone, never picked, never reported as
+    # a shortfall. The mapped CID (118741) still correctly reports its own
+    # shortfall since Accumulated has no matching leads for it at all.
+    accumulated = _accumulated_df([{"CID": "999999", "Status": ""}])
+    picked, shortfall = pick_leads_for_approval(
+        accumulated, "CID", "Status", {"118741": "Bob"}, {"Bob": 13}, buffer=5)
+
+    assert picked.empty
+    assert shortfall == {"118741": 18}
+    assert "999999" not in shortfall
+
+
+def test_append_mirror_rows_matches_by_header_and_appends_after_last_row(tmp_path):
+    path = str(tmp_path / "mirror.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Approval Sheet"
+    ws.append(["Company Name", "Market", "Date", "Segment"])
+    ws.append(["Existing Co", "IN", "01-Sep", "SelectT"])
+    wb.save(path)
+
+    append_mirror_rows(path, "Approval Sheet", [
+        {"Company Name": "New Co", "Market": "AU", "Date": "07-Sep", "Segment": "Named"},
+    ])
+
+    wb2 = openpyxl.load_workbook(path)
+    ws2 = wb2["Approval Sheet"]
+    assert ws2.cell(row=3, column=1).value == "New Co"
+    assert ws2.cell(row=3, column=2).value == "AU"
+    assert ws2.cell(row=3, column=4).value == "Named"
+
+
+def test_append_mirror_rows_leaves_unmatched_dict_keys_out(tmp_path):
+    path = str(tmp_path / "mirror.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["A", "B"])
+    wb.save(path)
+
+    append_mirror_rows(path, "Sheet1", [{"A": "value", "NotAColumn": "ignored"}])
+
+    wb2 = openpyxl.load_workbook(path)
+    ws2 = wb2["Sheet1"]
+    assert ws2.cell(row=2, column=1).value == "value"
+    assert ws2.cell(row=2, column=2).value is None
+
+
+def test_set_pacing_delivered_writes_the_current_weeks_column(tmp_path):
+    path = str(tmp_path / "mirror.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing"
+    ws.append(["Funding Source", "Publisher", "Country", "Segment", "Campaign", "Week of 7", ""])
+    ws.append([None, None, None, None, None, "P", "D"])
+    ws.append(["Cash", "Madison Logic", "IN", "Select-T", "Bob", 18, 0])
+    wb.save(path)
+
+    set_pacing_delivered(path, "Bob", 18, week_label="Week of 7")
+
+    wb2 = openpyxl.load_workbook(path)
+    ws2 = wb2["Pacing"]
+    assert ws2.cell(row=3, column=7).value == 18  # the "D" sub-column under "Week of 7"
+
+
+def test_set_pacing_delivered_overwrites_not_adds(tmp_path):
+    path = str(tmp_path / "mirror.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing"
+    ws.append(["Funding Source", "Publisher", "Country", "Segment", "Campaign", "Week of 7", ""])
+    ws.append([None, None, None, None, None, "P", "D"])
+    ws.append(["Cash", "Madison Logic", "IN", "Select-T", "Bob", 18, 18])
+    wb.save(path)
+
+    set_pacing_delivered(path, "Bob", 15, week_label="Week of 7")
+
+    wb2 = openpyxl.load_workbook(path)
+    assert wb2["Pacing"].cell(row=3, column=7).value == 15
