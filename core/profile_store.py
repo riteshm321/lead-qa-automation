@@ -7,6 +7,7 @@ from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
     TalConfig, ExclusionConfig, SuppressionConfig,
     DuplicateConfig, DedupeListConfig, ReferenceSource, LeadTemplateTab, ComplexAccountConfig,
+    BoxTrackerConfig,
 )
 
 
@@ -76,6 +77,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         suppression=SuppressionConfig(**suppression),
         dedupe_list=DedupeListConfig(**dedupe_list),
         complex_account=ComplexAccountConfig(**(data.get("complex_account") or {})),
+        box_tracker=BoxTrackerConfig(**(data.get("box_tracker") or {})),
     )
 
 

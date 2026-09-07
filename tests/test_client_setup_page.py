@@ -168,3 +168,33 @@ def test_complex_account_checkbox_reveals_file_path_fields_and_saves(tmp_path, m
     assert loaded.complex_account.enabled is True
     assert loaded.complex_account.tal_path == str(tmp_path / "TAL.csv")
     assert loaded.complex_account.specifications_path == str(tmp_path / "specs.xlsx")
+
+
+def test_box_tracker_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    assert not any(t.label == "Local mirror workbook path" for t in at.text_input)
+
+    box_tracker_checkbox = next(c for c in at.checkbox if c.label == "This client uses a Box Tracker")
+    box_tracker_checkbox.set_value(True).run()
+    assert not at.exception
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("IBM APAC").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="box_tracker_mirror_path_input").set_value(str(tmp_path / "mirror.xlsx")).run()
+    at.text_area(key="box_tracker_cid_map_input").set_value("118741,Bob\n118742,CXO").run()
+
+    save_button = next(b for b in at.button if "Save Client Profile" in b.label)
+    save_button.click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("IBM APAC", get_clients_dir())
+    assert loaded.box_tracker.enabled is True
+    assert loaded.box_tracker.mirror_workbook_path == str(tmp_path / "mirror.xlsx")
+    assert loaded.box_tracker.cid_campaign_map == {"118741": "Bob", "118742": "CXO"}

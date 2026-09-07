@@ -102,6 +102,24 @@ class ComplexAccountConfig:
 
 
 @dataclass
+class BoxTrackerConfig:
+    # IBM APAC's process (and any future similar Complex Account client)
+    # pastes picked leads into a client-facing Box-hosted tracker workbook
+    # for approval, then logs accepted leads back into it after upload --
+    # but this app has no Box API access, so it maintains a LOCAL mirror
+    # workbook with the same tab/column shape instead, and the user
+    # copy-pastes between the two by hand. See
+    # docs/superpowers/plans/2026-09-07-ibm-apac-box-tracker-automation.md
+    # for the full design.
+    enabled: bool = False
+    mirror_workbook_path: str = ""
+    # {CID: Campaign name}, e.g. {"118741": "Bob"} -- used both to sort
+    # picked leads into the right Pacing/Approval-Sheet bucket and to fill
+    # Response Details' Campaign Name column.
+    cid_campaign_map: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class ClientProfile:
     name: str
     accumulated_report_path: str
@@ -129,3 +147,4 @@ class ClientProfile:
     suppression: SuppressionConfig = field(default_factory=SuppressionConfig)
     dedupe_list: DedupeListConfig = field(default_factory=DedupeListConfig)
     complex_account: ComplexAccountConfig = field(default_factory=ComplexAccountConfig)
+    box_tracker: BoxTrackerConfig = field(default_factory=BoxTrackerConfig)

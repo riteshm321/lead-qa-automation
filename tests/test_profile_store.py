@@ -4,7 +4,7 @@ import os
 from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
     TalConfig, ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, LeadTemplateTab,
-    ComplexAccountConfig,
+    ComplexAccountConfig, BoxTrackerConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
@@ -263,3 +263,30 @@ def test_load_profile_defaults_complex_account_for_old_schema_json(tmp_path):
     loaded = load_profile("OldClient6", clients_dir=clients_dir)
     assert loaded.complex_account.enabled is False
     assert loaded.complex_account.tal_path == ""
+
+
+def test_box_tracker_config_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.box_tracker = BoxTrackerConfig(
+        enabled=True, mirror_workbook_path="sample_data/box_mirror.xlsx",
+        cid_campaign_map={"118741": "Bob", "118742": "CXO"},
+    )
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+
+    assert loaded.box_tracker.enabled is True
+    assert loaded.box_tracker.mirror_workbook_path == "sample_data/box_mirror.xlsx"
+    assert loaded.box_tracker.cid_campaign_map == {"118741": "Bob", "118742": "CXO"}
+
+
+def test_load_profile_defaults_box_tracker_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldClient7.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "OldClient7", "accumulated_report_path": "sample_data/x.xlsx"}, f)
+
+    loaded = load_profile("OldClient7", clients_dir=clients_dir)
+    assert loaded.box_tracker.enabled is False
+    assert loaded.box_tracker.cid_campaign_map == {}

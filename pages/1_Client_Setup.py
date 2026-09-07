@@ -15,7 +15,7 @@ from core.jira_client import extract_ticket_key
 from core.models import (
     ClientProfile, DuplicateConfig, LeadcapConfig, LeadcapSegment,
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
-    LeadTemplateTab, ComplexAccountConfig,
+    LeadTemplateTab, ComplexAccountConfig, BoxTrackerConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 from core.toast import show_pending_toast
@@ -675,6 +675,39 @@ with tab_complex:
         else:
             st.caption("Complex Account rules are disabled for this client.")
 
+        st.divider()
+        st.markdown("**Box Tracker (optional)**")
+        st.caption(
+            "For clients whose lead-approval process runs through a Box-hosted tracker workbook this app "
+            "can't write to directly (no Box API access) — the tool instead maintains a local mirror "
+            "workbook with the same tab/column shape, which gets copy-pasted into the real Box file by "
+            "hand. See docs/superpowers/plans/2026-09-07-ibm-apac-box-tracker-automation.md."
+        )
+        box_tracker_enabled = st.checkbox(
+            "This client uses a Box Tracker", value=profile.box_tracker.enabled if profile else False)
+        box_tracker_mirror_path = ""
+        box_tracker_cid_map: dict[str, str] = {}
+        if box_tracker_enabled:
+            box_tracker_mirror_path = _path_input_with_browse(
+                "Local mirror workbook path", "box_tracker_mirror_path_input",
+                profile.box_tracker.mirror_workbook_path if profile else "")
+            st.caption("CID → Campaign name mapping, one per line, format `CID,Campaign Name`:")
+            _existing_map_text = "\n".join(
+                f"{cid},{name}" for cid, name in
+                (profile.box_tracker.cid_campaign_map.items() if profile else [])
+            )
+            _map_text = st.text_area(
+                "CID to Campaign mapping", value=_existing_map_text, key="box_tracker_cid_map_input",
+                label_visibility="collapsed", height=120)
+            for _line in _map_text.splitlines():
+                _line = _line.strip()
+                if not _line or "," not in _line:
+                    continue
+                _cid, _name = _line.split(",", 1)
+                box_tracker_cid_map[_cid.strip()] = _name.strip()
+        else:
+            st.caption("Box Tracker is disabled for this client.")
+
 st.divider()
 
 _enabled_summary = ", ".join(
@@ -765,6 +798,11 @@ if st.button("💾 Save Client Profile", type="primary"):
                 enabled=complex_account_enabled,
                 tal_path=complex_account_tal_path if complex_account_enabled else "",
                 specifications_path=complex_account_specifications_path if complex_account_enabled else "",
+            ),
+            box_tracker=BoxTrackerConfig(
+                enabled=box_tracker_enabled,
+                mirror_workbook_path=box_tracker_mirror_path if box_tracker_enabled else "",
+                cid_campaign_map=box_tracker_cid_map if box_tracker_enabled else {},
             ),
         )
         saved_path = save_profile(new_profile, get_clients_dir())
