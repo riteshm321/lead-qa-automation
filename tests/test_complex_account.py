@@ -648,3 +648,76 @@ def test_merge_complex_account_review_does_not_override_an_existing_refund():
 
     assert 0 not in result.review_reasons
     assert result.refund_reasons[0] == "Duplicate - exact email"
+
+
+def test_load_tal_segment_index_reads_all_matching_tabs(tmp_path):
+    from core.complex_account import load_tal_segment_index
+
+    path = str(tmp_path / "tal.xlsx")
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for sheet_name, domain in [
+        ("TAL Q3 Select T IN", "selectin.com"),
+        ("TAL Q3 Select T AU", "selectau.com"),
+        ("TAL Named IN", "namedin.com"),
+        ("TAL Named AU", "namedau.com"),
+    ]:
+        ws = wb.create_sheet(sheet_name)
+        ws.append(["company_domain", "location"])
+        ws.append([domain, "somewhere"])
+    wb.save(path)
+
+    index = load_tal_segment_index(path)
+
+    assert index == {
+        "selectin.com": "SelectT",
+        "selectau.com": "SelectT",
+        "namedin.com": "Named",
+        "namedau.com": "Named",
+    }
+
+
+def test_load_tal_segment_index_ignores_unrecognized_tabs(tmp_path):
+    from core.complex_account import load_tal_segment_index
+
+    path = str(tmp_path / "tal.xlsx")
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    ws = wb.create_sheet("Some Other Tab")
+    ws.append(["company_domain"])
+    ws.append(["ignored.com"])
+    wb.save(path)
+
+    assert load_tal_segment_index(path) == {}
+
+
+def test_fill_blank_segments_only_fills_blanks_by_domain():
+    from core.complex_account import fill_blank_segments
+
+    leads_df = pd.DataFrame([
+        {"Email": "a@selectin.com", "Segment": ""},
+        {"Email": "b@namedin.com", "Segment": "AlreadySet"},
+        {"Email": "c@unknown.com", "Segment": ""},
+    ])
+    segment_index = {"selectin.com": "SelectT", "namedin.com": "Named"}
+
+    result = fill_blank_segments(leads_df, "Email", segment_index)
+
+    assert result.loc[0, "Segment"] == "SelectT"
+    assert result.loc[1, "Segment"] == "AlreadySet"
+    assert result.loc[2, "Segment"] == ""
+
+
+def test_apply_complex_account_rules_backfills_blank_segment():
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+    leads_df = pd.DataFrame([
+        {"Email": "a@selectin.com", "First": "A", "Last": "One", "Company": "X", "CID": "1", "Segment": ""},
+    ])
+    segment_index = {"selectin.com": "SelectT"}
+
+    enriched, _, _ = apply_complex_account_rules(
+        leads_df, fm, tal_index=None, installed_tech_map={}, pbs_map={},
+        tal_segment_index=segment_index,
+    )
+
+    assert enriched.loc[0, "Segment"] == "SelectT"

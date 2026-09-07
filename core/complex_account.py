@@ -159,6 +159,86 @@ def apply_tal_mapping(
     return df
 
 
+# A different TAL shape from Dell's flat CSV (load_tal_index above): one
+# tab per tiering segment, tab name carrying an IN/AU country suffix that
+# doesn't affect the segment label itself. Matched by substring so the
+# exact tab names ("TAL Q3 Select T IN", "TAL Named AU", ...) can keep
+# drifting (e.g. the quarter number) without breaking this.
+_SEGMENT_TAB_MARKERS = [
+    ("select t", "SelectT"),
+    ("named", "Named"),
+]
+
+
+def _segment_label_for_tab(sheet_name: str) -> str | None:
+    normalized = sheet_name.strip().lower()
+    for marker, label in _SEGMENT_TAB_MARKERS:
+        if marker in normalized:
+            return label
+    return None
+
+
+def load_tal_segment_index(tal_path: str, domain_column: str = "company_domain") -> dict[str, str]:
+    """Loads a multi-tab TAL workbook (one tab per tiering segment) into a
+    domain -> segment label ("SelectT"/"Named") index, for clients (e.g.
+    IBM APAC) whose TAL classifies accounts by which SHEET they're listed
+    on rather than by an in-sheet tier column. A tab whose name doesn't
+    match a known segment marker (see _SEGMENT_TAB_MARKERS) is skipped
+    entirely -- this workbook can carry other, unrelated tabs.
+    """
+    wb = openpyxl.load_workbook(tal_path, read_only=True, data_only=True)
+    try:
+        index: dict[str, str] = {}
+        for sheet_name in wb.sheetnames:
+            label = _segment_label_for_tab(sheet_name)
+            if label is None:
+                continue
+            ws = wb[sheet_name]
+            header_row = next(ws.iter_rows(min_row=1, max_row=1), None)
+            if header_row is None:
+                continue
+            headers = [cell.value for cell in header_row]
+            domain_col_idx = next(
+                (i for i, h in enumerate(headers)
+                 if _normalize_header_text(h) == _normalize_header_text(domain_column)),
+                None,
+            )
+            if domain_col_idx is None:
+                continue
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if domain_col_idx >= len(row):
+                    continue
+                domain = _norm_domain(row[domain_col_idx])
+                if domain:
+                    index[domain] = label
+    finally:
+        wb.close()
+    return index
+
+
+def fill_blank_segments(
+    leads_df: pd.DataFrame, email_column: str, segment_index: dict[str, str],
+    segment_column: str = "Segment",
+) -> pd.DataFrame:
+    """Fills segment_column for every lead whose value is blank, by
+    looking up that lead's email domain in segment_index (see
+    load_tal_segment_index). A lead with no TAL match, or one that already
+    has a Segment value, is left untouched -- this only backfills gaps,
+    never overwrites an existing value.
+    """
+    if segment_column not in leads_df.columns:
+        return leads_df
+    df = leads_df.copy()
+    for idx, row in df.iterrows():
+        if str(row.get(segment_column) or "").strip():
+            continue
+        domain = _norm_domain(extract_domain(row.get(email_column)))
+        label = segment_index.get(domain)
+        if label:
+            df.at[idx, segment_column] = label
+    return df
+
+
 def _find_csv_header_row(text: str, required_column: str, max_scan: int = 15) -> int:
     # These exports carry a couple of "Client:"/"Program:" metadata lines
     # (and a blank line) above the real header row.
@@ -447,9 +527,13 @@ def apply_complex_account_rules(
     installed_tech_map: dict[str, str],
     pbs_map: dict[str, str],
     asset_specs: dict[str, dict] | None = None,
+    tal_segment_index: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, dict[int, list[ReviewDetail]], dict[int, list[str]]]:
     """Applies every Complex Account column-filling rule to a copy of
     leads_df and returns (enriched_df, review_reasons, corrections).
+
+    tal_segment_index (if given) backfills any blank Segment value by
+    email domain -- see fill_blank_segments.
     review_reasons only ever contains entries for the two rules that can't
     safely auto-decide (Capture Date, Email Opt-in); every other rule
     always produces a value (TAL: blank Account ID on no match; Installed
@@ -483,6 +567,9 @@ def apply_complex_account_rules(
 
     if tal_index is not None:
         df = apply_tal_mapping(df, field_mapping.email, COUNTRY_COLUMN, ACCOUNT_ID_COLUMN, COMPANY_COLUMN, tal_index)
+
+    if tal_segment_index is not None:
+        df = fill_blank_segments(df, field_mapping.email, tal_segment_index)
 
     for idx, row in df.iterrows():
         domain = _norm_domain(extract_domain(row.get(field_mapping.email)))
