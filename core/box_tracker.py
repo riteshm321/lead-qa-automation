@@ -361,7 +361,7 @@ def add_lead_template_columns(
     leads_df: pd.DataFrame, cid_column: str, lob_column: str = "LOB",
     template_constants: dict[str, object] | None = None,
     asset_title_column: str = "Asset Title", country_column: str = "Country",
-    now: datetime.datetime | None = None,
+    timestamp_column: str = "Timestamp", now: datetime.datetime | None = None,
 ) -> pd.DataFrame:
     """Adds/fills every Lead Template-only column on a copy of leads_df:
 
@@ -376,10 +376,13 @@ def add_lead_template_columns(
       leadfile has these columns): passed through from the leadfile's own
       Asset Title/Country columns under the Lead Template's lowercase
       header names.
-    - user_transaction_date (if template_constants was given): `now`
-      (defaults to datetime.datetime.now()) formatted "YYYY-MM-DD
-      HH:MM:SS" -- a plain string, not an Excel-native datetime, per the
-      Lead Template's own placeholder text specifying that exact format.
+    - user_transaction_date (if template_constants was given): parsed
+      per-row from the leadfile's own Timestamp column -- which arrives as
+      plain text in whatever format the source system wrote it in -- and
+      reformatted to "YYYY-MM-DD HH:MM:SS", the Lead Template's own
+      placeholder text's exact format. Falls back to `now` (defaults to
+      datetime.datetime.now()) for any row where that column is missing,
+      blank, or unparseable.
     """
     df = leads_df.copy()
     micro_audience = []
@@ -399,6 +402,13 @@ def add_lead_template_columns(
             df["asset_title"] = df[asset_title_column]
         if country_column in df.columns:
             df["country"] = df[country_column]
-        df["user_transaction_date"] = (now or datetime.datetime.now()).strftime(_LEAD_TEMPLATE_DATE_FORMAT)
+
+        fallback = (now or datetime.datetime.now()).strftime(_LEAD_TEMPLATE_DATE_FORMAT)
+        if timestamp_column in df.columns:
+            parsed = pd.to_datetime(df[timestamp_column], errors="coerce")
+            formatted = parsed.dt.strftime(_LEAD_TEMPLATE_DATE_FORMAT)
+            df["user_transaction_date"] = formatted.fillna(fallback)
+        else:
+            df["user_transaction_date"] = fallback
 
     return df

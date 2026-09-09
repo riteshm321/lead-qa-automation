@@ -344,6 +344,40 @@ def test_add_lead_template_columns_injects_template_constants_and_passthroughs()
     assert result.loc[0, "user_transaction_date"] == "2026-09-07 14:30:05"
 
 
+def test_add_lead_template_columns_parses_the_leadfiles_own_timestamp_column():
+    # The leadfile's Timestamp column is plain text in whatever format the
+    # source system wrote it in -- it must be parsed into a real date and
+    # reformatted to the Lead Template's exact "YYYY-MM-DD HH:MM:SS"
+    # string, not just passed through as-is.
+    leads_df = pd.DataFrame([
+        {"CID": "118741", "Timestamp": "07/21/2026 3:45:00 PM"},
+        {"CID": "118741", "Timestamp": "2026-08-02 09:05:00"},
+    ])
+
+    result = add_lead_template_columns(
+        leads_df, "CID", template_constants={"AID": "L-22SD7"},
+        now=datetime.datetime(2026, 9, 7, 14, 30, 5),
+    )
+
+    assert result.loc[0, "user_transaction_date"] == "2026-07-21 15:45:00"
+    assert result.loc[1, "user_transaction_date"] == "2026-08-02 09:05:00"
+
+
+def test_add_lead_template_columns_falls_back_to_now_when_timestamp_missing_or_unparseable():
+    leads_df = pd.DataFrame([
+        {"CID": "118741", "Timestamp": None},
+        {"CID": "118741", "Timestamp": "not a date"},
+    ])
+
+    result = add_lead_template_columns(
+        leads_df, "CID", template_constants={"AID": "L-22SD7"},
+        now=datetime.datetime(2026, 9, 7, 14, 30, 5),
+    )
+
+    assert result.loc[0, "user_transaction_date"] == "2026-09-07 14:30:05"
+    assert result.loc[1, "user_transaction_date"] == "2026-09-07 14:30:05"
+
+
 def test_add_lead_template_columns_without_template_constants_adds_nothing_extra():
     # Backward-compatible default -- callers that don't pass
     # template_constants (or asset_title/country columns aren't present)
