@@ -10,6 +10,7 @@ from core.box_tracker import (
     read_pacing_diffs, pick_leads_for_approval, sent_for_approval_label,
     cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
     append_mirror_rows, set_pacing_delivered, add_lead_template_columns, read_lead_template_constants,
+    project_code_for_cid, parse_amal_id, strip_country_suffix, campaign_type_for_cid,
 )
 from core.branding import configure_page
 from core.excel_io import read_sheet_as_dataframe, append_leads, find_header_row
@@ -26,6 +27,13 @@ st.caption(
 _STATUS_COLUMN = "Status"
 _APPROVAL_SHEET_TAB = "Approval Sheet"
 _RESPONSE_DETAILS_TAB = "Response Details"
+# The real Box file's Response Details tab has a blank row 1 (leftover
+# title spacing) with the actual column headers in row 2.
+_RESPONSE_DETAILS_HEADER_ROW = 2
+# Fixed for every row -- Madison Logic is always the publisher for this
+# client's uploads.
+_RESPONSE_DETAILS_PUBLISHER_NAME = "Madison Logic"
+_RESPONSE_DETAILS_SOURCE_SITE = "madisonlogic.com"
 _PACING_TAB = "Pacing"
 _SENT_STATUS_PREFIX = "Sent for Approval"
 _CLEARED_STATUS_PREFIX = "Cleared for Upload"
@@ -101,13 +109,24 @@ if st.button("Pick leads and send for approval", key="pick_and_send_button"):
             ws.cell(row=idx + 2, column=status_col, value=status_label)
         wb.save(profile.accumulated_report_path)
 
-        # Write the Approval Sheet mirror rows.
+        # Write the Approval Sheet mirror rows. Persona/Industry is the
+        # campaign name; Project Code and AMAL ID normally pass through
+        # from the leadfile's own columns, except for CIDs with a fixed
+        # override (see project_code_for_cid/amal_id_for_cid) -- newly
+        # live segments whose leadfile doesn't carry reliable values yet.
+        # Approval is deliberately left blank -- the client fills it in.
+        cid_to_campaign = profile.box_tracker.cid_campaign_map
         rows = []
         for _, lead in picked_df.iterrows():
+            cid = str(lead.get(profile.field_mapping.cid, ""))
             rows.append({
                 "Company Name": lead.get(profile.field_mapping.company, ""),
                 "Segment": lead.get("Segment", ""),
+                "Persona/Industry": strip_country_suffix(cid_to_campaign.get(cid, "")),
+                "Project Code": project_code_for_cid(cid, lead.get("Project Code", "")),
+                "Market": lead.get("Country", ""),
                 "Job Title": lead.get("Job Title", ""),
+                "AMAL ID": parse_amal_id(lead.get("AMAL ID", "")),
                 "Date": date_label,
             })
         append_mirror_rows(profile.box_tracker.mirror_workbook_path, _APPROVAL_SHEET_TAB, rows)
@@ -138,11 +157,19 @@ st.caption(
     "them to the client portal by hand."
 )
 
+_show_manual_leads = st.checkbox(
+    "Also include leads not yet marked \"Sent for Approval\" "
+    "(e.g. you added them to the real Approval Sheet yourself, skipping step 1)",
+    key="show_manual_leads",
+)
+
 try:
     _accumulated_for_clearing = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
-    _awaiting_clearance_df = _accumulated_for_clearing[
-        _accumulated_for_clearing[_STATUS_COLUMN].astype(str).str.startswith(_SENT_STATUS_PREFIX)
-    ]
+    _clearing_status = _accumulated_for_clearing[_STATUS_COLUMN].fillna("").astype(str)
+    _clearance_mask = _clearing_status.str.startswith(_SENT_STATUS_PREFIX)
+    if _show_manual_leads:
+        _clearance_mask = _clearance_mask | (_clearing_status.str.strip() == "")
+    _awaiting_clearance_df = _accumulated_for_clearing[_clearance_mask]
 except Exception as exc:
     _awaiting_clearance_df = pd.DataFrame()
     st.error(f"Could not load Accumulated Report: {exc}")
@@ -270,15 +297,29 @@ else:
                 cid_to_campaign = profile.box_tracker.cid_campaign_map
                 response_rows = []
                 for _, lead in accepted_df.iterrows():
-                    campaign = cid_to_campaign.get(str(lead.get(profile.field_mapping.cid, "")), "")
+                    cid = str(lead.get(profile.field_mapping.cid, ""))
+                    campaign = strip_country_suffix(cid_to_campaign.get(cid, ""))
                     response_rows.append({
+                        "Publisher Name": _RESPONSE_DETAILS_PUBLISHER_NAME,
+                        "source_site": _RESPONSE_DETAILS_SOURCE_SITE,
+                        "Market": lead.get("Country", ""),
                         "Company": lead.get(profile.field_mapping.company, ""),
+                        "UUCID": lead.get("2nd Asset OV Code", ""),
+                        "Project Code": project_code_for_cid(cid, lead.get("Project Code", "")),
                         "Campaign Name": campaign,
                         "Segment": lead.get("Segment", ""),
                         "Job Title": lead.get("Job Title", ""),
+                        "Contact Type": lead.get("Contact Type", ""),
+                        "State": lead.get("State", ""),
+                        "Campaign Type": campaign_type_for_cid(cid),
+                        "Asset Title": lead.get("Asset Title", ""),
+                        "Asset Link": lead.get("Asset Link", ""),
                         "Uploaded Date": today.strftime("%d-%b"),
                     })
-                append_mirror_rows(profile.box_tracker.mirror_workbook_path, _RESPONSE_DETAILS_TAB, response_rows)
+                append_mirror_rows(
+                    profile.box_tracker.mirror_workbook_path, _RESPONSE_DETAILS_TAB, response_rows,
+                    header_row=_RESPONSE_DETAILS_HEADER_ROW,
+                )
                 _set_status_for_emails(
                     _email_col, set(accepted_df[_email_col].astype(str)), uploaded_accepted_label(today))
 

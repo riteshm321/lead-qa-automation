@@ -15,10 +15,13 @@ def _make_accumulated(path: str, rows: list[dict]) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Accumulated"
-    ws.append(["Email", "First", "Last", "Company", "CID", "Status", "LOB", "Asset Title", "Country"])
+    ws.append(["Email", "First", "Last", "Company", "CID", "Status", "LOB", "Asset Title", "Country",
+               "Project Code", "AMAL ID", "Segment", "2nd Asset OV Code"])
     for row in rows:
         ws.append([row["Email"], row["First"], row["Last"], row["Company"], row["CID"],
-                    row.get("Status", ""), row.get("LOB", ""), row.get("Asset Title", ""), row.get("Country", "")])
+                    row.get("Status", ""), row.get("LOB", ""), row.get("Asset Title", ""), row.get("Country", ""),
+                    row.get("Project Code", ""), row.get("AMAL ID", ""), row.get("Segment", ""),
+                    row.get("2nd Asset OV Code", "")])
     wb.create_sheet("Refund").append(["Email", "First", "Last", "Company", "CID", "Status", "Refund Reason"])
     wb.save(path)
 
@@ -27,7 +30,8 @@ def _make_mirror(path: str) -> None:
     wb = openpyxl.Workbook()
     approval = wb.active
     approval.title = "Approval Sheet"
-    approval.append(["Company Name", "Market", "Date", "Segment", "Job Title"])
+    approval.append(["Company Name", "Market", "Date", "Segment", "Persona/Industry", "Project Code",
+                     "Job Title", "AMAL ID", "Approval"])
     pacing = wb.create_sheet("Pacing")
     pacing.append(["Funding Source", "Publisher", "Country", "Segment", "Campaign", "Week of 7", ""])
     pacing.append([None, None, None, None, None, "P", "D"])
@@ -37,7 +41,9 @@ def _make_mirror(path: str) -> None:
     pacing["A14"], pacing["B14"] = "Pending", 20
     pacing["A15"], pacing["B15"] = "Delivered", 7
     pacing["A16"], pacing["B16"] = "Diff", 13
-    wb.create_sheet("Response Details").append(
+    response_ws = wb.create_sheet("Response Details")
+    response_ws.append([])  # real file's row 1 is blank; headers are row 2
+    response_ws.append(
         ["Publisher Name", "source_site", "Market", "Company", "UUCID", "Project Code",
          "Uploaded Date", "Campaign Name", "Segment", "Job Title", "Contact Type", "State",
          "Campaign Type", "Asset Title"])
@@ -83,7 +89,8 @@ def test_pick_and_send_writes_approval_sheet_mirror_and_sets_pacing(tmp_path, mo
     acc_path = str(tmp_path / "accumulated.xlsx")
     mirror_path = str(tmp_path / "mirror.xlsx")
     _make_accumulated(acc_path, [
-        {"Email": f"lead{i}@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741"}
+        {"Email": f"lead{i}@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
+         "Project Code": "PVLAP", "AMAL ID": "old-id, new-id", "Segment": "SelectT"}
         for i in range(20)
     ])
     _make_mirror(mirror_path)
@@ -101,6 +108,12 @@ def test_pick_and_send_writes_approval_sheet_mirror_and_sets_pacing(tmp_path, mo
     wb = openpyxl.load_workbook(mirror_path)
     approval_ws = wb["Approval Sheet"]
     assert approval_ws.max_row == 1 + 18  # header + (13 diff + 5 buffer)
+    headers = [c.value for c in approval_ws[1]]
+    row2 = dict(zip(headers, [c.value for c in approval_ws[2]]))
+    assert row2["Persona/Industry"] == "Bob"
+    assert row2["Project Code"] == "PVLAP"  # passed through from the leadfile
+    assert row2["AMAL ID"] == "new-id"      # later of the two comma-separated values
+    assert row2["Approval"] is None         # left blank for the client to fill in
 
     pacing_ws = wb["Pacing"]
     assert pacing_ws.cell(row=3, column=7).value == 18  # "D" column under "Week of 7"
@@ -208,6 +221,35 @@ def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existi
     assert status.startswith("Cleared for Upload")
 
 
+def test_write_cleared_leads_hides_blank_status_leads_by_default(tmp_path, monkeypatch):
+    # A lead the user approved by hand (added straight to the real Approval
+    # Sheet themselves, skipping step 1) never gets "Sent for Approval"
+    # written to its Status -- it's blank. It must stay hidden from step 2
+    # by default, so the guided flow's per-CID Pacing target isn't quietly
+    # bypassed by leads step 1 never picked.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    template_path = str(tmp_path / "bob_template.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": "manual@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741", "Status": ""},
+    ])
+    _make_mirror(mirror_path)
+    _make_lead_template(template_path)
+    _save_profile(acc_path, mirror_path, cid_lead_template_path={"118741": template_path})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    at.selectbox[0].set_value("IBM APAC").run()
+
+    assert not any(cb.key == "clear_manual@x.com" for cb in at.checkbox)
+
+    show_manual_checkbox = next(cb for cb in at.checkbox if cb.key == "show_manual_leads")
+    show_manual_checkbox.set_value(True).run()
+
+    assert any(cb.key == "clear_manual@x.com" for cb in at.checkbox)
+
+
 def test_write_cleared_leads_copies_lob_for_wxo_cids(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
@@ -266,7 +308,8 @@ def test_upload_reconciliation_moves_rejected_to_refund_and_logs_accepted(tmp_pa
     mirror_path = str(tmp_path / "mirror.xlsx")
     _make_accumulated(acc_path, [
         {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Cleared for Upload - 07-Sep"},
+         "Status": "Cleared for Upload - 07-Sep", "Country": "IN", "Project Code": "PVLAP",
+         "2nd Asset OV Code": "OV-123"},
         {"Email": "lead2@x.com", "First": "F", "Last": "L", "Company": "Y", "CID": "118741",
          "Status": "Cleared for Upload - 07-Sep"},
     ])
@@ -296,6 +339,16 @@ def test_upload_reconciliation_moves_rejected_to_refund_and_logs_accepted(tmp_pa
     company_col_values = [c.value for c in response_ws["D"]]  # Company is column D
     assert "X" in company_col_values  # lead1 (accepted) logged
     assert "Y" not in company_col_values  # lead2 (rejected) not logged
+
+    headers = [c.value for c in response_ws[2]]
+    row = dict(zip(headers, [c.value for c in response_ws[3]]))  # header row 2, first data row 3
+    assert row["Publisher Name"] == "Madison Logic"
+    assert row["source_site"] == "madisonlogic.com"
+    assert row["Market"] == "IN"
+    assert row["Project Code"] == "PVLAP"
+    assert row["Campaign Name"] == "Bob"
+    assert row["UUCID"] == "OV-123"
+    assert row["Campaign Type"] == "2T"
 
     accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
     status_by_email = dict(zip(accumulated_df["Email"], accumulated_df["Status"]))

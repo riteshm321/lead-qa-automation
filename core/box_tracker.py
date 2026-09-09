@@ -115,7 +115,7 @@ def pick_leads_for_approval(
             continue
         if campaign not in diffs:
             continue
-        target = diffs[campaign] + buffer
+        target = max(0, diffs[campaign] + buffer)
         picked = candidates.head(target)
         if len(picked) < target:
             shortfall[cid] = target - len(picked)
@@ -156,6 +156,39 @@ def append_mirror_rows(mirror_path: str, tab_name: str, rows: list[dict], header
         wb.close()
 
 
+_PACING_COUNTRY_SUFFIXES = ("IN", "AU")
+_STATIC_HEADER_SCAN_ROWS = 5  # how many top rows to search for "Campaign"/"Country"/the week label
+
+
+def strip_country_suffix(campaign: str) -> str:
+    """Some campaigns (e.g. "wxO (AI Pod)") reuse the same Campaign text
+    for both the IN and AU Pacing rows, so cid_campaign_map disambiguates
+    them with a trailing " IN"/" AU" (see set_pacing_delivered). The real
+    Box file's Approval Sheet doesn't want that suffix in its
+    Persona/Industry column -- country there is its own separate Market
+    column -- so this strips it back off for that purpose. A campaign
+    with no such suffix (e.g. "Bob") passes through unchanged.
+    """
+    for suffix in _PACING_COUNTRY_SUFFIXES:
+        if campaign.strip().upper().endswith(f" {suffix}"):
+            return campaign.strip()[: -(len(suffix) + 1)].strip()
+    return campaign
+
+
+def _find_header_cell(ws, label: str, max_row: int = _STATIC_HEADER_SCAN_ROWS):
+    """Returns (row, col) of the first cell in the top `max_row` rows whose
+    text matches `label` exactly (case-insensitive). The real Box file's
+    static columns sit in row 1, but the week-block labels can land a row
+    lower depending on whether a month header sits above them -- searching
+    a small window instead of assuming a fixed row tolerates that drift.
+    """
+    for row in ws.iter_rows(min_row=1, max_row=max_row):
+        for cell in row:
+            if str(cell.value or "").strip().lower() == label.strip().lower():
+                return cell.row, cell.column
+    return None, None
+
+
 def set_pacing_delivered(
     mirror_path: str, campaign: str, value: int,
     pacing_tab: str = "Pacing", week_label: str | None = None,
@@ -164,9 +197,17 @@ def set_pacing_delivered(
     under `week_label`'s week block (defaults to the current week -- see
     current_week_label). The main Pacing grid pairs a "P" and "D"
     sub-column under each "Week of N" header; this locates the "D"
-    sub-column by scanning the sub-header row for "D" starting at the
-    "Week of N" column, then finds `campaign`'s row by scanning the
-    Campaign column.
+    sub-column by scanning the row directly below the week label for "D"
+    starting at the "Week of N" column, then finds `campaign`'s row by
+    scanning the Campaign column.
+
+    Some campaigns (e.g. "wxO (AI Pod)") reuse the same Campaign text for
+    both the IN and AU rows, distinguished only by a Country column. To
+    address one of those rows unambiguously, pass `campaign` with a
+    trailing " IN"/" AU" (e.g. "wxO (AI Pod) AU") -- if a Country column
+    exists, the suffix is matched against it in addition to the base
+    campaign text; otherwise it falls back to matching the full string
+    as-is against the Campaign column.
     """
     if week_label is None:
         week_label = current_week_label(datetime.date.today())
@@ -174,15 +215,11 @@ def set_pacing_delivered(
     wb = openpyxl.load_workbook(mirror_path)
     try:
         ws = wb[pacing_tab]
-        header_row_idx = 1
-        subheader_row_idx = 2
 
-        week_col = next(
-            (cell.column for cell in ws[header_row_idx] if str(cell.value or "").strip() == week_label),
-            None,
-        )
+        week_row, week_col = _find_header_cell(ws, week_label)
         if week_col is None:
             raise ValueError(f"No \"{week_label}\" column found in {pacing_tab!r}")
+        subheader_row_idx = week_row + 1
 
         d_col = None
         for col in range(week_col, ws.max_column + 1):
@@ -195,23 +232,75 @@ def set_pacing_delivered(
         if d_col is None:
             raise ValueError(f"No \"D\" sub-column found under \"{week_label}\" in {pacing_tab!r}")
 
-        campaign_col = next(
-            (cell.column for cell in ws[header_row_idx] if str(cell.value or "").strip().lower() == "campaign"),
-            None,
-        )
+        _, campaign_col = _find_header_cell(ws, "Campaign")
         if campaign_col is None:
             raise ValueError(f"No \"Campaign\" column found in {pacing_tab!r}")
 
+        _, country_col = _find_header_cell(ws, "Country")
+        match_campaign, match_country = campaign, None
+        if country_col is not None:
+            stripped = strip_country_suffix(campaign)
+            if stripped != campaign:
+                match_campaign = stripped
+                match_country = campaign.strip().upper().rsplit(" ", 1)[-1]
+
         for row in ws.iter_rows(min_row=subheader_row_idx + 1):
-            if str(row[campaign_col - 1].value or "").strip() == campaign:
-                ws.cell(row=row[0].row, column=d_col, value=value)
-                break
+            if str(row[campaign_col - 1].value or "").strip() != match_campaign:
+                continue
+            if match_country is not None:
+                if str(row[country_col - 1].value or "").strip().upper() != match_country:
+                    continue
+            ws.cell(row=row[0].row, column=d_col, value=value)
+            break
         else:
             raise ValueError(f"No row for campaign {campaign!r} found in {pacing_tab!r}")
 
         wb.save(mirror_path)
     finally:
         wb.close()
+
+
+# CXO's (118742) fixed Project Code, same pattern as
+# _MICRO_AUDIENCE_BY_CID. Every CID's AMAL ID (including CXO's) comes
+# straight from its own leadfile column -- see parse_amal_id.
+_PROJECT_CODE_OVERRIDE_BY_CID = {"118742": "L-22UMP"}
+
+# Response Details' Campaign Type is a fixed tactic abbreviation per
+# campaign (matches the Pacing tab's own Tactic column: "2 Touch +
+# TeleVerified" -> "2T", "1 Touch + TeleVerified" -> "1T"). CIDs not
+# listed here (segments not live yet) get a blank.
+_CAMPAIGN_TYPE_BY_CID = {
+    "118741": "2T",  # Bob
+    "118743": "2T",  # wxO (AI Pod) IN
+    "118745": "2T",  # wxO (AI Pod) AU
+    "118742": "1T",  # CXO
+}
+
+
+def campaign_type_for_cid(cid: str) -> str:
+    return _CAMPAIGN_TYPE_BY_CID.get(cid, "")
+
+
+def parse_amal_id(raw: str | None) -> str:
+    """The leadfile's AMAL ID column sometimes carries two comma-separated
+    values; the business rule is to take the later one. A single value
+    (or a blank) passes through unchanged.
+    """
+    if not raw:
+        return ""
+    parts = str(raw).split(",")
+    return parts[-1].strip()
+
+
+def project_code_for_cid(cid: str, leadfile_value: str) -> str:
+    """The Approval Sheet's Project Code is normally the leadfile's own
+    Project Code/Tactic column value, passed straight through -- except
+    for the CIDs in _PROJECT_CODE_OVERRIDE_BY_CID, which always get the
+    fixed value regardless of what (if anything) the leadfile carries.
+    """
+    return _PROJECT_CODE_OVERRIDE_BY_CID.get(cid, leadfile_value)
+
+
 
 
 # Fixed per-CID business rule for IBM APAC's Lead Template "micro_audience"

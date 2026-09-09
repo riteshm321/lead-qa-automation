@@ -7,7 +7,7 @@ from core.box_tracker import (
     current_week_label, read_pacing_diffs, pick_leads_for_approval, sent_for_approval_label,
     append_mirror_rows, set_pacing_delivered, add_lead_template_columns,
     cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
-    read_lead_template_constants,
+    read_lead_template_constants, parse_amal_id, project_code_for_cid, campaign_type_for_cid,
 )
 
 
@@ -91,6 +91,19 @@ def test_pick_leads_for_approval_picks_diff_plus_five_per_campaign():
 
     assert len(picked[picked["CID"] == "118741"]) == 18  # 13 + 5
     assert len(picked[picked["CID"] == "118743"]) == 18
+    assert shortfall == {}
+
+
+def test_pick_leads_for_approval_picks_nothing_when_already_ahead_of_pace():
+    # A negative diff (Delivered already exceeds Pending) plus the buffer
+    # can still be negative -- e.g. diff=-7, buffer=5 -> -2. That must
+    # clamp to 0 picks, never pandas' .head(-2) "all but the last 2" trap.
+    accumulated = _accumulated_df([{"CID": "118741", "Status": ""} for _ in range(5)])
+
+    picked, shortfall = pick_leads_for_approval(
+        accumulated, "CID", "Status", {"118741": "Bob"}, {"Bob": -7}, buffer=5)
+
+    assert picked.empty
     assert shortfall == {}
 
 
@@ -230,6 +243,50 @@ def test_set_pacing_delivered_overwrites_not_adds(tmp_path):
     assert wb2["Pacing"].cell(row=3, column=7).value == 15
 
 
+def test_set_pacing_delivered_finds_week_label_a_row_lower_than_the_static_columns(tmp_path):
+    # The real Box file's static columns (Funding Source..Campaign) are
+    # merged across rows 1-3 with the header text in row 1, but the week
+    # labels live in row 2 (row 1 there holds a month label instead) and
+    # the P/D sub-headers in row 3 -- one row lower than the simplest case.
+    path = str(tmp_path / "mirror.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing"
+    ws.append(["Funding Source", "Publisher", "Country", "Segment", "Campaign", "Tactic", "Live Date", "Total Planned", "July"])
+    ws.append([None, None, None, None, None, None, None, None, "Week of 7"])
+    ws.append([None, None, None, None, None, None, None, None, "P", "D"])
+    ws.append(["Cash", "Madison Logic", "IN", "Select-T", "Bob", "2 Touch", None, 361, 0, 0])
+    wb.save(path)
+
+    set_pacing_delivered(path, "Bob", 18, week_label="Week of 7")
+
+    wb2 = openpyxl.load_workbook(path)
+    assert wb2["Pacing"].cell(row=4, column=10).value == 18  # the "D" sub-column under "Week of 7"
+
+
+def test_set_pacing_delivered_disambiguates_same_campaign_name_by_country(tmp_path):
+    # "wxO (AI Pod)" appears once per country (IN and AU), with the same
+    # Campaign text -- only the Country column tells the rows apart. A
+    # campaign key with a trailing " IN"/" AU" must match the row whose
+    # Country column agrees, not just the first row with that text.
+    path = str(tmp_path / "mirror.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing"
+    ws.append(["Funding Source", "Publisher", "Country", "Segment", "Campaign", "Week of 7", ""])
+    ws.append([None, None, None, None, None, "P", "D"])
+    ws.append(["Cash", "Madison Logic", "IN", "Select-T", "wxO (AI Pod)", 15, 0])
+    ws.append(["Cash", "Madison Logic", "AU", "Select-T", "wxO (AI Pod)", 8, 0])
+    wb.save(path)
+
+    set_pacing_delivered(path, "wxO (AI Pod) AU", 8, week_label="Week of 7")
+
+    wb2 = openpyxl.load_workbook(path)
+    ws2 = wb2["Pacing"]
+    assert ws2.cell(row=3, column=7).value == 0   # IN row untouched
+    assert ws2.cell(row=4, column=7).value == 8   # AU row updated
+
+
 def test_add_lead_template_columns_uses_the_fixed_cid_map():
     leads_df = pd.DataFrame([
         {"CID": "118741", "LOB": "Software"},   # Bob
@@ -339,3 +396,38 @@ def test_read_lead_template_constants_returns_empty_when_no_row_has_an_aid(tmp_p
     wb.save(path)
 
     assert read_lead_template_constants(path, "LEAD_TEMPLATE") == {}
+
+
+def test_parse_amal_id_takes_the_later_value_when_two_are_comma_separated():
+    assert parse_amal_id("6a07821488e4d402cbbdece8, 6a0782b288e4d402cbbdece9") == "6a0782b288e4d402cbbdece9"
+
+
+def test_parse_amal_id_passes_through_a_single_value_unchanged():
+    assert parse_amal_id("6a07821488e4d402cbbdece8") == "6a07821488e4d402cbbdece8"
+
+
+def test_parse_amal_id_blank_for_none_or_empty():
+    assert parse_amal_id(None) == ""
+    assert parse_amal_id("") == ""
+
+
+def test_project_code_for_cid_uses_the_leadfile_value_by_default():
+    assert project_code_for_cid("118743", "PAIAP") == "PAIAP"
+
+
+def test_project_code_for_cid_overrides_for_cxo():
+    # CXO's (118742) Project Code is always the fixed value, regardless of
+    # what (if anything) the leadfile carries.
+    assert project_code_for_cid("118742", "") == "L-22UMP"
+    assert project_code_for_cid("118742", "something else") == "L-22UMP"
+
+
+def test_campaign_type_for_cid_known_campaigns():
+    assert campaign_type_for_cid("118741") == "2T"  # Bob
+    assert campaign_type_for_cid("118743") == "2T"  # wxO (AI Pod) IN
+    assert campaign_type_for_cid("118745") == "2T"  # wxO (AI Pod) AU
+    assert campaign_type_for_cid("118742") == "1T"  # CXO
+
+
+def test_campaign_type_for_cid_unknown_cid_is_blank():
+    assert campaign_type_for_cid("999999") == ""
