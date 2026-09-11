@@ -328,7 +328,10 @@ _MICRO_AUDIENCE_BY_CID = {
 }
 # These CIDs instead copy the leadfile's own LOB column value through as
 # micro_audience, rather than a fixed string.
-_MICRO_AUDIENCE_FROM_LOB_CIDS = {"119750", "119751", "120131"}  # IN LOB, AU LOB, IN DigiSov
+_MICRO_AUDIENCE_FROM_LOB_CIDS = {"119750", "119751"}  # IN LOB, AU LOB
+# IN DigiSov's leadfile carries its own micro_audience column directly
+# (not derived from LOB or a fixed value) -- passed through as-is.
+_MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS = {"120131"}  # IN DigiSov
 _LEAD_TEMPLATE_INDUSTRY_VALUE = "All"
 
 
@@ -381,8 +384,9 @@ def add_lead_template_columns(
     """Adds/fills every Lead Template-only column on a copy of leads_df:
 
     - micro_audience: the leadfile's own LOB value for
-      _MICRO_AUDIENCE_FROM_LOB_CIDS, else the fixed value from
-      _MICRO_AUDIENCE_BY_CID (blank for any other, unmapped CID).
+      _MICRO_AUDIENCE_FROM_LOB_CIDS, the leadfile's own micro_audience
+      value for _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS, else the fixed value
+      from _MICRO_AUDIENCE_BY_CID (blank for any other, unmapped CID).
     - Industry: always _LEAD_TEMPLATE_INDUSTRY_VALUE ("All"), for every CID.
     - template_constants (if given): AID/NC_EMAIL_DETAIL/NC_TELE_DETAIL/
       campaign_code (see read_lead_template_constants), set the same on
@@ -405,6 +409,8 @@ def add_lead_template_columns(
         cid = str(row.get(cid_column, "")).strip()
         if cid in _MICRO_AUDIENCE_FROM_LOB_CIDS:
             micro_audience.append(row.get(lob_column, ""))
+        elif cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS:
+            micro_audience.append(row.get("micro_audience", ""))
         else:
             micro_audience.append(_MICRO_AUDIENCE_BY_CID.get(cid, ""))
     df["micro_audience"] = micro_audience

@@ -308,13 +308,24 @@ def test_add_lead_template_columns_copies_lob_for_lob_sourced_cids():
     leads_df = pd.DataFrame([
         {"CID": "119750", "LOB": "Cloud Infra"},  # IN LOB (shares IN WXO template)
         {"CID": "119751", "LOB": "Data & AI"},    # AU LOB (shares AU WXO template)
-        {"CID": "120131", "LOB": "Security"},     # IN DigiSov
     ])
 
     result = add_lead_template_columns(leads_df, "CID")
 
-    assert list(result["micro_audience"]) == ["Cloud Infra", "Data & AI", "Security"]
-    assert list(result["Industry"]) == ["All", "All", "All"]
+    assert list(result["micro_audience"]) == ["Cloud Infra", "Data & AI"]
+    assert list(result["Industry"]) == ["All", "All"]
+
+
+def test_add_lead_template_columns_copies_the_leadfiles_own_micro_audience_for_digisov():
+    # IN DigiSov (120131) is neither a fixed value nor sourced from LOB --
+    # the leadfile carries its own micro_audience column directly, which
+    # passes straight through under the same header name.
+    leads_df = pd.DataFrame([{"CID": "120131", "micro_audience": "Security Leaders"}])
+
+    result = add_lead_template_columns(leads_df, "CID")
+
+    assert result.loc[0, "micro_audience"] == "Security Leaders"
+    assert result.loc[0, "Industry"] == "All"
 
 
 def test_add_lead_template_columns_blank_for_unmapped_cid():
