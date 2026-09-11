@@ -32,9 +32,17 @@ AGREED_CONTACTED_COLUMN = "Agreed to be contacted by Dell Technologies"
 PHONE_OPTIN_COLUMN = "Phone Opt-In"
 MAIL_OPTIN_COLUMN = "Mail Opt-In"
 SIGNAL_NOTES_COLUMN = "Signal Notes"
+CUSTOMER_COMMENTS_COLUMN = "Customer Comments"
+# Dell EMEA only (see _DELL_APAC_CIDS) -- prefixed onto the leadfile's own
+# Customer Comments value when non-blank; a blank value stays blank.
+CUSTOMER_COMMENTS_PREFIX = "Accounts Researching - "
 # Per-CID constant, not derived from anything in the leadfile -- confirmed
-# business rule for this client's two CID groups.
+# business rule for Dell APAC's two CID groups specifically. Any other
+# CID (Dell EMEA) instead passes through whatever its own leadfile
+# already carries for this column -- see the AGREED_CONTACTED_COLUMN and
+# SIGNAL_NOTES_COLUMN handling below, both gated on this same CID set.
 AGREED_CONTACTED_BY_CID = {"119414": "No", "119415": "Yes"}
+_DELL_APAC_CIDS = frozenset(AGREED_CONTACTED_BY_CID)
 # Which specifications-file link column Form URL is checked/corrected
 # against, per CID -- "Publisher Link [AU]_BHRS" is for 119415 (AU),
 # "Publisher Link INDIA]_ECS" is for 119414 (India); each CID has its own
@@ -49,6 +57,7 @@ _KNOWN_COLUMNS = (
     INSTALLED_TECH_COLUMN, PBS_COLUMN, DOWNLOAD_DAY_COLUMN,
     DOWNLOAD_MONTH_COLUMN, DOWNLOAD_YEAR_COLUMN, AGREED_CONTACTED_COLUMN,
     PHONE_OPTIN_COLUMN, MAIL_OPTIN_COLUMN, SIGNAL_NOTES_COLUMN,
+    CUSTOMER_COMMENTS_COLUMN,
 )
 
 
@@ -555,11 +564,23 @@ def apply_complex_account_rules(
     uploaded, or no match for that domain) gets that lead's corresponding
     column cleared to blank, per design.
 
-    Agreed to be contacted by Dell Technologies / Phone Opt-In: fixed
-    business rules for this client's two CID groups (see
-    AGREED_CONTACTED_BY_CID), not derived from the leadfile at all. Mail
-    Opt-In and Signal Notes are always cleared to blank, regardless of
-    what the leadfile has.
+    Phone Opt-In: always "Yes" for every lead, regardless of CID or what
+    the leadfile has. Mail Opt-In: always cleared to blank for every lead.
+
+    Agreed to be contacted by Dell Technologies: fixed business rule for
+    Dell APAC's two CID groups specifically (see AGREED_CONTACTED_BY_CID),
+    not derived from the leadfile at all for those two. Any other CID
+    (Dell EMEA) instead passes through whatever its own leadfile already
+    has for this column, unchanged.
+
+    Signal Notes: cleared to blank for Dell APAC's two CID groups (same
+    _DELL_APAC_CIDS set as above); passed through unchanged from the
+    leadfile for every other CID (Dell EMEA).
+
+    Customer Comments: Dell EMEA only (any CID outside _DELL_APAC_CIDS) --
+    prefixed with CUSTOMER_COMMENTS_PREFIX ("Accounts Researching - ")
+    when the leadfile's own value is non-blank, else left blank. Dell
+    APAC CIDs leave this column untouched.
     """
     df = _normalize_known_columns(leads_df.copy())
     review: dict[int, list[ReviewDetail]] = {}
@@ -584,7 +605,15 @@ def apply_complex_account_rules(
 
         cid = _norm_cid(row.get(field_mapping.cid, ""))
         if AGREED_CONTACTED_COLUMN in df.columns:
-            df.at[idx, AGREED_CONTACTED_COLUMN] = AGREED_CONTACTED_BY_CID.get(cid, "")
+            df.at[idx, AGREED_CONTACTED_COLUMN] = AGREED_CONTACTED_BY_CID.get(
+                cid, row.get(AGREED_CONTACTED_COLUMN, ""))
+
+        if SIGNAL_NOTES_COLUMN in df.columns and cid in _DELL_APAC_CIDS:
+            df.at[idx, SIGNAL_NOTES_COLUMN] = ""
+
+        if CUSTOMER_COMMENTS_COLUMN in df.columns and cid not in _DELL_APAC_CIDS:
+            comment = str(row.get(CUSTOMER_COMMENTS_COLUMN, "") or "").strip()
+            df.at[idx, CUSTOMER_COMMENTS_COLUMN] = f"{CUSTOMER_COMMENTS_PREFIX}{comment}" if comment else ""
 
         if asset_specs is not None and ASSET_TITLE_COLUMN in df.columns:
             spec = asset_specs.get(str(row.get(ASSET_TITLE_COLUMN, "") or "").strip().lower())
@@ -614,9 +643,6 @@ def apply_complex_account_rules(
 
     if MAIL_OPTIN_COLUMN in df.columns:
         df[MAIL_OPTIN_COLUMN] = ""
-
-    if SIGNAL_NOTES_COLUMN in df.columns:
-        df[SIGNAL_NOTES_COLUMN] = ""
 
     if TOP_TOPICS_COLUMN in df.columns:
         df[TOP_TOPICS_COLUMN] = df[TOP_TOPICS_COLUMN].apply(

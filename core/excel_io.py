@@ -686,6 +686,14 @@ def append_leads(
                 # and filters like a real date instead.
                 if was_general_format and isinstance(cell.value, (datetime.date, datetime.datetime)):
                     cell.number_format = "mm/dd/yyyy"
+                # "Capture Date" specifically must always render mm/dd/yyyy,
+                # even when style_template_row's own cell already carried
+                # some OTHER inherited format (e.g. left over from however
+                # the template was originally built) -- that inherited
+                # format is what column_styles copied above, so the
+                # was_general_format check alone isn't enough here.
+                elif header_norm == "capturedate" and isinstance(cell.value, (datetime.date, datetime.datetime)):
+                    cell.number_format = "mm/dd/yyyy"
 
     if highlight_fill and not leads_df.empty:
         # Only ever one batch highlighted at a time — strip ANY fill color

@@ -485,6 +485,48 @@ def test_apply_complex_account_rules_clears_mail_optin_and_signal_notes():
     assert enriched.loc[0, "Signal Notes"] == ""
 
 
+def test_apply_complex_account_rules_passes_through_signal_notes_and_agreed_contacted_for_non_apac_cids():
+    # Dell EMEA (any CID outside Dell APAC's two groups) isn't covered by
+    # the fixed AGREED_CONTACTED_BY_CID rule or the Signal Notes clearing
+    # rule -- both are Dell APAC-specific. For every other CID, the
+    # leadfile's own values for these two columns must pass through
+    # unchanged, not get blanked or overwritten.
+    df = pd.DataFrame([{
+        **_base_leads_df().iloc[0].to_dict(), "CID": "205001",
+        "Agreed to be contacted by Dell Technologies": "Yes",
+        "Signal Notes": "Downloaded whitepaper twice",
+    }])
+
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert enriched.loc[0, "Agreed to be contacted by Dell Technologies"] == "Yes"
+    assert enriched.loc[0, "Signal Notes"] == "Downloaded whitepaper twice"
+
+
+def test_apply_complex_account_rules_prefixes_customer_comments_for_non_apac_cids():
+    df = pd.DataFrame([
+        {**_base_leads_df().iloc[0].to_dict(), "CID": "205001",
+         "Customer Comments": "Evaluating cloud migration options"},
+        {**_base_leads_df().iloc[0].to_dict(), "CID": "205001", "Customer Comments": ""},
+    ])
+
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert enriched.loc[0, "Customer Comments"] == "Accounts Researching - Evaluating cloud migration options"
+    assert enriched.loc[1, "Customer Comments"] == ""
+
+
+def test_apply_complex_account_rules_leaves_customer_comments_untouched_for_dell_apac():
+    df = pd.DataFrame([{
+        **_base_leads_df().iloc[0].to_dict(), "CID": "119414",  # Dell APAC
+        "Customer Comments": "some raw comment",
+    }])
+
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert enriched.loc[0, "Customer Comments"] == "some raw comment"
+
+
 def test_apply_complex_account_rules_matches_leads_from_different_cids_off_one_shared_map():
     # The whole point of the single combined file: a lead's CID doesn't
     # gate whether its domain gets matched -- two leads on different CIDs

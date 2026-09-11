@@ -344,6 +344,36 @@ def test_append_leads_writes_a_real_date_value_with_date_number_format(tmp_path)
     assert cell.number_format == "mm/dd/yyyy"
 
 
+def test_append_leads_forces_mmddyyyy_for_capture_date_even_with_a_different_inherited_format(tmp_path):
+    # Regression: when an existing data row's Capture Date cell already
+    # carries SOME non-"General" number format (e.g. left over from a
+    # previous run, or however the template was originally built), new
+    # rows inherit that row's styling wholesale -- and since it wasn't
+    # "General", the old code skipped forcing mm/dd/yyyy, silently
+    # leaving Capture Date in whatever format the old row happened to
+    # have. Capture Date specifically must always end up mm/dd/yyyy.
+    path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Lookup"
+    template = wb.create_sheet("Report")
+    template.append(["CID", "emailaddress", "firstname", "lastname", "company", "Capture Date"])
+    template.append([100, "old@x.com", "Old", "Lead", "X", datetime.date(2026, 8, 1)])
+    template.cell(row=2, column=6).number_format = "dd-mmm-yy"
+    wb.save(path)
+
+    leads_df = pd.DataFrame([
+        {"CID": 200, "emailaddress": "new@y.com", "firstname": "New", "lastname": "Lead", "company": "Y",
+         "Capture Date": datetime.date(2026, 8, 17)},
+    ])
+
+    append_leads(path, "Report", leads_df, _field_mapping(), run_date="2026-08-08")
+
+    ws = openpyxl.load_workbook(path)["Report"]
+    cell = ws.cell(row=3, column=6)
+    assert cell.value == datetime.datetime(2026, 8, 17)
+    assert cell.number_format == "mm/dd/yyyy"
+
+
 def test_append_leads_highlight_fill_clears_previous_run_highlight(tmp_path):
     path = str(tmp_path / "lead_report.xlsx")
     wb = openpyxl.Workbook()
