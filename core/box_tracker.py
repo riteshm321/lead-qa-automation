@@ -65,6 +65,13 @@ def sent_for_approval_label(today: datetime.date) -> str:
     return f"Sent for Approval - {today.strftime('%d-%b')}"
 
 
+def uploaded_to_approval_sheet_label(today: datetime.date) -> str:
+    # Marks a lead the user added straight to the real Approval Sheet
+    # themselves, bypassing the tool's automated Pacing-driven picking --
+    # step 2 treats this the same as "Sent for Approval".
+    return f"Uploaded to Approval Sheet - {today.strftime('%d-%b')}"
+
+
 def cleared_for_upload_label(today: datetime.date) -> str:
     return f"Cleared for Upload - {today.strftime('%d-%b')}"
 
@@ -260,10 +267,14 @@ def set_pacing_delivered(
         wb.close()
 
 
-# CXO's (118742) fixed Project Code, same pattern as
-# _MICRO_AUDIENCE_BY_CID. Every CID's AMAL ID (including CXO's) comes
+# Newly live segments' fixed Project Code, same pattern as
+# _MICRO_AUDIENCE_BY_CID. Every CID's AMAL ID (including these) comes
 # straight from its own leadfile column -- see parse_amal_id.
-_PROJECT_CODE_OVERRIDE_BY_CID = {"118742": "L-22UMP"}
+_PROJECT_CODE_OVERRIDE_BY_CID = {
+    "120129": "CXOAP",  # AU CXO
+    "120130": "CXOAP",  # IN CXO
+    "120131": "SNCAP",  # IN DigiSov
+}
 
 # Response Details' Campaign Type is a fixed tactic abbreviation per
 # campaign (matches the Pacing tab's own Tactic column: "2 Touch +
@@ -271,9 +282,11 @@ _PROJECT_CODE_OVERRIDE_BY_CID = {"118742": "L-22UMP"}
 # listed here (segments not live yet) get a blank.
 _CAMPAIGN_TYPE_BY_CID = {
     "118741": "2T",  # Bob
-    "118743": "2T",  # wxO (AI Pod) IN
-    "118745": "2T",  # wxO (AI Pod) AU
-    "118742": "1T",  # CXO
+    "118743": "2T",  # IN WXO
+    "118745": "2T",  # AU WXO
+    "120129": "1T",  # AU CXO
+    "120130": "1T",  # IN CXO
+    "120131": "1T",  # IN DigiSov
 }
 
 
@@ -308,13 +321,14 @@ def project_code_for_cid(cid: str, leadfile_value: str) -> str:
 # pattern as Dell's AGREED_CONTACTED_BY_CID in core/complex_account.py.
 _MICRO_AUDIENCE_BY_CID = {
     "118741": "Platform_SWE",  # Bob
-    "118742": "All",           # CXO
-    "118743": "AI Leaders",    # wxO (AI Pod) IN
-    "118745": "AI Leaders",    # wxO (AI Pod) AU
+    "120129": "All",           # AU CXO
+    "118743": "AI Leaders",    # IN WXO
+    "118745": "AI Leaders",    # AU WXO
+    "120130": "All_CXO",       # IN CXO
 }
-# These two CIDs instead copy the leadfile's own LOB column value through
-# as micro_audience, rather than a fixed string.
-_MICRO_AUDIENCE_FROM_LOB_CIDS = {"119750", "119751"}  # WXO IN, WXO AU
+# These CIDs instead copy the leadfile's own LOB column value through as
+# micro_audience, rather than a fixed string.
+_MICRO_AUDIENCE_FROM_LOB_CIDS = {"119750", "119751", "120131"}  # IN LOB, AU LOB, IN DigiSov
 _LEAD_TEMPLATE_INDUSTRY_VALUE = "All"
 
 
@@ -361,6 +375,7 @@ def add_lead_template_columns(
     leads_df: pd.DataFrame, cid_column: str, lob_column: str = "LOB",
     template_constants: dict[str, object] | None = None,
     asset_title_column: str = "Asset Title", country_column: str = "Country",
+    company_size_column: str = "Company Size",
     timestamp_column: str = "Timestamp", now: datetime.datetime | None = None,
 ) -> pd.DataFrame:
     """Adds/fills every Lead Template-only column on a copy of leads_df:
@@ -372,10 +387,10 @@ def add_lead_template_columns(
     - template_constants (if given): AID/NC_EMAIL_DETAIL/NC_TELE_DETAIL/
       campaign_code (see read_lead_template_constants), set the same on
       every row.
-    - asset_title/country (if template_constants was given and the
+    - asset_title/country/Q_COMPS (if template_constants was given and the
       leadfile has these columns): passed through from the leadfile's own
-      Asset Title/Country columns under the Lead Template's lowercase
-      header names.
+      Asset Title/Country/Company Size columns under the Lead Template's
+      own header names.
     - user_transaction_date (if template_constants was given): parsed
       per-row from the leadfile's own Timestamp column -- which arrives as
       plain text in whatever format the source system wrote it in -- and
@@ -402,6 +417,8 @@ def add_lead_template_columns(
             df["asset_title"] = df[asset_title_column]
         if country_column in df.columns:
             df["country"] = df[country_column]
+        if company_size_column in df.columns:
+            df["Q_COMPS"] = df[company_size_column]
 
         fallback = (now or datetime.datetime.now()).strftime(_LEAD_TEMPLATE_DATE_FORMAT)
         if timestamp_column in df.columns:

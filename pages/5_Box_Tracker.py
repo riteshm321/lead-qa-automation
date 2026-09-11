@@ -11,6 +11,7 @@ from core.box_tracker import (
     cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
     append_mirror_rows, set_pacing_delivered, add_lead_template_columns, read_lead_template_constants,
     project_code_for_cid, parse_amal_id, strip_country_suffix, campaign_type_for_cid,
+    uploaded_to_approval_sheet_label,
 )
 from core.branding import configure_page
 from core.excel_io import read_sheet_as_dataframe, append_leads, find_header_row
@@ -18,11 +19,11 @@ from core.profile_store import list_profile_names, load_profile
 
 _current_user = configure_page("Box Tracker")
 st.title("📦 Box Tracker")
-st.caption(
-    "For Complex Account clients whose lead-approval process runs through a Box-hosted tracker "
-    "workbook this app has no API access to. Every write here goes to a LOCAL MIRROR workbook — "
-    "you copy the results into the real Box file by hand."
-)
+
+# This workflow is specific to IBM APAC's Box-hosted lead-approval
+# tracker -- no other client runs this process, so the page is tied to
+# that one client rather than offered as a generic multi-client picker.
+_IBM_APAC_CLIENT_NAME = "IBM APAC Interactive Avenues Pvt Ltd"
 
 _STATUS_COLUMN = "Status"
 _APPROVAL_SHEET_TAB = "Approval Sheet"
@@ -36,19 +37,24 @@ _RESPONSE_DETAILS_PUBLISHER_NAME = "Madison Logic"
 _RESPONSE_DETAILS_SOURCE_SITE = "madisonlogic.com"
 _PACING_TAB = "Pacing"
 _SENT_STATUS_PREFIX = "Sent for Approval"
+_MANUAL_STATUS_PREFIX = "Uploaded to Approval Sheet"
 _CLEARED_STATUS_PREFIX = "Cleared for Upload"
 
-profile_names = [
-    name for name in list_profile_names(get_clients_dir())
-    if load_profile(name, get_clients_dir()).box_tracker.enabled
-]
-if not profile_names:
-    st.warning("No client has Box Tracker enabled yet. Set it up on the Client Setup page first.")
+if _IBM_APAC_CLIENT_NAME not in list_profile_names(get_clients_dir()):
+    st.warning(f"Client \"{_IBM_APAC_CLIENT_NAME}\" isn't set up yet. Set it up on the Client Setup page first.")
     st.stop()
 
-client_name = st.selectbox("Client", profile_names)
-profile = load_profile(client_name, get_clients_dir())
+profile = load_profile(_IBM_APAC_CLIENT_NAME, get_clients_dir())
+if not profile.box_tracker.enabled:
+    st.warning("Box Tracker isn't enabled for this client yet. Enable it on the Client Setup page first.")
+    st.stop()
 _pacing_skipped = set(profile.box_tracker.pacing_skipped_campaigns)
+
+st.caption(
+    f"**{_IBM_APAC_CLIENT_NAME}**'s Box-hosted lead-approval tracker has no API access, so every "
+    "write here goes to a LOCAL MIRROR workbook — you copy the results into the real Box file by "
+    "hand. Work through the 3 steps below in order."
+)
 
 
 def _set_status_for_emails(email_col: str, emails: set[str], label: str) -> None:
@@ -67,15 +73,20 @@ def _set_status_for_emails(email_col: str, emails: set[str], label: str) -> None
     wb.save(profile.accumulated_report_path)
 
 
-st.subheader("1. Pick leads and send for approval")
+st.subheader("1. Send leads for approval")
 st.caption(
-    f"Reads {profile.box_tracker.mirror_workbook_path}'s Pacing summary block, picks "
-    f"(Diff + 5) blank-{_STATUS_COLUMN} leads per campaign from the Accumulated Report (or ALL "
-    "available leads for any campaign listed under Client Setup's \"skip Pacing updates\" list), "
-    f"writes them into the mirror's {_APPROVAL_SHEET_TAB} tab, marks their {_STATUS_COLUMN}, and "
-    "sets this week's Pacing Delivered count to the number sent (skipped entirely for those same "
-    "campaigns)."
+    "**Use this when:** you want the tool to pick leads for you, based on this week's Pacing "
+    "numbers, and write them into the mirror's Approval Sheet automatically."
 )
+with st.expander("ℹ️ How this works"):
+    st.write(
+        f"Reads {profile.box_tracker.mirror_workbook_path}'s Pacing summary block, picks "
+        f"(Diff + 5) blank-{_STATUS_COLUMN} leads per campaign from the Accumulated Report (or ALL "
+        "available leads for any campaign listed under Client Setup's \"skip Pacing updates\" list), "
+        f"writes them into the mirror's {_APPROVAL_SHEET_TAB} tab, marks their {_STATUS_COLUMN}, and "
+        "sets this week's Pacing Delivered count to the number sent (skipped entirely for those same "
+        "campaigns)."
+    )
 
 if st.button("Pick leads and send for approval", key="pick_and_send_button"):
     try:
@@ -147,35 +158,70 @@ if st.button("Pick leads and send for approval", key="pick_and_send_button"):
     except Exception as exc:
         st.error(f"Error: {exc}")
 
+with st.expander("✋ Or: I already added these leads to the real Approval Sheet myself"):
+    st.caption(
+        "**Use this when:** you approved leads directly in the real Box file, skipping the "
+        "automated picking above. Select them here so step 2 below can find and pick them up."
+    )
+    try:
+        _accumulated_for_manual = read_sheet_as_dataframe(
+            profile.accumulated_report_path, profile.accumulated_tab_name)
+        _blank_status_df = _accumulated_for_manual[
+            _accumulated_for_manual[_STATUS_COLUMN].fillna("").astype(str).str.strip() == ""
+        ]
+    except Exception as exc:
+        _blank_status_df = pd.DataFrame()
+        st.error(f"Could not load Accumulated Report: {exc}")
+
+    if _blank_status_df.empty:
+        st.caption("No blank-Status leads available to mark.")
+    else:
+        _manual_email_col = profile.field_mapping.email
+        manual_flags: dict[str, bool] = {}
+        for _, lead in _blank_status_df.iterrows():
+            email = str(lead.get(_manual_email_col, ""))
+            manual_flags[email] = st.checkbox(f"Mark {email}", key=f"manual_{email}")
+
+        if st.button("Mark as added to Approval Sheet", key="mark_manual_button"):
+            marked_emails = {e for e, flag in manual_flags.items() if flag}
+            if not marked_emails:
+                st.warning("No leads checked — nothing to mark.")
+            else:
+                _set_status_for_emails(
+                    _manual_email_col, marked_emails, uploaded_to_approval_sheet_label(datetime.date.today()))
+                st.success(
+                    f"Marked {len(marked_emails)} lead(s) as \"{_MANUAL_STATUS_PREFIX}\" — "
+                    "they'll show up in step 2 below."
+                )
+
 st.divider()
 st.subheader("2. Write cleared leads to the Lead Template")
 st.caption(
-    "Once the client gives the green flag for some or all leads sent for approval: check which ones "
-    "are cleared, and the tool fills in micro_audience/Industry/AID/campaign_code/etc. and writes them "
-    "into that CID's Lead Template file (routed by CID — see Client Setup). **Any existing leads "
-    "already in that file are wiped first** — new leads always start fresh at row 2. You then upload "
-    "them to the client portal by hand."
+    "**Use this when:** the client has approved some or all leads from step 1 (either the "
+    "automated or the manual path), and you're ready to prep them for portal upload."
 )
-
-_show_manual_leads = st.checkbox(
-    "Also include leads not yet marked \"Sent for Approval\" "
-    "(e.g. you added them to the real Approval Sheet yourself, skipping step 1)",
-    key="show_manual_leads",
-)
+with st.expander("ℹ️ How this works"):
+    st.write(
+        "The tool fills in micro_audience/Industry/AID/campaign_code/etc. and writes cleared leads "
+        "into that CID's Lead Template file (routed by CID — see Client Setup). **Any existing leads "
+        "already in that file are wiped first** — new leads always start fresh at row 2. You then "
+        "upload them to the client portal by hand."
+    )
 
 try:
     _accumulated_for_clearing = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
     _clearing_status = _accumulated_for_clearing[_STATUS_COLUMN].fillna("").astype(str)
-    _clearance_mask = _clearing_status.str.startswith(_SENT_STATUS_PREFIX)
-    if _show_manual_leads:
-        _clearance_mask = _clearance_mask | (_clearing_status.str.strip() == "")
+    _clearance_mask = (
+        _clearing_status.str.startswith(_SENT_STATUS_PREFIX)
+        | _clearing_status.str.startswith(_MANUAL_STATUS_PREFIX)
+    )
     _awaiting_clearance_df = _accumulated_for_clearing[_clearance_mask]
 except Exception as exc:
     _awaiting_clearance_df = pd.DataFrame()
     st.error(f"Could not load Accumulated Report: {exc}")
 
 if _awaiting_clearance_df.empty:
-    st.caption(f"No leads currently marked \"{_SENT_STATUS_PREFIX}\".")
+    st.caption(f"No leads currently marked \"{_SENT_STATUS_PREFIX}\" or \"{_MANUAL_STATUS_PREFIX}\".")
 else:
     _clear_email_col = profile.field_mapping.email
     clear_flags: dict[str, bool] = {}
@@ -194,14 +240,24 @@ else:
                 _awaiting_clearance_df[_clear_email_col].astype(str).isin(cleared_emails)
             ]
 
+            # Group by the resolved TEMPLATE FILE, not by CID -- several
+            # CIDs can route to the same Lead Template (e.g. IN LOB and
+            # IN WXO share one file, see Client Setup). Grouping by CID
+            # would write one CID's rows with clear_existing=True and then
+            # wipe them out again writing the next CID into the same file.
+            cleared_df = cleared_df.copy()
+            cleared_df["_template_path"] = cleared_df[profile.field_mapping.cid].astype(str).map(
+                profile.box_tracker.cid_lead_template_path.get)
+
+            missing_template_cids: set[str] = set(
+                cleared_df.loc[cleared_df["_template_path"].isna(), profile.field_mapping.cid].astype(str)
+            )
+
             written_cids: list[str] = []
             written_emails: set[str] = set()
-            missing_template_cids: set[str] = set()
-            for cid, group in cleared_df.groupby(cleared_df[profile.field_mapping.cid].astype(str)):
-                template_path = profile.box_tracker.cid_lead_template_path.get(cid)
-                if not template_path:
-                    missing_template_cids.add(cid)
-                    continue
+            routed_df = cleared_df[cleared_df["_template_path"].notna()]
+            for template_path, group in routed_df.groupby("_template_path"):
+                group = group.drop(columns="_template_path")
                 template_wb = openpyxl.load_workbook(template_path, read_only=True)
                 sheet_name = template_wb.active.title
                 template_wb.close()
@@ -224,7 +280,7 @@ else:
                     template_path, sheet_name, enriched_group, profile.field_mapping,
                     datetime.date.today(), header_row=header_row, clear_existing=True,
                 )
-                written_cids.append(cid)
+                written_cids.extend(sorted(group[profile.field_mapping.cid].astype(str).unique()))
                 written_emails.update(group[_clear_email_col].astype(str))
 
             if written_emails:
@@ -234,7 +290,7 @@ else:
             if missing_template_cids:
                 st.warning(
                     f"No Lead Template path configured for CID(s): {', '.join(sorted(missing_template_cids))} "
-                    "— those leads were left as \"Sent for Approval\" and not written anywhere. "
+                    "— those leads were left with their current Status and not written anywhere. "
                     "Add their template path in Client Setup and try again."
                 )
         except Exception as exc:
@@ -243,10 +299,15 @@ else:
 st.divider()
 st.subheader("3. Reconcile portal upload status")
 st.caption(
-    "For leads already cleared and pasted into the Lead Template, then uploaded to the client "
-    "portal by hand: check any that the portal rejected, with a reason. Everything left unchecked "
-    "is treated as accepted."
+    "**Use this when:** you've already pasted step 2's leads into the client portal by hand, "
+    "and know which (if any) the portal rejected."
 )
+with st.expander("ℹ️ How this works"):
+    st.write(
+        "Check any leads the portal rejected, with a reason — they'll be moved to the Refund tab. "
+        "Everything left unchecked is treated as accepted, logged to Response Details, and counted "
+        "toward this week's Pacing Delivered total."
+    )
 
 try:
     _accumulated_df = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)

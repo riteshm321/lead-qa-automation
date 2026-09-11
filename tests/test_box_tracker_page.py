@@ -71,7 +71,7 @@ def _save_profile(acc_path, mirror_path, cid_campaign_map=None, cid_lead_templat
                    pacing_skipped_campaigns=None):
     fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
     profile = ClientProfile(
-        name="IBM APAC", accumulated_report_path=acc_path, field_mapping=fm,
+        name="IBM APAC Interactive Avenues Pvt Ltd", accumulated_report_path=acc_path, field_mapping=fm,
         complex_account=ComplexAccountConfig(enabled=True),
         box_tracker=BoxTrackerConfig(
             enabled=True, mirror_workbook_path=mirror_path,
@@ -98,7 +98,6 @@ def test_pick_and_send_writes_approval_sheet_mirror_and_sets_pacing(tmp_path, mo
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.selectbox[0].set_value("IBM APAC").run()
 
     pick_button = next(b for b in at.button if b.label == "Pick leads and send for approval")
     pick_button.click().run()
@@ -135,7 +134,6 @@ def test_pick_and_send_reports_shortfall(tmp_path, monkeypatch):
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.selectbox[0].set_value("IBM APAC").run()
     at.button(key="pick_and_send_button").click().run()
 
     assert not at.exception
@@ -158,7 +156,6 @@ def test_pick_and_send_takes_all_leads_and_skips_pacing_for_skipped_campaign(tmp
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.selectbox[0].set_value("IBM APAC").run()
     at.button(key="pick_and_send_button").click().run()
 
     assert not at.exception
@@ -192,7 +189,6 @@ def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existi
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.selectbox[0].set_value("IBM APAC").run()
 
     clear_checkbox = next(cb for cb in at.checkbox if cb.key == "clear_lead1@x.com")
     clear_checkbox.set_value(True).run()
@@ -221,12 +217,12 @@ def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existi
     assert status.startswith("Cleared for Upload")
 
 
-def test_write_cleared_leads_hides_blank_status_leads_by_default(tmp_path, monkeypatch):
-    # A lead the user approved by hand (added straight to the real Approval
-    # Sheet themselves, skipping step 1) never gets "Sent for Approval"
-    # written to its Status -- it's blank. It must stay hidden from step 2
-    # by default, so the guided flow's per-CID Pacing target isn't quietly
-    # bypassed by leads step 1 never picked.
+def test_manual_marking_hides_blank_leads_from_step_2_until_marked(tmp_path, monkeypatch):
+    # A lead the user approved by hand (added straight to the real
+    # Approval Sheet themselves, skipping step 1) starts with a blank
+    # Status. It must stay hidden from step 2 until explicitly marked via
+    # the "I already added these myself" flow, so the guided flow's
+    # per-CID Pacing target isn't quietly bypassed by untouched leads.
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
     mirror_path = str(tmp_path / "mirror.xlsx")
@@ -240,12 +236,17 @@ def test_write_cleared_leads_hides_blank_status_leads_by_default(tmp_path, monke
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.selectbox[0].set_value("IBM APAC").run()
 
     assert not any(cb.key == "clear_manual@x.com" for cb in at.checkbox)
+    assert any(cb.key == "manual_manual@x.com" for cb in at.checkbox)
 
-    show_manual_checkbox = next(cb for cb in at.checkbox if cb.key == "show_manual_leads")
-    show_manual_checkbox.set_value(True).run()
+    at.checkbox(key="manual_manual@x.com").set_value(True).run()
+    at.button(key="mark_manual_button").click().run()
+
+    assert not at.exception
+    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
+    status = accumulated_df.loc[accumulated_df["Email"] == "manual@x.com", "Status"].iloc[0]
+    assert status.startswith("Uploaded to Approval Sheet")
 
     assert any(cb.key == "clear_manual@x.com" for cb in at.checkbox)
 
@@ -268,7 +269,6 @@ def test_write_cleared_leads_copies_lob_for_wxo_cids(tmp_path, monkeypatch):
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.selectbox[0].set_value("IBM APAC").run()
     at.checkbox(key="clear_lead1@x.com").set_value(True).run()
     at.button(key="write_lead_template_button").click().run()
 
@@ -276,6 +276,45 @@ def test_write_cleared_leads_copies_lob_for_wxo_cids(tmp_path, monkeypatch):
     template_df = pd.read_excel(template_path, sheet_name="LEAD_TEMPLATE")
     assert template_df.loc[0, "micro_audience"] == "Cloud Infra"
     assert template_df.loc[0, "campaign_code"] == "PAIAP"  # carried over from the template's own row
+
+
+def test_write_cleared_leads_combines_multiple_cids_sharing_one_template(tmp_path, monkeypatch):
+    # IN WXO (118743) and IN LOB (119750) route to the same Lead Template
+    # file. Writing both in one pass must not let the second CID's
+    # clear_existing wipe out the first CID's just-written rows.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    template_path = str(tmp_path / "wxo_template.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118743",
+         "Status": "Sent for Approval - 07-Sep", "LOB": "Ops"},
+        {"Email": "lead2@x.com", "First": "F", "Last": "L", "Company": "Y", "CID": "119750",
+         "Status": "Sent for Approval - 07-Sep", "LOB": "Cloud Infra"},
+    ])
+    _make_mirror(mirror_path)
+    _make_lead_template(template_path, existing_rows=[
+        ["L-22SD8", "UC", "UC", "2026-08-11 07:25:59", "PAIAP", "Old Asset", "IN", "AI Leaders", "All",
+         "Old", "Lead", "old.lead@x.com", "Old Co"],
+    ])
+    _save_profile(acc_path, mirror_path, cid_lead_template_path={
+        "118743": template_path, "119750": template_path,
+    })
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    at.checkbox(key="clear_lead1@x.com").set_value(True).run()
+    at.checkbox(key="clear_lead2@x.com").set_value(True).run()
+    at.button(key="write_lead_template_button").click().run()
+
+    assert not at.exception
+    template_df = pd.read_excel(template_path, sheet_name="LEAD_TEMPLATE")
+    assert len(template_df) == 2  # both new leads present, old row wiped exactly once
+    emails = set(template_df["Email"])
+    assert emails == {"lead1@x.com", "lead2@x.com"}
+    micro_audience_by_email = dict(zip(template_df["Email"], template_df["micro_audience"]))
+    assert micro_audience_by_email["lead1@x.com"] == "AI Leaders"  # fixed value for 118743
+    assert micro_audience_by_email["lead2@x.com"] == "Cloud Infra"  # LOB passthrough for 119750
 
 
 def test_write_cleared_leads_warns_when_no_template_path_configured(tmp_path, monkeypatch):
@@ -291,7 +330,6 @@ def test_write_cleared_leads_warns_when_no_template_path_configured(tmp_path, mo
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.selectbox[0].set_value("IBM APAC").run()
     at.checkbox(key="clear_lead1@x.com").set_value(True).run()
     at.button(key="write_lead_template_button").click().run()
 
@@ -318,7 +356,6 @@ def test_upload_reconciliation_moves_rejected_to_refund_and_logs_accepted(tmp_pa
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.selectbox[0].set_value("IBM APAC").run()
 
     reject_checkbox = next(cb for cb in at.checkbox if cb.key == "reject_lead2@x.com")
     reject_checkbox.set_value(True).run()
@@ -369,7 +406,6 @@ def test_upload_reconciliation_requires_a_reason_for_rejected_leads(tmp_path, mo
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.selectbox[0].set_value("IBM APAC").run()
 
     reject_checkbox = next(cb for cb in at.checkbox if cb.key == "reject_lead1@x.com")
     reject_checkbox.set_value(True).run()

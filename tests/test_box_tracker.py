@@ -8,6 +8,7 @@ from core.box_tracker import (
     append_mirror_rows, set_pacing_delivered, add_lead_template_columns,
     cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
     read_lead_template_constants, parse_amal_id, project_code_for_cid, campaign_type_for_cid,
+    uploaded_to_approval_sheet_label,
 )
 
 
@@ -71,6 +72,7 @@ def test_status_label_formats_for_the_rest_of_the_lifecycle():
     assert cleared_for_upload_label(d) == "Cleared for Upload - 07-Sep"
     assert uploaded_accepted_label(d) == "Accepted - Uploaded - 07-Sep"
     assert uploaded_rejected_label(d) == "Rejected - Refunded - 07-Sep"
+    assert uploaded_to_approval_sheet_label(d) == "Uploaded to Approval Sheet - 07-Sep"
 
 
 def _accumulated_df(rows):
@@ -290,27 +292,29 @@ def test_set_pacing_delivered_disambiguates_same_campaign_name_by_country(tmp_pa
 def test_add_lead_template_columns_uses_the_fixed_cid_map():
     leads_df = pd.DataFrame([
         {"CID": "118741", "LOB": "Software"},   # Bob
-        {"CID": "118742", "LOB": "Finance"},    # CXO
-        {"CID": "118743", "LOB": "Ops"},        # wxO (AI Pod) IN
-        {"CID": "118745", "LOB": "Ops"},        # wxO (AI Pod) AU
+        {"CID": "120129", "LOB": "Finance"},    # AU CXO
+        {"CID": "118743", "LOB": "Ops"},        # IN WXO
+        {"CID": "118745", "LOB": "Ops"},        # AU WXO
+        {"CID": "120130", "LOB": "Finance"},    # IN CXO
     ])
 
     result = add_lead_template_columns(leads_df, "CID")
 
-    assert list(result["micro_audience"]) == ["Platform_SWE", "All", "AI Leaders", "AI Leaders"]
-    assert list(result["Industry"]) == ["All", "All", "All", "All"]
+    assert list(result["micro_audience"]) == ["Platform_SWE", "All", "AI Leaders", "AI Leaders", "All_CXO"]
+    assert list(result["Industry"]) == ["All", "All", "All", "All", "All"]
 
 
-def test_add_lead_template_columns_copies_lob_for_wxo_cids():
+def test_add_lead_template_columns_copies_lob_for_lob_sourced_cids():
     leads_df = pd.DataFrame([
-        {"CID": "119750", "LOB": "Cloud Infra"},  # WXO IN
-        {"CID": "119751", "LOB": "Data & AI"},    # WXO AU
+        {"CID": "119750", "LOB": "Cloud Infra"},  # IN LOB (shares IN WXO template)
+        {"CID": "119751", "LOB": "Data & AI"},    # AU LOB (shares AU WXO template)
+        {"CID": "120131", "LOB": "Security"},     # IN DigiSov
     ])
 
     result = add_lead_template_columns(leads_df, "CID")
 
-    assert list(result["micro_audience"]) == ["Cloud Infra", "Data & AI"]
-    assert list(result["Industry"]) == ["All", "All"]
+    assert list(result["micro_audience"]) == ["Cloud Infra", "Data & AI", "Security"]
+    assert list(result["Industry"]) == ["All", "All", "All"]
 
 
 def test_add_lead_template_columns_blank_for_unmapped_cid():
@@ -324,7 +328,8 @@ def test_add_lead_template_columns_blank_for_unmapped_cid():
 
 def test_add_lead_template_columns_injects_template_constants_and_passthroughs():
     leads_df = pd.DataFrame([
-        {"CID": "118741", "LOB": "Software", "Asset Title": "Omdia Universe", "Country": "IN"},
+        {"CID": "118741", "LOB": "Software", "Asset Title": "Omdia Universe", "Country": "IN",
+         "Company Size": "1000-5000"},
     ])
     template_constants = {
         "AID": "L-22SD7", "NC_EMAIL_DETAIL": "UC", "NC_TELE_DETAIL": "UC", "campaign_code": "PVLAP",
@@ -341,6 +346,7 @@ def test_add_lead_template_columns_injects_template_constants_and_passthroughs()
     assert result.loc[0, "campaign_code"] == "PVLAP"
     assert result.loc[0, "asset_title"] == "Omdia Universe"
     assert result.loc[0, "country"] == "IN"
+    assert result.loc[0, "Q_COMPS"] == "1000-5000"
     assert result.loc[0, "user_transaction_date"] == "2026-09-07 14:30:05"
 
 
@@ -449,18 +455,22 @@ def test_project_code_for_cid_uses_the_leadfile_value_by_default():
     assert project_code_for_cid("118743", "PAIAP") == "PAIAP"
 
 
-def test_project_code_for_cid_overrides_for_cxo():
-    # CXO's (118742) Project Code is always the fixed value, regardless of
-    # what (if anything) the leadfile carries.
-    assert project_code_for_cid("118742", "") == "L-22UMP"
-    assert project_code_for_cid("118742", "something else") == "L-22UMP"
+def test_project_code_for_cid_overrides_newly_live_segments():
+    # Newly live segments' Project Code is always the fixed value,
+    # regardless of what (if anything) the leadfile carries.
+    assert project_code_for_cid("120129", "") == "CXOAP"   # AU CXO
+    assert project_code_for_cid("120130", "") == "CXOAP"   # IN CXO
+    assert project_code_for_cid("120131", "") == "SNCAP"   # IN DigiSov
+    assert project_code_for_cid("118743", "PAIAP") == "PAIAP"  # not overridden -- leadfile value passes through
 
 
 def test_campaign_type_for_cid_known_campaigns():
     assert campaign_type_for_cid("118741") == "2T"  # Bob
-    assert campaign_type_for_cid("118743") == "2T"  # wxO (AI Pod) IN
-    assert campaign_type_for_cid("118745") == "2T"  # wxO (AI Pod) AU
-    assert campaign_type_for_cid("118742") == "1T"  # CXO
+    assert campaign_type_for_cid("118743") == "2T"  # IN WXO
+    assert campaign_type_for_cid("118745") == "2T"  # AU WXO
+    assert campaign_type_for_cid("120129") == "1T"  # AU CXO
+    assert campaign_type_for_cid("120130") == "1T"  # IN CXO
+    assert campaign_type_for_cid("120131") == "1T"  # IN DigiSov
 
 
 def test_campaign_type_for_cid_unknown_cid_is_blank():
