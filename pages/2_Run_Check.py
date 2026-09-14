@@ -102,7 +102,8 @@ with col_client:
 with col_clear:
     if st.button("🔄 Clear", use_container_width=True,
                  help="Clear the uploaded files and any displayed results, and start a fresh run."):
-        for key in ("run_result", "run_new_leads", "run_result_for", "last_finalized_summary"):
+        for key in ("run_result", "run_new_leads", "run_result_for", "last_finalized_summary",
+                    "convertr_pending_export"):
             st.session_state.pop(key, None)
         st.session_state["upload_reset_counter"] = st.session_state.get("upload_reset_counter", 0) + 1
         st.rerun()
@@ -632,11 +633,24 @@ if "run_result" in st.session_state:
         # append_leads), not from pre-formatting this into a string.
         run_date = datetime.date.today()
         unmatched_headers: set[str] = set()
-        if not valid_leads_df.empty:
+        if not valid_leads_df.empty and not profile.convertr.enabled:
             unmatched_headers.update(append_leads(
                 profile.accumulated_report_path, profile.accumulated_tab_name,
                 valid_leads_df, profile.field_mapping, run_date,
                 target_field_mapping=profile.accumulated_field_mapping))
+        elif not valid_leads_df.empty:
+            # Convertr-enabled clients skip the Accumulated write here
+            # entirely -- these leads still have to go to Convertr (and,
+            # in between, often a client job-title review) before they're
+            # accepted or rejected. Only the Convertr Reconcile step
+            # writes them to Accumulated/Refund, once that's decided.
+            # Queued for a download button rendered after the rerun below
+            # (a button created here would vanish immediately).
+            st.session_state["convertr_pending_export"] = {
+                "client_name": client_name,
+                "bytes": dataframe_to_excel_bytes(valid_leads_df, sheet_name="Valid Leads"),
+                "count": len(valid_leads_df),
+            }
         if not refund_leads_df.empty:
             unmatched_headers.update(append_leads(
                 profile.accumulated_report_path, profile.refund_tab_name,
@@ -721,7 +735,10 @@ if "run_result" in st.session_state:
         # Both callers rerun right after this returns (the plain Finalize
         # path added its own rerun below to match), so the confirmation must
         # be queued rather than shown directly here — see core/toast.py.
-        queue_toast_before_rerun("Accumulated Report updated.")
+        queue_toast_before_rerun(
+            "Refund tab updated — valid leads ready for Convertr, see below."
+            if profile.convertr.enabled else "Accumulated Report updated."
+        )
         return lead_template_links_used
 
     def _finalize_jira_summary(total_leads_in, valid_count, refund_count, lead_template_links_used):
@@ -871,6 +888,21 @@ if _just_posted_ticket:
     # retry-only click never re-posts the comment), and Streamlit discards
     # anything shown just before a rerun before the user ever sees it.
     st.success(f"Posted to {_just_posted_ticket}.")
+
+_pending_convertr_export = st.session_state.get("convertr_pending_export")
+if _pending_convertr_export and _pending_convertr_export["client_name"] == client_name:
+    st.divider()
+    st.subheader("Valid leads ready for Convertr")
+    st.caption(
+        f"{_pending_convertr_export['count']} valid lead(s) — not written to Accumulated. Download, run "
+        "through Fuzzy Match / client review as needed, then upload the final file on the Convertr page."
+    )
+    st.download_button(
+        "Download valid leads",
+        data=_pending_convertr_export["bytes"],
+        file_name=f"{client_name}_valid_leads_{datetime.date.today():%Y-%m-%d}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 _pending_summary = st.session_state.get("last_finalized_summary")
 if _pending_summary and _pending_summary["client_name"] == client_name:

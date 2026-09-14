@@ -314,6 +314,55 @@ def test_successful_finalize_records_a_completed_process_for_the_logged_in_user(
     assert activity["test-admin"]["process_count"] == 1
 
 
+def test_finalize_for_convertr_client_skips_accumulated_but_still_writes_refund(tmp_path, monkeypatch):
+    # Convertr-enabled clients hold valid leads back from Accumulated on
+    # Finalize -- they still have to go through Convertr (and often a
+    # client job-title review in between) before being accepted/rejected;
+    # only the Convertr Reconcile step writes Accumulated/Refund for those.
+    # QA-failed (refund) leads are unrelated to Convertr and still write
+    # to Refund immediately, same as any other client.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    from core.models import ConvertrConfig
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        duplicate=DuplicateConfig(enabled=True),
+        convertr=ConvertrConfig(enabled=True, enterprise="amazonbusiness"),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "valid@new.com", "First_Name": "V", "Last_Name": "Lid", "Company_Name": "X", "CID": "1"},
+        {"Email_Address": "existing@dup.com", "First_Name": "Existing", "Last_Name": "Person",
+         "Company_Name": "DupCo", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={1: "Duplicate - exact email"})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
+    assert "valid@new.com" not in accumulated_df["Email_Address"].values  # not written yet
+
+    refund_df = pd.read_excel(acc_path, sheet_name="Refund")
+    assert "existing@dup.com" in refund_df["Email_Address"].values  # QA-failed leads still write immediately
+
+    assert any("Valid leads ready for Convertr" in s.value for s in at.subheader)
+    assert any(d.label == "Download valid leads" for d in at.download_button)
+
+
 def test_select_all_as_valid_approves_every_refund_lead(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
