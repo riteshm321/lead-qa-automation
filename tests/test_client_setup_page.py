@@ -225,6 +225,55 @@ def test_box_tracker_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
     assert loaded.box_tracker.cid_campaign_map == {"118741": "Bob", "118742": "CXO"}
 
 
+def test_convertr_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    assert not any("Convertr enterprise subdomain" in t.label for t in at.text_input)
+
+    convertr_checkbox = next(c for c in at.checkbox if c.label == "This client uploads to Convertr")
+    convertr_checkbox.set_value(True).run()
+    assert not at.exception
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("Amazon Business EMEA").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    next(t for t in at.text_input if "Convertr enterprise subdomain" in t.label).set_value("amazonbusiness").run()
+    at.text_area(key="convertr_campaigns_input").set_value(
+        "120022,44709\n120021,44709\n120028,44706,80").run()
+    at.text_area(key="convertr_field_map_input").set_value("Email,email\nFirst Name,firstName").run()
+
+    # Two CIDs share campaign 44709, so only one API key field should
+    # appear for it -- not one per CID.
+    assert sum(1 for t in at.text_input if "campaign 44709" in t.label) == 1
+    at.text_input(key="convertr_api_key_44709").set_value("key-for-44709").run()
+    at.text_input(key="convertr_api_key_44706").set_value("key-for-44706").run()
+
+    save_button = next(b for b in at.button if "Save Client Profile" in b.label)
+    save_button.click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir, get_convertr_api_key
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Amazon Business EMEA", get_clients_dir())
+    assert loaded.convertr.enabled is True
+    assert loaded.convertr.enterprise == "amazonbusiness"
+    assert loaded.convertr.field_mapping == {"Email": "email", "First Name": "firstName"}
+    campaigns_by_cid = {c.cid: c for c in loaded.convertr.campaigns}
+    assert campaigns_by_cid["120022"].campaign_id == "44709"
+    assert campaigns_by_cid["120028"].campaign_id == "44706"
+    assert campaigns_by_cid["120028"].global_form_id == "80"
+
+    # The API keys must NOT be in the shared client profile JSON, only in
+    # the local app_settings.json.
+    with open(get_clients_dir() + "/Amazon Business EMEA.json", encoding="utf-8") as f:
+        assert "key-for-44709" not in f.read()
+    assert get_convertr_api_key("Amazon Business EMEA", "44709") == "key-for-44709"
+    assert get_convertr_api_key("Amazon Business EMEA", "44706") == "key-for-44706"
+
+
 def test_box_tracker_lead_template_map_and_pacing_skip_fields_save(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 

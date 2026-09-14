@@ -8,14 +8,15 @@ from core.excel_io import (
     list_sheet_names, read_sheet_as_dataframe, detect_cids_from_pacing_overview, guess_target_field_mapping,
     find_header_row, read_sheet_headers,
 )
-from core.app_settings import get_clients_dir
+from core.app_settings import get_clients_dir, get_convertr_api_key, save_convertr_api_key
 from core.branding import configure_page
+from core.convertr_client import get_campaign_form_fields, ConvertrError
 from core.file_browser import browse_for_file
 from core.jira_client import extract_ticket_key
 from core.models import (
     ClientProfile, DuplicateConfig, LeadcapConfig, LeadcapSegment,
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
-    LeadTemplateTab, ComplexAccountConfig, BoxTrackerConfig,
+    LeadTemplateTab, ComplexAccountConfig, BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 from core.toast import show_pending_toast
@@ -750,6 +751,96 @@ with tab_complex:
         else:
             st.caption("Box Tracker is disabled for this client.")
 
+        st.divider()
+        st.markdown("**Convertr Upload (optional)**")
+        st.caption(
+            "Uploads a client-verified leadfile straight to Convertr's Campaign Webhook v2 API "
+            "instead of a manual portal upload. Each CID routes to its own Convertr campaign."
+        )
+        convertr_enabled = st.checkbox(
+            "This client uploads to Convertr", value=profile.convertr.enabled if profile else False)
+        convertr_enterprise = ""
+        convertr_campaigns: list[ConvertrCampaignMapping] = []
+        convertr_field_mapping: dict[str, str] = {}
+        _convertr_api_keys_to_save: dict[str, str] = {}
+        if convertr_enabled:
+            convertr_enterprise = st.text_input(
+                "Convertr enterprise subdomain (the {{enterprise}} in https://{{enterprise}}.cvtr.io)",
+                value=profile.convertr.enterprise if profile else "")
+
+            st.caption(
+                "CID → Convertr Campaign ID (SID) mapping, one per line, format `CID,CampaignID` — "
+                "optionally add a third value for the Global Form ID once you know it: "
+                "`CID,CampaignID,GlobalFormID`:"
+            )
+            _existing_campaigns_text = "\n".join(
+                f"{c.cid},{c.campaign_id}" + (f",{c.global_form_id}" if c.global_form_id else "")
+                for c in (profile.convertr.campaigns if profile else [])
+            )
+            _campaigns_text = st.text_area(
+                "CID to Convertr campaign mapping", value=_existing_campaigns_text,
+                key="convertr_campaigns_input", label_visibility="collapsed", height=160)
+            for _line in _campaigns_text.splitlines():
+                _line = _line.strip()
+                if not _line or "," not in _line:
+                    continue
+                _parts = [p.strip() for p in _line.split(",")]
+                _cid, _campaign_id = _parts[0], _parts[1]
+                _global_form_id = _parts[2] if len(_parts) > 2 else ""
+                convertr_campaigns.append(ConvertrCampaignMapping(
+                    cid=_cid, campaign_id=_campaign_id, global_form_id=_global_form_id))
+
+            st.caption(
+                "Leadfile column → Convertr form field name mapping, one per line, format "
+                "`Leadfile Column,convertrFieldName` (e.g. `Email,email`):"
+            )
+            _existing_field_map_text = "\n".join(
+                f"{col},{field_name}" for col, field_name in
+                (profile.convertr.field_mapping.items() if profile else [])
+            )
+            _field_map_text = st.text_area(
+                "Convertr field mapping", value=_existing_field_map_text,
+                key="convertr_field_map_input", label_visibility="collapsed", height=120)
+            for _line in _field_map_text.splitlines():
+                _line = _line.strip()
+                if not _line or "," not in _line:
+                    continue
+                _col, _field_name = _line.split(",", 1)
+                convertr_field_mapping[_col.strip()] = _field_name.strip()
+
+            _unique_campaign_ids = sorted({c.campaign_id for c in convertr_campaigns if c.campaign_id})
+            if _unique_campaign_ids:
+                st.caption(
+                    "Campaign API Key per campaign (from that campaign's Admin → Setup → Advanced in "
+                    "Convertr) — stored locally on this machine only, never in the shared client profile:"
+                )
+            for _campaign_id in _unique_campaign_ids:
+                _key_col, _test_col = st.columns([3, 1])
+                _existing_key = get_convertr_api_key(client_name, _campaign_id) if client_name else ""
+                _entered_key = _key_col.text_input(
+                    f"API key — campaign {_campaign_id}", value=_existing_key, type="password",
+                    key=f"convertr_api_key_{_campaign_id}")
+                _convertr_api_keys_to_save[_campaign_id] = _entered_key
+                if _test_col.button("Test connection", key=f"convertr_test_{_campaign_id}"):
+                    if not convertr_enterprise or not _entered_key:
+                        st.warning("Enter the enterprise subdomain and this campaign's API key first.")
+                    else:
+                        try:
+                            with st.spinner(f"Calling Convertr for campaign {_campaign_id}..."):
+                                _forms = get_campaign_form_fields(convertr_enterprise, _campaign_id, _entered_key)
+                            if not _forms:
+                                st.warning("Connected, but Convertr returned no forms for this campaign.")
+                            for _form in _forms:
+                                _field_keys = ", ".join(f["key"] for f in _form.get("fields", []))
+                                st.success(
+                                    f"✅ Form \"{_form.get('formName')}\" (Global Form ID "
+                                    f"{_form.get('formId')}) — fields: {_field_keys}"
+                                )
+                        except ConvertrError as exc:
+                            st.error(f"❌ {exc}")
+        else:
+            st.caption("Convertr upload is disabled for this client.")
+
 st.divider()
 
 _enabled_summary = ", ".join(
@@ -849,6 +940,16 @@ if st.button("💾 Save Client Profile", type="primary"):
                 cid_lead_template_path=box_tracker_lead_template_map if box_tracker_enabled else {},
                 pacing_skipped_campaigns=box_tracker_pacing_skipped if box_tracker_enabled else [],
             ),
+            convertr=ConvertrConfig(
+                enabled=convertr_enabled,
+                enterprise=convertr_enterprise if convertr_enabled else "",
+                campaigns=convertr_campaigns if convertr_enabled else [],
+                field_mapping=convertr_field_mapping if convertr_enabled else {},
+            ),
         )
         saved_path = save_profile(new_profile, get_clients_dir())
+        if convertr_enabled:
+            for _campaign_id, _api_key in _convertr_api_keys_to_save.items():
+                if _api_key:
+                    save_convertr_api_key(client_name, _campaign_id, _api_key)
         st.toast(f"Saved profile to {saved_path}", icon="✅")
