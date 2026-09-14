@@ -113,6 +113,17 @@ def test_get_lead_result_valid_lead_returns_empty_200():
     assert result == {"status": "valid"}
 
 
+def test_get_lead_result_valid_lead_returns_the_json_empty_string_not_a_zero_length_body():
+    # Observed live: Convertr's actual "valid" response is HTTP 200 with
+    # body '""' (a JSON-encoded empty string, 2 characters) -- not a truly
+    # zero-length body as the docs describe. This was misclassifying
+    # nearly every accepted lead as rejected.
+    mock_response = MagicMock(status_code=200, text='""', json=lambda: "")
+    with patch("core.convertr_client.requests.get", return_value=mock_response):
+        result = get_lead_result("amazonbusiness", "tok123", "11003", "367086")
+    assert result == {"status": "valid"}
+
+
 def test_get_lead_result_pending_lead_returns_202():
     mock_response = MagicMock(status_code=202, text="The lead has not been processed yet.")
     with patch("core.convertr_client.requests.get", return_value=mock_response):

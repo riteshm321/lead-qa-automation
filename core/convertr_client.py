@@ -81,13 +81,11 @@ def get_lead_result(enterprise: str, access_token: str, publisher_id: str, lead_
     on this API, so each submitted lead must be polled individually by
     its own id.
 
-    Returns {"status": "valid"} once Convertr has accepted the lead (it
-    replies with an empty 200 body in that case -- none of the lead's own
-    data comes back), {"status": "invalid", "reasons": [...], "lead_data":
-    {...}} once rejected (with Convertr's own failed-job messages and the
-    data it received), or {"status": "pending"} while still queued --
-    callers must poll a pending lead again later rather than treat it as
-    decided.
+    Returns {"status": "valid"} once Convertr has accepted the lead,
+    {"status": "invalid", "reasons": [...], "lead_data": {...}} once
+    rejected (with Convertr's own failed-job messages and the data it
+    received), or {"status": "pending"} while still queued -- callers must
+    poll a pending lead again later rather than treat it as decided.
     """
     url = f"https://{enterprise}.cvtr.io/api/v2.1/publisher/{publisher_id}/lead-result/{lead_id}"
     headers = {"Authorization": f"Bearer {access_token}"}
@@ -96,15 +94,26 @@ def get_lead_result(enterprise: str, access_token: str, publisher_id: str, lead_
         return {"status": "pending"}
     if response.status_code != 200:
         raise ConvertrError(f"Convertr returned {response.status_code} fetching lead result: {response.text[:300]}")
-    if not response.text.strip():
+    raw = response.text.strip()
+    if not raw:
         return {"status": "valid"}
-    body = response.json()
-    # Observed in practice: a non-empty invalid-lead body isn't always the
-    # documented {qaReasons, failedJobs, leadData} object -- sometimes it's
+    try:
+        body = response.json()
+    except ValueError:
+        # Non-JSON body -- treat the raw text itself as the reason rather
+        # than crash trying to parse it.
+        return {"status": "invalid", "reasons": [raw], "lead_data": {}}
+    if not body:
+        # A valid lead's body isn't always zero-length -- observed in
+        # practice as the 2-character JSON string '""' (an empty string),
+        # which parses to a falsy value here, same as a truly empty body.
+        return {"status": "valid"}
+    # A non-empty invalid-lead body isn't always the documented
+    # {qaReasons, failedJobs, leadData} object either -- sometimes it's
     # just a plain JSON string message. Treat that string itself as the
     # reason rather than assuming dict shape and crashing on it.
     if not isinstance(body, dict):
-        return {"status": "invalid", "reasons": [str(body)] if body else [], "lead_data": {}}
+        return {"status": "invalid", "reasons": [str(body)], "lead_data": {}}
     reasons = list(body.get("failedJobs") or [])
     if not reasons and body.get("qaReasons"):
         reasons = [body["qaReasons"]]
