@@ -143,6 +143,17 @@ def test_get_lead_result_invalid_lead_falls_back_to_qa_reasons_when_no_failed_jo
     assert result["reasons"] == ["Duplicate"]
 
 
+def test_get_lead_result_handles_a_plain_string_body_instead_of_the_documented_object():
+    # Observed in practice: Convertr doesn't always return the documented
+    # {qaReasons, failedJobs, leadData} object for an invalid lead --
+    # sometimes the 200 body is just a JSON-encoded string message.
+    mock_response = MagicMock(status_code=200, text='"Lead rejected: duplicate email"', json=lambda: "Lead rejected: duplicate email")
+    with patch("core.convertr_client.requests.get", return_value=mock_response):
+        result = get_lead_result("amazonbusiness", "tok123", "11003", "367086")
+
+    assert result == {"status": "invalid", "reasons": ["Lead rejected: duplicate email"], "lead_data": {}}
+
+
 def test_get_lead_result_raises_on_unexpected_status():
     mock_response = MagicMock(status_code=401, text="Access denied")
     with patch("core.convertr_client.requests.get", return_value=mock_response):

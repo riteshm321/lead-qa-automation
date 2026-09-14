@@ -99,6 +99,12 @@ def get_lead_result(enterprise: str, access_token: str, publisher_id: str, lead_
     if not response.text.strip():
         return {"status": "valid"}
     body = response.json()
+    # Observed in practice: a non-empty invalid-lead body isn't always the
+    # documented {qaReasons, failedJobs, leadData} object -- sometimes it's
+    # just a plain JSON string message. Treat that string itself as the
+    # reason rather than assuming dict shape and crashing on it.
+    if not isinstance(body, dict):
+        return {"status": "invalid", "reasons": [str(body)] if body else [], "lead_data": {}}
     reasons = list(body.get("failedJobs") or [])
     if not reasons and body.get("qaReasons"):
         reasons = [body["qaReasons"]]
