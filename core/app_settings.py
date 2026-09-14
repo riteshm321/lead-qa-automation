@@ -65,3 +65,23 @@ def save_jira_settings(base_url: str, email: str, api_token: str) -> None:
     updated["jira_email"] = email.strip()
     updated["jira_api_token"] = api_token
     save_app_settings(updated)
+
+
+def _convertr_key(client_name: str, cid: str) -> str:
+    return f"{client_name}:{cid}"
+
+
+def get_convertr_api_key(client_name: str, cid: str) -> str:
+    # Same reasoning as get_jira_settings: a Convertr Campaign API Key is a
+    # live, write-capable credential -- it belongs in the plain local
+    # app_settings.json only, never in the client profile JSON that lives
+    # in the shared clients folder every teammate can read.
+    settings = load_app_settings()
+    return settings.get("convertr_api_keys", {}).get(_convertr_key(client_name, cid), "")
+
+
+def save_convertr_api_key(client_name: str, cid: str, api_key: str) -> None:
+    updated = load_app_settings()
+    keys = updated.setdefault("convertr_api_keys", {})
+    keys[_convertr_key(client_name, cid)] = api_key
+    save_app_settings(updated)

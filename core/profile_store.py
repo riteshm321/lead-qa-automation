@@ -7,7 +7,7 @@ from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
     TalConfig, ExclusionConfig, SuppressionConfig,
     DuplicateConfig, DedupeListConfig, ReferenceSource, LeadTemplateTab, ComplexAccountConfig,
-    BoxTrackerConfig,
+    BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
 )
 
 
@@ -52,6 +52,9 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
 
     lead_template_tabs = [LeadTemplateTab(**t) for t in data.get("lead_template_tabs", [])]
 
+    convertr = data.get("convertr") or {}
+    convertr["campaigns"] = [ConvertrCampaignMapping(**c) for c in convertr.get("campaigns", [])]
+
     return ClientProfile(
         name=data["name"],
         accumulated_report_path=data["accumulated_report_path"],
@@ -62,6 +65,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         accumulated_report_link=data.get("accumulated_report_link", ""),
         lead_template_link=data.get("lead_template_link", ""),
         client_mode=data.get("client_mode", "Lead QA"),
+        collation_enabled=data.get("collation_enabled", False),
         lead_template_path=data.get("lead_template_path", ""),
         lead_template_sheet_name=data.get("lead_template_sheet_name", ""),
         lead_template_multi_tab=data.get("lead_template_multi_tab", False),
@@ -78,6 +82,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         dedupe_list=DedupeListConfig(**dedupe_list),
         complex_account=ComplexAccountConfig(**(data.get("complex_account") or {})),
         box_tracker=BoxTrackerConfig(**(data.get("box_tracker") or {})),
+        convertr=ConvertrConfig(**convertr),
     )
 
 

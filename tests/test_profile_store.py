@@ -4,7 +4,7 @@ import os
 from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
     TalConfig, ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, LeadTemplateTab,
-    ComplexAccountConfig, BoxTrackerConfig,
+    ComplexAccountConfig, BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
@@ -93,6 +93,61 @@ def test_client_mode_and_lead_template_round_trip(tmp_path):
     save_profile(profile, clients_dir=clients_dir)
     loaded = load_profile("Basware", clients_dir=clients_dir)
     assert loaded == profile
+
+
+def test_convertr_config_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.convertr = ConvertrConfig(
+        enabled=True, enterprise="amazonbusiness",
+        campaigns=[
+            ConvertrCampaignMapping(cid="118741", campaign_id="44400", global_form_id="75"),
+            ConvertrCampaignMapping(cid="118742", campaign_id="44401", global_form_id="76",
+                                     campaign_link_id="135", publisher_id="12"),
+        ],
+        field_mapping={"Email": "email", "First Name": "firstName"},
+    )
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+    assert loaded == profile
+
+
+def test_load_profile_defaults_convertr_disabled_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldClient.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "OldClient",
+            "accumulated_report_path": "sample_data/x.xlsx",
+        }, f)
+
+    loaded = load_profile("OldClient", clients_dir=clients_dir)
+    assert loaded.convertr.enabled is False
+    assert loaded.convertr.campaigns == []
+
+
+def test_collation_enabled_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.collation_enabled = True
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+    assert loaded == profile
+
+
+def test_load_profile_defaults_collation_enabled_false_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldClient.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "OldClient",
+            "accumulated_report_path": "sample_data/x.xlsx",
+        }, f)
+
+    loaded = load_profile("OldClient", clients_dir=clients_dir)
+    assert loaded.collation_enabled is False
 
 
 def test_load_profile_defaults_client_mode_for_old_schema_json(tmp_path):

@@ -419,6 +419,17 @@ with tab_basics:
                 st.caption("Enter a valid Accumulated Report path and tab name above to map its columns.")
 
     with st.container(border=True):
+        st.subheader("File Collation (optional)")
+        st.caption(
+            "Offers a \"collate multiple files into one New Leads file\" option on Run Check for this "
+            "client. Not forced on — you can still upload an already-collated file directly on any given run."
+        )
+        collation_enabled = st.checkbox(
+            "Enable file collation for this client",
+            value=profile.collation_enabled if profile else False,
+        )
+
+    with st.container(border=True):
         st.subheader("Client Mode")
         _CLIENT_MODES = ["Lead QA", "Lead QA & Upload"]
         _mode_default = profile.client_mode if profile and profile.client_mode in _CLIENT_MODES else "Lead QA"
@@ -797,6 +808,7 @@ if st.button("💾 Save Client Profile", type="primary"):
             accumulated_report_link=accumulated_report_link.strip(),
             lead_template_link=lead_template_link.strip() if client_mode == "Lead QA" else "",
             client_mode=client_mode,
+            collation_enabled=collation_enabled,
             lead_template_path=lead_template_path if client_mode == "Lead QA" else "",
             lead_template_sheet_name=(
                 lead_template_sheet_name if client_mode == "Lead QA" and not lead_template_multi_tab else ""),

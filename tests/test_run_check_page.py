@@ -65,6 +65,36 @@ def test_cached_loaders_hash_their_mtime_argument():
     assert checked_any, "expected at least one @st.cache_data-decorated function in this page"
 
 
+def test_collation_expander_appears_only_when_enabled_and_leaves_normal_upload_intact(tmp_path, monkeypatch):
+    # AppTest can't simulate a real file upload, so this only checks the
+    # collation option's visibility is gated correctly and the page loads
+    # without error either way -- core/collation.py's own tests cover the
+    # actual collating logic.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+
+    save_profile(ClientProfile(
+        name="No Collation Client", accumulated_report_path=acc_path, field_mapping=fm,
+    ), get_clients_dir())
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert not any("Collate multiple files" in e.label for e in at.expander)
+
+    save_profile(ClientProfile(
+        name="Collation Client", accumulated_report_path=acc_path, field_mapping=fm,
+        collation_enabled=True,
+    ), get_clients_dir())
+    at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at2.run()
+    next(s for s in at2.selectbox if s.label == "Client").set_value("Collation Client").run()
+    assert not at2.exception
+    assert any("Collate multiple files" in e.label for e in at2.expander)
+
+
 def test_approved_refund_lead_lands_in_accumulated_tab_not_just_refund(tmp_path, monkeypatch):
     # End-to-end regression test for the "approve a refunded lead as valid"
     # feature: AppTest can't simulate a real file upload, so this pre-seeds

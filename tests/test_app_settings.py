@@ -2,7 +2,7 @@ import os
 
 from core.app_settings import (
     load_app_settings, save_app_settings, get_clients_dir, get_aliases_path, get_shared_root_dir,
-    get_jira_settings, save_jira_settings,
+    get_jira_settings, save_jira_settings, get_convertr_api_key, save_convertr_api_key,
 )
 
 _ROOT = r"C:\Shared\OneDrive\LeadQA"
@@ -88,6 +88,32 @@ def test_save_and_load_jira_settings_round_trip(tmp_path, monkeypatch):
     assert get_jira_settings() == {
         "base_url": "https://example.atlassian.net", "email": "me@example.com", "api_token": "token123",
     }
+
+
+def test_get_convertr_api_key_defaults_to_blank_when_unset(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert get_convertr_api_key("Amazon Business EMEA", "118741") == ""
+
+
+def test_save_and_load_convertr_api_key_round_trip(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_convertr_api_key("Amazon Business EMEA", "118741", "secret-key-1")
+    save_convertr_api_key("Amazon Business EMEA", "118742", "secret-key-2")
+
+    assert get_convertr_api_key("Amazon Business EMEA", "118741") == "secret-key-1"
+    assert get_convertr_api_key("Amazon Business EMEA", "118742") == "secret-key-2"
+    assert get_convertr_api_key("Amazon Business EMEA", "999999") == ""
+
+
+def test_convertr_api_key_never_derives_from_shared_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": _ROOT})
+    save_convertr_api_key("Amazon Business EMEA", "118741", "secret-key-1")
+    assert get_shared_root_dir() == _ROOT
+    assert get_convertr_api_key("Amazon Business EMEA", "118741") == "secret-key-1"
+    with open("app_settings.json", encoding="utf-8") as f:
+        raw = f.read()
+    assert _ROOT.replace("\\", "\\\\") in raw  # sanity: still the same local settings file
 
 
 def test_jira_settings_never_derive_from_shared_root(tmp_path, monkeypatch):

@@ -134,6 +134,37 @@ class BoxTrackerConfig:
 
 
 @dataclass
+class ConvertrCampaignMapping:
+    # Each CID's leads upload to its own Convertr campaign/form -- see
+    # core/convertr_client.py for the actual API calls these feed.
+    cid: str
+    campaign_id: str
+    global_form_id: str
+    # Optional per Convertr's own API: attributes which channel a lead
+    # entered through / which publisher gets credited. Blank means "don't
+    # send this parameter at all", not "send it blank".
+    campaign_link_id: str = ""
+    publisher_id: str = ""
+
+
+@dataclass
+class ConvertrConfig:
+    # Uploads a client-verified leadfile straight to Convertr's Campaign
+    # Webhook v2 API (https://{enterprise}.cvtr.io/webhook/campaign/...)
+    # instead of a manual portal upload. Each campaign authenticates with
+    # its own Campaign API Key -- deliberately NOT stored here, since this
+    # profile JSON lives in the shared clients folder every teammate can
+    # read; see core/convertr_secrets.py for where that actually lives.
+    enabled: bool = False
+    enterprise: str = ""
+    campaigns: list[ConvertrCampaignMapping] = field(default_factory=list)
+    # {leadfile column name: Convertr form field name (without the
+    # "form[]" wrapper -- core/convertr_client.py adds that)}, e.g.
+    # {"Email": "email", "First Name": "firstName"}.
+    field_mapping: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class ClientProfile:
     name: str
     accumulated_report_path: str
@@ -146,6 +177,11 @@ class ClientProfile:
     accumulated_report_link: str = ""
     lead_template_link: str = ""
     client_mode: str = "Lead QA"
+    # Offers the "collate multiple files into one New Leads file" option on
+    # Run Check for this client -- NOT forced on, since the same client can
+    # arrive with an already-collated file on any given run (see
+    # core/collation.py). Off by default for every client.
+    collation_enabled: bool = False
     lead_template_path: str = ""
     lead_template_sheet_name: str = ""
     lead_template_multi_tab: bool = False
@@ -162,3 +198,4 @@ class ClientProfile:
     dedupe_list: DedupeListConfig = field(default_factory=DedupeListConfig)
     complex_account: ComplexAccountConfig = field(default_factory=ComplexAccountConfig)
     box_tracker: BoxTrackerConfig = field(default_factory=BoxTrackerConfig)
+    convertr: ConvertrConfig = field(default_factory=ConvertrConfig)

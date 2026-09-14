@@ -140,6 +140,31 @@ def test_exclusion_source_accepts_a_csv_file_and_reads_its_columns_and_saves(tmp
     assert loaded.exclusion.sources[0].sheet_name == "(CSV file)"
 
 
+def test_collation_checkbox_saves(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    collation_checkbox = next(c for c in at.checkbox if c.label == "Enable file collation for this client")
+    assert collation_checkbox.value is False
+    collation_checkbox.set_value(True).run()
+    assert not at.exception
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("Amazon Business EMEA").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+
+    save_button = next(b for b in at.button if "Save Client Profile" in b.label)
+    save_button.click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Amazon Business EMEA", get_clients_dir())
+    assert loaded.collation_enabled is True
+
+
 def test_complex_account_checkbox_reveals_file_path_fields_and_saves(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 

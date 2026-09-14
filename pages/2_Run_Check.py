@@ -11,6 +11,7 @@ from core.activity_tracker import record_process_completed
 from core.app_settings import get_aliases_path, get_clients_dir, get_jira_settings
 from core.branding import configure_page
 from core.checks.leadcap import validate_purchased_report_cids
+from core.collation import collate_uploaded_files
 from core.errors import render_error
 from core.excel_io import (
     read_sheet_as_dataframe, append_leads, backup_file, require_columns, find_header_row, route_leads_by_cid,
@@ -175,22 +176,64 @@ _enabled_checks = ", ".join(
 st.caption(f"Mode: **{profile.client_mode}** · Enabled checks: {_enabled_checks}")
 st.divider()
 
-_new_leads_widget = st.file_uploader(
-    "New Leads file", type=["xlsx", "csv"], key=f"new_leads_upload_{client_name}_{_upload_key_suffix}")
-new_leads_file, _new_leads_name, _new_leads_from_cache = resolve_upload(
-    _new_leads_widget, _upload_cache, client_name, "new_leads")
-if _new_leads_from_cache:
-    st.caption(f"📎 Using previously selected file: **{_new_leads_name}**")
-
+_collated_key = f"collated_new_leads_{client_name}"
 new_leads_df = None
 new_leads_headers: list[str] = []
-if new_leads_file:
-    try:
-        new_leads_df = read_leadfile(new_leads_file)
-        new_leads_headers = list(new_leads_df.columns)
-    except Exception as exc:
-        render_error(exc)
-        st.stop()
+
+if profile.collation_enabled:
+    with st.expander("🗂️ Collate multiple files into one New Leads file (optional)"):
+        st.caption(
+            "Only use this when you have several per-CID export files to combine — if you already "
+            "have one collated file ready, skip this and upload it directly below as normal."
+        )
+        _collate_files = st.file_uploader(
+            "Files to collate", type=["xlsx", "csv"], accept_multiple_files=True,
+            key=f"collate_files_{client_name}_{_upload_key_suffix}")
+        if st.button("Collate files", key="collate_button", disabled=not _collate_files):
+            master_df, per_file_results, skipped, column_notes = collate_uploaded_files(_collate_files)
+            if master_df.empty:
+                st.error("No files could be collated — see errors below.")
+            else:
+                st.session_state[_collated_key] = master_df
+            for filename, cid, count in per_file_results:
+                st.caption(f"✓ {filename} (CID {cid or '—'}): {count} lead(s)")
+            if skipped:
+                st.warning("Skipped: " + "; ".join(f"{f} ({e})" for f, e in skipped))
+            for filename, new_cols, missing_cols in column_notes:
+                note = filename
+                if new_cols:
+                    note += f" — new: {', '.join(sorted(new_cols))}"
+                if missing_cols:
+                    note += f" — missing: {', '.join(sorted(missing_cols))}"
+                st.caption(f"⚠️ {note}")
+
+        if _collated_key in st.session_state:
+            _collated_df = st.session_state[_collated_key]
+            col_use, col_clear = st.columns([3, 1])
+            col_use.success(f"Collated file ready: {len(_collated_df)} lead(s), {len(_collated_df.columns)} column(s).")
+            if col_clear.button("Clear", key="clear_collated_button"):
+                del st.session_state[_collated_key]
+                st.rerun()
+
+if _collated_key in st.session_state:
+    new_leads_df = st.session_state[_collated_key]
+    new_leads_headers = list(new_leads_df.columns)
+    st.caption(f"📎 Using the collated file ({len(new_leads_df)} lead(s)) as New Leads.")
+else:
+    _new_leads_widget = st.file_uploader(
+        "New Leads file", type=["xlsx", "csv"], key=f"new_leads_upload_{client_name}_{_upload_key_suffix}")
+    new_leads_file, _new_leads_name, _new_leads_from_cache = resolve_upload(
+        _new_leads_widget, _upload_cache, client_name, "new_leads")
+    if _new_leads_from_cache:
+        st.caption(f"📎 Using previously selected file: **{_new_leads_name}**")
+
+    if new_leads_file:
+        try:
+            new_leads_df = read_leadfile(new_leads_file)
+            new_leads_headers = list(new_leads_df.columns)
+        except Exception as exc:
+            render_error(exc)
+            st.stop()
 
 field_mapping = profile.field_mapping
 mapping_valid = (
