@@ -99,11 +99,11 @@ def test_convertr_config_round_trip(tmp_path):
     clients_dir = str(tmp_path / "clients")
     profile = _sample_profile()
     profile.convertr = ConvertrConfig(
-        enabled=True, enterprise="amazonbusiness",
+        enabled=True, enterprise="amazonbusiness", publisher_id="11003",
         campaigns=[
             ConvertrCampaignMapping(cid="118741", campaign_id="44400", global_form_id="75"),
             ConvertrCampaignMapping(cid="118742", campaign_id="44401", global_form_id="76",
-                                     campaign_link_id="135", publisher_id="12"),
+                                     campaign_link_id="135"),
         ],
         field_mapping={"Email": "email", "First Name": "firstName"},
     )
@@ -125,6 +125,32 @@ def test_load_profile_defaults_convertr_disabled_for_old_schema_json(tmp_path):
     loaded = load_profile("OldClient", clients_dir=clients_dir)
     assert loaded.convertr.enabled is False
     assert loaded.convertr.campaigns == []
+
+
+def test_load_profile_drops_legacy_per_campaign_publisher_id(tmp_path):
+    # publisher_id used to live on each campaign mapping before it moved
+    # up to ConvertrConfig as one fixed account-level value -- a profile
+    # saved by the old schema still has it there and must still load.
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldConvertrClient.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "OldConvertrClient",
+            "accumulated_report_path": "sample_data/x.xlsx",
+            "convertr": {
+                "enabled": True,
+                "enterprise": "amazonbusiness",
+                "campaigns": [
+                    {"cid": "120022", "campaign_id": "44709", "global_form_id": "75",
+                     "campaign_link_id": "", "publisher_id": "11003"},
+                ],
+                "field_mapping": {},
+            },
+        }, f)
+
+    loaded = load_profile("OldConvertrClient", clients_dir=clients_dir)
+    assert loaded.convertr.campaigns[0].cid == "120022"
+    assert loaded.convertr.publisher_id == ""
 
 
 def test_collation_enabled_round_trip(tmp_path):

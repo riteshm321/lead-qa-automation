@@ -4,13 +4,13 @@ import datetime
 import pandas as pd
 import streamlit as st
 
-from core.app_settings import get_clients_dir, get_convertr_api_key, get_convertr_account_credentials, get_jira_settings
+from core.app_settings import get_clients_dir, get_convertr_account_credentials, get_jira_settings
 from core.branding import configure_page
 from core import convertr_client
 from core.convertr_client import ConvertrError
 from core.convertr_sync import (
-    classify_lead, rejection_reason, lead_to_leadfile_row, load_synced_lead_ids, mark_leads_synced,
-    save_email_to_cid_map, load_email_to_cid_map, cid_for_email, select_rows_for_test_mode,
+    rejection_reason_from_result, load_pending_leads, save_pending_leads, remove_pending_leads,
+    select_rows_for_test_mode,
 )
 from core.excel_io import read_leadfile, append_leads
 from core import jira_client
@@ -60,17 +60,19 @@ if _upload_file:
         st.stop()
 
     if st.button("Upload to Convertr", type="primary"):
-        # Recorded for every lead in the file regardless of upload outcome
-        # (or test-mode skipping) -- reconcile later looks up a returned
-        # lead's CID by matching its email back to this, since Convertr's
-        # own forms have no native place to carry CID through and echo it
-        # back on their own.
-        save_email_to_cid_map(
-            client_name,
-            dict(zip(leads_df[profile.field_mapping.email].astype(str), leads_df[cid_column].astype(str))),
-        )
+        _creds = get_convertr_account_credentials(client_name)
+        if not _creds["username"] or not _creds["password"]:
+            st.error("Save this client's Convertr account username/password on Client Setup first.")
+            st.stop()
+        try:
+            with st.spinner("Logging in to Convertr..."):
+                _token = convertr_client.login(_convertr.enterprise, _creds["username"], _creds["password"])["access_token"]
+        except ConvertrError as exc:
+            st.error(f"Login failed: {exc}")
+            st.stop()
 
         results = []
+        _newly_pending: dict[str, dict] = {}
         _upload_df = leads_df
         if _test_mode:
             _cid_to_campaign_id = {cid: m.campaign_id for cid, m in _campaign_by_cid.items()}
@@ -97,16 +99,10 @@ if _upload_file:
                     results.append({"CID": cid, "Email": lead.get(profile.field_mapping.email, ""),
                                      "Result": "❌ No Convertr campaign mapped for this CID"})
                 continue
-            api_key = get_convertr_api_key(client_name, mapping.campaign_id)
-            if not api_key:
-                for _, lead in group.iterrows():
-                    results.append({"CID": cid, "Email": lead.get(profile.field_mapping.email, ""),
-                                     "Result": f"❌ No API key saved for campaign {mapping.campaign_id}"})
-                continue
             if not mapping.global_form_id:
                 for _, lead in group.iterrows():
                     results.append({"CID": cid, "Email": lead.get(profile.field_mapping.email, ""),
-                                     "Result": f"❌ No Global Form ID saved for campaign {mapping.campaign_id}"})
+                                     "Result": f"❌ No Form ID saved for campaign {mapping.campaign_id}"})
                 continue
 
             for _, lead in group.iterrows():
@@ -116,14 +112,23 @@ if _upload_file:
                 }
                 email = lead.get(profile.field_mapping.email, "")
                 try:
-                    response = convertr_client.submit_lead(
-                        _convertr.enterprise, mapping.campaign_id, mapping.global_form_id, api_key,
-                        form_data, campaign_link_id=mapping.campaign_link_id, publisher_id=mapping.publisher_id,
+                    response = convertr_client.submit_lead_as_publisher(
+                        _convertr.enterprise, _token, _convertr.publisher_id, mapping.campaign_id,
+                        mapping.global_form_id, form_data, link_id=mapping.campaign_link_id,
                     )
-                    results.append({"CID": cid, "Email": email, "Result": f"✅ Lead ID {response.get('data')}"})
+                    lead_id = str(response.get("data"))
+                    # The original leadfile row, kept exactly as uploaded --
+                    # a "valid" lead's own get_lead_result comes back with
+                    # NO data at all, so this is the only reliable source
+                    # for that lead's fields (CID included) once reconcile
+                    # writes it to Accumulated/Refund.
+                    _newly_pending[lead_id] = {col: lead.get(col, "") for col in leads_df.columns}
+                    results.append({"CID": cid, "Email": email, "Result": f"✅ Lead ID {lead_id}"})
                 except ConvertrError as exc:
                     results.append({"CID": cid, "Email": email, "Result": f"❌ {exc}"})
 
+        if _newly_pending:
+            save_pending_leads(client_name, _newly_pending)
         st.session_state["convertr_upload_results"] = pd.DataFrame(results)
 
 if st.session_state.get("convertr_upload_results") is not None:
@@ -135,14 +140,12 @@ if st.session_state.get("convertr_upload_results") is not None:
 st.divider()
 st.subheader("2. Reconcile accepted/rejected leads")
 st.caption(
-    "Fetches each campaign's leads from Convertr, and writes accepted ones into the Accumulated tab and "
-    "rejected ones into the Refund tab (with Convertr's reason) — matched by column header, same as any "
-    "other lead write, with that day's date under Date and each lead's CID recovered by matching its "
-    "email back to the leadfile uploaded in step 1. Only leads Convertr has actually decided on (not "
-    "still mid-QA) are written; a lead already synced in a previous run is never written twice."
+    "Polls Convertr for every lead uploaded in step 1 that hasn't been resolved yet, and writes accepted "
+    "ones into the Accumulated tab and rejected ones into the Refund tab (with Convertr's reason) — "
+    "matched by column header, same as any other lead write, with that day's date under Date and each "
+    "lead's own CID from the leadfile it was uploaded from. A lead still mid-QA is left pending and "
+    "checked again on the next sync; once written, it's never fetched or written again."
 )
-
-_unique_campaign_ids = sorted({c.campaign_id for c in _convertr.campaigns})
 
 if st.button("Fetch decisions from Convertr"):
     _creds = get_convertr_account_credentials(client_name)
@@ -156,38 +159,24 @@ if st.button("Fetch decisions from Convertr"):
         st.error(f"Login failed: {exc}")
         st.stop()
 
-    reverse_field_mapping = {v: k for k, v in _convertr.field_mapping.items()}
-    already_synced = load_synced_lead_ids(client_name)
-    email_to_cid = load_email_to_cid_map(client_name)
-    cid_column = profile.field_mapping.cid
+    pending = load_pending_leads(client_name)
     accepted_rows, rejected_rows = [], []
     try:
-        with st.spinner("Fetching leads..."):
-            for campaign_id in _unique_campaign_ids:
-                page = 1
-                while True:
-                    body = convertr_client.get_leads(_convertr.enterprise, _token, campaign_id, page=page, items_per_page=100)
-                    members = body.get("hydra:member", [])
-                    for lead in members:
-                        lead_id = str(lead.get("id"))
-                        if lead_id in already_synced:
-                            continue
-                        status = classify_lead(lead)
-                        if status == "pending":
-                            continue
-                        row = lead_to_leadfile_row(lead, reverse_field_mapping)
-                        row[cid_column] = cid_for_email(lead.get("email", ""), email_to_cid)
-                        row["_convertr_lead_id"] = lead_id
-                        if status == "accepted":
-                            accepted_rows.append(row)
-                        else:
-                            row["_reason"] = rejection_reason(lead)
-                            rejected_rows.append(row)
-                    if len(members) < 100:
-                        break
-                    page += 1
+        with st.spinner(f"Checking {len(pending)} pending lead(s)..."):
+            for lead_id, row in pending.items():
+                result = convertr_client.get_lead_result(_convertr.enterprise, _token, _convertr.publisher_id, lead_id)
+                status = result["status"]
+                if status == "pending":
+                    continue
+                out_row = dict(row)
+                out_row["_convertr_lead_id"] = lead_id
+                if status == "valid":
+                    accepted_rows.append(out_row)
+                else:
+                    out_row["_reason"] = rejection_reason_from_result(result)
+                    rejected_rows.append(out_row)
     except ConvertrError as exc:
-        st.error(f"Error fetching leads: {exc}")
+        st.error(f"Error fetching lead results: {exc}")
         st.stop()
 
     st.session_state["convertr_accepted_rows"] = accepted_rows
@@ -205,11 +194,11 @@ if _accepted_rows or _rejected_rows:
 
     if st.button("Write to Accumulated & Refund", type="primary"):
         today = datetime.date.today()
-        synced_ids = []
+        resolved_ids = []
 
         if _accepted_rows:
             accepted_df = pd.DataFrame(_accepted_rows)
-            synced_ids += list(accepted_df.pop("_convertr_lead_id"))
+            resolved_ids += list(accepted_df.pop("_convertr_lead_id"))
             append_leads(
                 profile.accumulated_report_path, profile.accumulated_tab_name,
                 accepted_df, profile.field_mapping, today,
@@ -217,14 +206,14 @@ if _accepted_rows or _rejected_rows:
 
         if _rejected_rows:
             rejected_df = pd.DataFrame(_rejected_rows)
-            synced_ids += list(rejected_df.pop("_convertr_lead_id"))
+            resolved_ids += list(rejected_df.pop("_convertr_lead_id"))
             reasons = dict(zip(rejected_df.index, rejected_df.pop("_reason")))
             append_leads(
                 profile.accumulated_report_path, profile.refund_tab_name,
                 rejected_df, profile.field_mapping, today, reasons=reasons,
             )
 
-        mark_leads_synced(client_name, synced_ids)
+        remove_pending_leads(client_name, resolved_ids)
         st.session_state["convertr_reconcile_summary"] = {
             "client_name": client_name, "accepted": len(_accepted_rows), "rejected": len(_rejected_rows),
         }

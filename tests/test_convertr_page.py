@@ -6,7 +6,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_convertr_account_credentials, save_app_settings
-from core.convertr_sync import save_email_to_cid_map
+from core.convertr_sync import save_pending_leads
 from core.models import ClientProfile, FieldMapping, ConvertrConfig, ConvertrCampaignMapping
 from core.profile_store import save_profile
 
@@ -29,7 +29,7 @@ def _save_profile(acc_path: str, jira_ticket_key: str = "") -> ClientProfile:
         name="Amazon Business EMEA", accumulated_report_path=acc_path, field_mapping=fm,
         jira_ticket_key=jira_ticket_key,
         convertr=ConvertrConfig(
-            enabled=True, enterprise="amazonbusiness",
+            enabled=True, enterprise="amazonbusiness", publisher_id="11003",
             campaigns=[
                 ConvertrCampaignMapping(cid="120022", campaign_id="44709", global_form_id="75"),
                 ConvertrCampaignMapping(cid="120028", campaign_id="44706", global_form_id="80"),
@@ -39,20 +39,6 @@ def _save_profile(acc_path: str, jira_ticket_key: str = "") -> ClientProfile:
     )
     save_profile(profile, get_clients_dir())
     return profile
-
-
-def _lead(lead_id: int, status: str, email: str, reason: str | None = None) -> dict:
-    # Deliberately carries no "cid" field of any kind -- CID is recovered
-    # purely by matching email back to save_email_to_cid_map's record of
-    # the leadfile used at upload time, not from anything Convertr itself
-    # echoes back (it has no native place to carry CID at all).
-    lead = {
-        "id": lead_id, "email": email, "firstName": "A", "lastName": "One",
-        "leadStatus": {"name": status},
-    }
-    if reason:
-        lead["leadFlag"] = {"reason": reason}
-    return lead
 
 
 def test_warns_when_no_client_has_convertr_enabled(tmp_path, monkeypatch):
@@ -70,21 +56,23 @@ def test_reconcile_writes_accepted_to_accumulated_and_rejected_to_refund_with_ci
     _make_accumulated(acc_path)
     _save_profile(acc_path)
     save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
-    # Simulates what step 1 (Upload) records for every lead in the file,
-    # regardless of upload outcome -- reconcile has no other way to know
-    # which CID an email belongs to.
-    save_email_to_cid_map("Amazon Business EMEA", {"accepted@x.com": "120022", "rejected@x.com": "120028"})
+    # Simulates what step 1 (Upload) records for every successfully
+    # submitted lead: the exact row that was uploaded, keyed by the lead
+    # id Convertr returned -- reconcile has no other way to recover an
+    # accepted lead's data, since Convertr's own result for a valid lead
+    # comes back completely empty.
+    save_pending_leads("Amazon Business EMEA", {
+        "101": {"Email": "accepted@x.com", "CID": "120022", "First Name": "A", "Last Name": "One"},
+        "102": {"Email": "rejected@x.com", "CID": "120028", "First Name": "B", "Last Name": "Two"},
+    })
 
-    accepted_lead = _lead(101, "Valid", "accepted@x.com")
-    rejected_lead = _lead(102, "Invalid", "rejected@x.com", reason="Unable to Contact")
-
-    def _fake_get_leads(enterprise, token, campaign_id, page=1, items_per_page=100, updated_after=None):
-        if campaign_id == "44709":
-            return {"hydra:member": [accepted_lead] if page == 1 else []}
-        return {"hydra:member": [rejected_lead] if page == 1 else []}
+    def _fake_get_lead_result(enterprise, token, publisher_id, lead_id):
+        if lead_id == "101":
+            return {"status": "valid"}
+        return {"status": "invalid", "reasons": ["Unable to Contact"], "lead_data": {}}
 
     with patch("core.convertr_client.login", return_value={"access_token": "tok"}), \
-         patch("core.convertr_client.get_leads", side_effect=_fake_get_leads):
+         patch("core.convertr_client.get_lead_result", side_effect=_fake_get_lead_result):
         at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
         at.run()
         next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
@@ -116,25 +104,18 @@ def test_reconcile_does_not_rewrite_already_synced_leads(tmp_path, monkeypatch):
     _make_accumulated(acc_path)
     _save_profile(acc_path)
     save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
-    save_email_to_cid_map("Amazon Business EMEA", {"already@x.com": "120022"})
-
-    accepted_lead = _lead(201, "Valid", "already@x.com")
-
-    def _fake_get_leads(enterprise, token, campaign_id, page=1, items_per_page=100, updated_after=None):
-        if campaign_id == "44709":
-            return {"hydra:member": [accepted_lead] if page == 1 else []}
-        return {"hydra:member": []}
+    save_pending_leads("Amazon Business EMEA", {"201": {"Email": "already@x.com", "CID": "120022"}})
 
     with patch("core.convertr_client.login", return_value={"access_token": "tok"}), \
-         patch("core.convertr_client.get_leads", side_effect=_fake_get_leads):
+         patch("core.convertr_client.get_lead_result", return_value={"status": "valid"}):
         at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
         at.run()
         next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
         next(b for b in at.button if b.label == "Fetch decisions from Convertr").click().run()
         next(b for b in at.button if b.label == "Write to Accumulated & Refund").click().run()
 
-        # Second sync: same lead comes back from Convertr again (still
-        # "Valid") -- must not be appended a second time.
+        # Second sync: the lead was removed from the pending store once
+        # written, so a repeated fetch has nothing left to check for it.
         at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
         at2.run()
         next(s for s in at2.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
@@ -166,20 +147,13 @@ def test_jira_section_posts_a_summary_after_reconcile(tmp_path, monkeypatch):
     _make_accumulated(acc_path)
     _save_profile(acc_path, jira_ticket_key="PROJ-1234")
     save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
-    save_email_to_cid_map("Amazon Business EMEA", {"accepted@x.com": "120022"})
+    save_pending_leads("Amazon Business EMEA", {"301": {"Email": "accepted@x.com", "CID": "120022"}})
 
     from core.app_settings import save_jira_settings
     save_jira_settings("https://example.atlassian.net", "me@example.com", "token123")
 
-    accepted_lead = _lead(301, "Valid", "accepted@x.com")
-
-    def _fake_get_leads(enterprise, token, campaign_id, page=1, items_per_page=100, updated_after=None):
-        if campaign_id == "44709":
-            return {"hydra:member": [accepted_lead] if page == 1 else []}
-        return {"hydra:member": []}
-
     with patch("core.convertr_client.login", return_value={"access_token": "tok"}), \
-         patch("core.convertr_client.get_leads", side_effect=_fake_get_leads):
+         patch("core.convertr_client.get_lead_result", return_value={"status": "valid"}):
         at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
         at.run()
         next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()

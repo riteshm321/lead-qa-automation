@@ -141,22 +141,28 @@ class ConvertrCampaignMapping:
     campaign_id: str
     global_form_id: str
     # Optional per Convertr's own API: attributes which channel a lead
-    # entered through / which publisher gets credited. Blank means "don't
-    # send this parameter at all", not "send it blank".
+    # entered through. Blank means "don't send this parameter at all",
+    # not "send it blank".
     campaign_link_id: str = ""
-    publisher_id: str = ""
 
 
 @dataclass
 class ConvertrConfig:
-    # Uploads a client-verified leadfile straight to Convertr's Campaign
-    # Webhook v2 API (https://{enterprise}.cvtr.io/webhook/campaign/...)
-    # instead of a manual portal upload. Each campaign authenticates with
-    # its own Campaign API Key -- deliberately NOT stored here, since this
-    # profile JSON lives in the shared clients folder every teammate can
-    # read; see core/convertr_secrets.py for where that actually lives.
+    # Uploads a client-verified leadfile straight to Convertr's Publisher
+    # API (https://{enterprise}.cvtr.io/api/v2.4/publisher/...) instead of
+    # a manual portal upload -- every Publisher account has access to this
+    # by default, unlike the Campaign Webhook v2's per-campaign, Admin-only
+    # API key. Authenticates with the same account username/password used
+    # to read back accepted/rejected leads -- deliberately NOT stored here,
+    # since this profile JSON lives in the shared clients folder every
+    # teammate can read; see core/app_settings.py for where that actually
+    # lives.
     enabled: bool = False
     enterprise: str = ""
+    # The account's own Convertr Publisher ID (from Tracking -> API
+    # Credentials on any campaign) -- one fixed value for the whole
+    # account, required in the Publisher API's URL path for every request.
+    publisher_id: str = ""
     campaigns: list[ConvertrCampaignMapping] = field(default_factory=list)
     # {leadfile column name: Convertr form field name (without the
     # "form[]" wrapper -- core/convertr_client.py adds that)}, e.g.

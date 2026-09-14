@@ -67,35 +67,13 @@ def save_jira_settings(base_url: str, email: str, api_token: str) -> None:
     save_app_settings(updated)
 
 
-def _convertr_key(client_name: str, campaign_id: str) -> str:
-    return f"{client_name}:{campaign_id}"
-
-
-def get_convertr_api_key(client_name: str, campaign_id: str) -> str:
-    # Same reasoning as get_jira_settings: a Convertr Campaign API Key is a
-    # live, write-capable credential -- it belongs in the plain local
-    # app_settings.json only, never in the client profile JSON that lives
-    # in the shared clients folder every teammate can read.
-    #
-    # Keyed by campaign_id (Convertr's SID), not by CID -- several of a
-    # client's CIDs commonly route to the SAME Convertr campaign, and they
-    # share that campaign's one API key, so keying by CID would mean
-    # entering (and keeping in sync) the identical key several times over.
-    settings = load_app_settings()
-    return settings.get("convertr_api_keys", {}).get(_convertr_key(client_name, campaign_id), "")
-
-
-def save_convertr_api_key(client_name: str, campaign_id: str, api_key: str) -> None:
-    updated = load_app_settings()
-    keys = updated.setdefault("convertr_api_keys", {})
-    keys[_convertr_key(client_name, campaign_id)] = api_key
-    save_app_settings(updated)
-
-
 def get_convertr_account_credentials(client_name: str) -> dict:
-    # A broader, account-level credential than the per-campaign API key
-    # above (used only to read back accepted/rejected lead outcomes, never
-    # to upload) -- same local-only storage reasoning applies.
+    # Same reasoning as get_jira_settings: a live, write-capable Convertr
+    # credential belongs in the plain local app_settings.json only, never
+    # in the client profile JSON that lives in the shared clients folder
+    # every teammate can read. Every Publisher account uses this same
+    # username/password for both uploading leads and reading back
+    # accepted/rejected outcomes -- there is no separate per-campaign key.
     settings = load_app_settings()
     creds = settings.get("convertr_account_credentials", {}).get(client_name, {})
     return {"username": creds.get("username", ""), "password": creds.get("password", "")}

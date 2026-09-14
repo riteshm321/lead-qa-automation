@@ -53,7 +53,13 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
     lead_template_tabs = [LeadTemplateTab(**t) for t in data.get("lead_template_tabs", [])]
 
     convertr = data.get("convertr") or {}
-    convertr["campaigns"] = [ConvertrCampaignMapping(**c) for c in convertr.get("campaigns", [])]
+    # "publisher_id" used to live per-campaign; it moved up to ConvertrConfig
+    # (one fixed value per account) -- drop it here so a profile saved
+    # before that move still loads instead of raising on the old key.
+    convertr["campaigns"] = [
+        ConvertrCampaignMapping(**{k: v for k, v in c.items() if k != "publisher_id"})
+        for c in convertr.get("campaigns", [])
+    ]
 
     return ClientProfile(
         name=data["name"],

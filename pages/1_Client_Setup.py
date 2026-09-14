@@ -9,11 +9,11 @@ from core.excel_io import (
     find_header_row, read_sheet_headers,
 )
 from core.app_settings import (
-    get_clients_dir, get_convertr_api_key, save_convertr_api_key,
-    get_convertr_account_credentials, save_convertr_account_credentials,
+    get_clients_dir, get_convertr_account_credentials, save_convertr_account_credentials,
 )
 from core.branding import configure_page
-from core.convertr_client import get_campaign_form_fields, ConvertrError
+from core import convertr_client
+from core.convertr_client import ConvertrError
 from core.file_browser import browse_for_file
 from core.jira_client import extract_ticket_key
 from core.models import (
@@ -757,26 +757,30 @@ with tab_complex:
         st.divider()
         st.markdown("**Convertr Upload (optional)**")
         st.caption(
-            "Uploads a client-verified leadfile straight to Convertr's Campaign Webhook v2 API "
-            "instead of a manual portal upload. Each CID routes to its own Convertr campaign."
+            "Uploads a client-verified leadfile straight to Convertr via the Publisher API — every "
+            "Publisher account has access to this by default, no Campaign Admin access required. Each "
+            "CID routes to its own Convertr campaign."
         )
         convertr_enabled = st.checkbox(
             "This client uploads to Convertr", value=profile.convertr.enabled if profile else False)
         convertr_enterprise = ""
+        convertr_publisher_id = ""
         convertr_campaigns: list[ConvertrCampaignMapping] = []
         convertr_field_mapping: dict[str, str] = {}
         convertr_account_username = ""
         convertr_account_password = ""
-        _convertr_api_keys_to_save: dict[str, str] = {}
         if convertr_enabled:
             convertr_enterprise = st.text_input(
                 "Convertr enterprise subdomain (the {{enterprise}} in https://{{enterprise}}.cvtr.io)",
-                value=profile.convertr.enterprise if profile else "")
+                value=profile.convertr.enterprise if profile else "").strip()
+            convertr_publisher_id = st.text_input(
+                "Your Convertr Publisher ID (Tracking → API Credentials on any campaign)",
+                value=profile.convertr.publisher_id if profile else "").strip()
 
             st.caption(
                 "CID → Convertr Campaign ID (SID) mapping, one per line, format `CID,CampaignID` — "
-                "optionally add a third value for the Global Form ID once you know it: "
-                "`CID,CampaignID,GlobalFormID`:"
+                "optionally add a third value for the Form ID once you know it (Tracking → API "
+                "Credentials, or Test connection below): `CID,CampaignID,FormID`:"
             )
             _existing_campaigns_text = "\n".join(
                 f"{c.cid},{c.campaign_id}" + (f",{c.global_form_id}" if c.global_form_id else "")
@@ -797,8 +801,9 @@ with tab_complex:
 
             st.caption(
                 "Leadfile column → Convertr form field name mapping, one per line, format "
-                "`Leadfile Column,convertrFieldName` (e.g. `Email,email`) — don't include CID here, it's "
-                "recovered later by matching email back to the uploaded leadfile, not from Convertr itself:"
+                "`Leadfile Column,convertrFieldName` (e.g. `Email,email`) — don't include CID here, the "
+                "uploaded row itself is kept and reused when writing Accumulated/Refund later, not "
+                "anything Convertr echoes back:"
             )
             _existing_field_map_text = "\n".join(
                 f"{col},{field_name}" for col, field_name in
@@ -814,40 +819,10 @@ with tab_complex:
                 _col, _field_name = _line.split(",", 1)
                 convertr_field_mapping[_col.strip()] = _field_name.strip()
 
-            _unique_campaign_ids = sorted({c.campaign_id for c in convertr_campaigns if c.campaign_id})
-            if _unique_campaign_ids:
-                st.caption(
-                    "Campaign API Key per campaign (from that campaign's Admin → Setup → Advanced in "
-                    "Convertr) — stored locally on this machine only, never in the shared client profile:"
-                )
-            for _campaign_id in _unique_campaign_ids:
-                _key_col, _test_col = st.columns([3, 1])
-                _existing_key = get_convertr_api_key(client_name, _campaign_id) if client_name else ""
-                _entered_key = _key_col.text_input(
-                    f"API key — campaign {_campaign_id}", value=_existing_key, type="password",
-                    key=f"convertr_api_key_{_campaign_id}")
-                _convertr_api_keys_to_save[_campaign_id] = _entered_key
-                if _test_col.button("Test connection", key=f"convertr_test_{_campaign_id}"):
-                    if not convertr_enterprise or not _entered_key:
-                        st.warning("Enter the enterprise subdomain and this campaign's API key first.")
-                    else:
-                        try:
-                            with st.spinner(f"Calling Convertr for campaign {_campaign_id}..."):
-                                _forms = get_campaign_form_fields(convertr_enterprise, _campaign_id, _entered_key)
-                            if not _forms:
-                                st.warning("Connected, but Convertr returned no forms for this campaign.")
-                            for _form in _forms:
-                                _field_keys = ", ".join(f["key"] for f in _form.get("fields", []))
-                                st.success(
-                                    f"✅ Form \"{_form.get('formName')}\" (Global Form ID "
-                                    f"{_form.get('formId')}) — fields: {_field_keys}"
-                                )
-                        except ConvertrError as exc:
-                            st.error(f"❌ {exc}")
-
             st.caption(
-                "Account login (for reading back accepted/rejected leads on the Convertr page only — "
-                "never used for uploading) — stored locally on this machine only:"
+                "Account login — used both to upload leads and to read back accepted/rejected outcomes "
+                "(every Publisher user has API access with these same credentials) — stored locally on "
+                "this machine only, never in the shared client profile:"
             )
             _existing_creds = get_convertr_account_credentials(client_name) if client_name else {
                 "username": "", "password": ""}
@@ -857,6 +832,31 @@ with tab_complex:
             convertr_account_password = _account_col2.text_input(
                 "Convertr password", value=_existing_creds["password"], type="password",
                 key="convertr_account_password")
+
+            _unique_campaign_ids = sorted({c.campaign_id for c in convertr_campaigns if c.campaign_id})
+            for _campaign_id in _unique_campaign_ids:
+                if st.button(f"Test connection — campaign {_campaign_id}", key=f"convertr_test_{_campaign_id}"):
+                    if not convertr_enterprise or not convertr_account_username or not convertr_account_password:
+                        st.warning("Enter the enterprise subdomain and account login first.")
+                    else:
+                        try:
+                            with st.spinner(f"Calling Convertr for campaign {_campaign_id}..."):
+                                _token = convertr_client.login(
+                                    convertr_enterprise, convertr_account_username, convertr_account_password,
+                                )["access_token"]
+                                _forms = convertr_client.get_publisher_form_fields(
+                                    convertr_enterprise, _token, _campaign_id)
+                            if not _forms:
+                                st.warning("Connected, but Convertr returned no forms for this campaign.")
+                            for _form in _forms:
+                                _field_keys = ", ".join(
+                                    f.removeprefix("form[").removesuffix("]") for f in _form.get("fields", []))
+                                st.success(
+                                    f"✅ Form \"{_form.get('formName')}\" (Form ID "
+                                    f"{_form.get('formId')}) — fields: {_field_keys}"
+                                )
+                        except ConvertrError as exc:
+                            st.error(f"❌ {exc}")
         else:
             st.caption("Convertr upload is disabled for this client.")
 
@@ -962,16 +962,13 @@ if st.button("💾 Save Client Profile", type="primary"):
             convertr=ConvertrConfig(
                 enabled=convertr_enabled,
                 enterprise=convertr_enterprise if convertr_enabled else "",
+                publisher_id=convertr_publisher_id if convertr_enabled else "",
                 campaigns=convertr_campaigns if convertr_enabled else [],
                 field_mapping=convertr_field_mapping if convertr_enabled else {},
             ),
         )
         saved_path = save_profile(new_profile, get_clients_dir())
-        if convertr_enabled:
-            for _campaign_id, _api_key in _convertr_api_keys_to_save.items():
-                if _api_key:
-                    save_convertr_api_key(client_name, _campaign_id, _api_key)
-            if convertr_account_username or convertr_account_password:
-                save_convertr_account_credentials(
-                    client_name, convertr_account_username, convertr_account_password)
+        if convertr_enabled and (convertr_account_username or convertr_account_password):
+            save_convertr_account_credentials(
+                client_name, convertr_account_username, convertr_account_password)
         st.toast(f"Saved profile to {saved_path}", icon="✅")

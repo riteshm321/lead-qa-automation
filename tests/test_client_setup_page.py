@@ -240,15 +240,16 @@ def test_convertr_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
     next(t for t in at.text_input if t.label == "Client name").set_value("Amazon Business EMEA").run()
     at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
     next(t for t in at.text_input if "Convertr enterprise subdomain" in t.label).set_value("amazonbusiness").run()
+    next(t for t in at.text_input if "Convertr Publisher ID" in t.label).set_value("11003").run()
     at.text_area(key="convertr_campaigns_input").set_value(
         "120022,44709\n120021,44709\n120028,44706,80").run()
     at.text_area(key="convertr_field_map_input").set_value("Email,email\nFirst Name,firstName").run()
 
-    # Two CIDs share campaign 44709, so only one API key field should
-    # appear for it -- not one per CID.
-    assert sum(1 for t in at.text_input if "campaign 44709" in t.label) == 1
-    at.text_input(key="convertr_api_key_44709").set_value("key-for-44709").run()
-    at.text_input(key="convertr_api_key_44706").set_value("key-for-44706").run()
+    # No per-campaign API key inputs anymore -- the Publisher API uses the
+    # one account login for every campaign, so only a single "Test
+    # connection" button should appear per unique campaign_id.
+    assert not any("campaign 44709" in t.label for t in at.text_input)
+    assert sum(1 for b in at.button if "Test connection" in b.label) == 2
     at.text_input(key="convertr_account_username").set_value("me@x.com").run()
     at.text_input(key="convertr_account_password").set_value("hunter2").run()
 
@@ -256,24 +257,23 @@ def test_convertr_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
     save_button.click().run()
     assert not at.exception
 
-    from core.app_settings import get_clients_dir, get_convertr_api_key, get_convertr_account_credentials
+    from core.app_settings import get_clients_dir, get_convertr_account_credentials
     from core.profile_store import load_profile
 
     loaded = load_profile("Amazon Business EMEA", get_clients_dir())
     assert loaded.convertr.enabled is True
     assert loaded.convertr.enterprise == "amazonbusiness"
+    assert loaded.convertr.publisher_id == "11003"
     assert loaded.convertr.field_mapping == {"Email": "email", "First Name": "firstName"}
     campaigns_by_cid = {c.cid: c for c in loaded.convertr.campaigns}
     assert campaigns_by_cid["120022"].campaign_id == "44709"
     assert campaigns_by_cid["120028"].campaign_id == "44706"
     assert campaigns_by_cid["120028"].global_form_id == "80"
 
-    # The API keys must NOT be in the shared client profile JSON, only in
-    # the local app_settings.json.
+    # The account credentials must NOT be in the shared client profile
+    # JSON, only in the local app_settings.json.
     with open(get_clients_dir() + "/Amazon Business EMEA.json", encoding="utf-8") as f:
-        assert "key-for-44709" not in f.read()
-    assert get_convertr_api_key("Amazon Business EMEA", "44709") == "key-for-44709"
-    assert get_convertr_api_key("Amazon Business EMEA", "44706") == "key-for-44706"
+        assert "hunter2" not in f.read()
     assert get_convertr_account_credentials("Amazon Business EMEA") == {
         "username": "me@x.com", "password": "hunter2"}
 
