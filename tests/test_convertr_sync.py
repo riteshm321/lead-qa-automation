@@ -1,8 +1,11 @@
+import pandas as pd
+
 from core.app_settings import save_app_settings
 from core.convertr_sync import (
     classify_lead, rejection_reason, lead_field_values, lead_to_leadfile_row,
     load_synced_lead_ids, mark_leads_synced,
     save_email_to_cid_map, load_email_to_cid_map, cid_for_email,
+    select_rows_for_test_mode,
 )
 
 
@@ -142,3 +145,40 @@ def test_email_to_cid_map_a_later_upload_overwrites_an_earlier_cid_for_the_same_
     save_email_to_cid_map("Amazon Business EMEA", {"a@x.com": "120028"})
 
     assert load_email_to_cid_map("Amazon Business EMEA") == {"a@x.com": "120028"}
+
+
+def test_select_rows_for_test_mode_picks_one_row_per_unique_campaign_not_per_cid():
+    # 120022 and 120021 both share campaign 44709 -- test mode should send
+    # only the FIRST of them, not both.
+    leads_df = pd.DataFrame([
+        {"CID": "120022", "Email": "a@x.com"},
+        {"CID": "120021", "Email": "b@x.com"},
+        {"CID": "120028", "Email": "c@x.com"},
+    ])
+    cid_to_campaign_id = {"120022": "44709", "120021": "44709", "120028": "44706"}
+
+    send_df, skip_df = select_rows_for_test_mode(leads_df, "CID", cid_to_campaign_id)
+
+    assert list(send_df["Email"]) == ["a@x.com", "c@x.com"]
+    assert list(skip_df["Email"]) == ["b@x.com"]
+
+
+def test_select_rows_for_test_mode_ignores_cids_with_no_campaign_mapping():
+    leads_df = pd.DataFrame([{"CID": "999999", "Email": "a@x.com"}])
+
+    send_df, skip_df = select_rows_for_test_mode(leads_df, "CID", {})
+
+    assert send_df.empty
+    assert skip_df.empty
+
+
+def test_select_rows_for_test_mode_preserves_original_dataframe_index():
+    leads_df = pd.DataFrame(
+        [{"CID": "120022", "Email": "a@x.com"}, {"CID": "120022", "Email": "b@x.com"}],
+        index=[10, 11],
+    )
+
+    send_df, skip_df = select_rows_for_test_mode(leads_df, "CID", {"120022": "44709"})
+
+    assert list(send_df.index) == [10]
+    assert list(skip_df.index) == [11]

@@ -1,5 +1,7 @@
 import os
 
+import pandas as pd
+
 from core.app_settings import get_shared_root_dir
 from core.atomic_io import atomic_write_json
 
@@ -117,6 +119,33 @@ def save_email_to_cid_map(client_name: str, email_to_cid: dict[str, object]) -> 
 
 def cid_for_email(email: str, email_to_cid: dict[str, str]) -> str:
     return email_to_cid.get(_normalize_email(email), "")
+
+
+def select_rows_for_test_mode(
+    leads_df: pd.DataFrame, cid_column: str, cid_to_campaign_id: dict[str, str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """For the Upload page's test mode: exactly one row per unique
+    Convertr campaign (SID), not one per CID -- several CIDs commonly
+    share one campaign (e.g. 5 CIDs -> one SID), and the point of a test
+    run is to touch each real campaign exactly once, not once per CID.
+
+    Returns (rows_to_send, rows_skipped), both preserving leads_df's own
+    index. A CID with no entry in cid_to_campaign_id (no campaign mapped
+    at all) is left out of both -- the caller reports that separately,
+    it has nothing to do with test-mode's per-SID limiting.
+    """
+    seen_campaign_ids: set[str] = set()
+    send_indices, skip_indices = [], []
+    for idx, cid in leads_df[cid_column].astype(str).items():
+        campaign_id = cid_to_campaign_id.get(cid)
+        if campaign_id is None:
+            continue
+        if campaign_id in seen_campaign_ids:
+            skip_indices.append(idx)
+        else:
+            seen_campaign_ids.add(campaign_id)
+            send_indices.append(idx)
+    return leads_df.loc[send_indices], leads_df.loc[skip_indices]
 
 
 def _synced_leads_path(client_name: str) -> str:

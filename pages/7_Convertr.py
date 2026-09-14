@@ -4,15 +4,17 @@ import datetime
 import pandas as pd
 import streamlit as st
 
-from core.app_settings import get_clients_dir, get_convertr_api_key, get_convertr_account_credentials
+from core.app_settings import get_clients_dir, get_convertr_api_key, get_convertr_account_credentials, get_jira_settings
 from core.branding import configure_page
 from core import convertr_client
 from core.convertr_client import ConvertrError
 from core.convertr_sync import (
     classify_lead, rejection_reason, lead_to_leadfile_row, load_synced_lead_ids, mark_leads_synced,
-    save_email_to_cid_map, load_email_to_cid_map, cid_for_email,
+    save_email_to_cid_map, load_email_to_cid_map, cid_for_email, select_rows_for_test_mode,
 )
 from core.excel_io import read_leadfile, append_leads
+from core import jira_client
+from core.jira_client import JiraError
 from core.profile_store import list_profile_names, load_profile
 
 _current_user = configure_page("Convertr")
@@ -39,8 +41,9 @@ st.caption(
 )
 
 _test_mode = st.checkbox(
-    "Test mode — upload only 1 lead per CID",
-    help="Use this for a first-time check before uploading real volume.",
+    "Test mode — upload only 1 lead per Convertr campaign (SID)",
+    help="Use this for a first-time check before uploading real volume. Several CIDs can share one "
+         "campaign, so this touches each real campaign exactly once, not once per CID.",
 )
 _upload_file = st.file_uploader("Verified leadfile", type=["xlsx", "csv"], key="convertr_upload_file")
 
@@ -68,7 +71,26 @@ if _upload_file:
         )
 
         results = []
-        for cid, group in leads_df.groupby(leads_df[cid_column].astype(str)):
+        _upload_df = leads_df
+        if _test_mode:
+            _cid_to_campaign_id = {cid: m.campaign_id for cid, m in _campaign_by_cid.items()}
+            _send_df, _skipped_df = select_rows_for_test_mode(leads_df, cid_column, _cid_to_campaign_id)
+            for _, lead in _skipped_df.iterrows():
+                _cid = str(lead[cid_column])
+                results.append({
+                    "CID": _cid, "Email": lead.get(profile.field_mapping.email, ""),
+                    "Result": f"⏭️ Skipped (test mode — campaign {_cid_to_campaign_id[_cid]} "
+                              "already tested via another CID)",
+                })
+            # A CID with no campaign mapping at all is excluded from both
+            # _send_df/_skipped_df above (test mode has nothing to do with
+            # that) -- keep those rows in play so they still get the
+            # correct "No Convertr campaign mapped" error below, not
+            # silently vanish.
+            _unmapped_df = leads_df[~leads_df[cid_column].astype(str).isin(_cid_to_campaign_id)]
+            _upload_df = pd.concat([_send_df, _unmapped_df])
+
+        for cid, group in _upload_df.groupby(_upload_df[cid_column].astype(str)):
             mapping = _campaign_by_cid.get(cid)
             if mapping is None:
                 for _, lead in group.iterrows():
@@ -87,8 +109,7 @@ if _upload_file:
                                      "Result": f"❌ No Global Form ID saved for campaign {mapping.campaign_id}"})
                 continue
 
-            rows = group.head(1) if _test_mode else group
-            for _, lead in rows.iterrows():
+            for _, lead in group.iterrows():
                 form_data = {
                     convertr_field: str(lead.get(leadfile_col, "") or "")
                     for leadfile_col, convertr_field in _convertr.field_mapping.items()
@@ -204,9 +225,62 @@ if _accepted_rows or _rejected_rows:
             )
 
         mark_leads_synced(client_name, synced_ids)
+        st.session_state["convertr_reconcile_summary"] = {
+            "client_name": client_name, "accepted": len(_accepted_rows), "rejected": len(_rejected_rows),
+        }
         st.session_state["convertr_accepted_rows"] = []
         st.session_state["convertr_rejected_rows"] = []
         st.success(f"Wrote {len(_accepted_rows)} accepted lead(s) and {len(_rejected_rows)} rejected lead(s).")
         st.rerun()
 elif "convertr_accepted_rows" in st.session_state:
     st.caption("No new decided leads since the last sync.")
+
+st.divider()
+st.subheader("Post to Jira")
+if not profile.jira_ticket_key:
+    st.caption("No Jira ticket configured for this client (set one up on Client Setup).")
+else:
+    st.caption("Nothing is sent until you click Post below — review (and edit) first.")
+
+    _upload_results_df = st.session_state.get("convertr_upload_results")
+    _reconcile_summary = st.session_state.get("convertr_reconcile_summary")
+    _summary_lines = []
+    if _upload_results_df is not None:
+        _ok_count = _upload_results_df["Result"].str.startswith("✅").sum()
+        _summary_lines.append(f"Uploaded {len(_upload_results_df)} lead(s) to Convertr ({_ok_count} succeeded).")
+    if _reconcile_summary and _reconcile_summary["client_name"] == client_name:
+        _summary_lines.append(
+            f"Reconciled Convertr decisions: {_reconcile_summary['accepted']} accepted, "
+            f"{_reconcile_summary['rejected']} rejected (moved to Refund)."
+        )
+    _greeting = f"Hi {profile.jira_reporter_name}," if profile.jira_reporter_name else "Hi,"
+    _default_opening = _greeting + "\n" + ("\n".join(_summary_lines) if _summary_lines else "")
+    st.text_area("Message", _default_opening, key="convertr_jira_message", height=120)
+
+    st.caption("Optional attachment (uploaded after the comment posts):")
+    _attachment_file = st.file_uploader("Attach a file", key="convertr_jira_attachment")
+    if _attachment_file is not None:
+        st.session_state["convertr_jira_attachment_bytes"] = _attachment_file.getvalue()
+        st.session_state["convertr_jira_attachment_name"] = _attachment_file.name
+
+    if st.button(f"📋 Post to {jira_client.extract_ticket_key(profile.jira_ticket_key)}", key="convertr_jira_post"):
+        jira_settings = get_jira_settings()
+        if not all([jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"]]):
+            st.error("Set up your Jira account (site URL, email, API token) in Client Setup first.")
+        else:
+            try:
+                adf_body = jira_client.build_comment_body(opening_text=st.session_state["convertr_jira_message"])
+                jira_client.post_comment_body(
+                    jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"],
+                    jira_client.extract_ticket_key(profile.jira_ticket_key), adf_body,
+                )
+                _att_bytes = st.session_state.get("convertr_jira_attachment_bytes")
+                _att_name = st.session_state.get("convertr_jira_attachment_name")
+                if _att_bytes is not None:
+                    jira_client.upload_attachment(
+                        jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"],
+                        jira_client.extract_ticket_key(profile.jira_ticket_key), _att_name, _att_bytes,
+                    )
+                st.success("Posted to Jira.")
+            except JiraError as exc:
+                st.error(f"Failed to post to Jira: {exc}")
