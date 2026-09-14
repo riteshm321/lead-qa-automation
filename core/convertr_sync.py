@@ -19,6 +19,23 @@ def rejection_reason_from_result(result: dict) -> str:
     return "Rejected by Convertr"
 
 
+def _normalize_email(email) -> str:
+    return str(email or "").strip().lower()
+
+
+def filter_already_uploaded(
+    leads_df: pd.DataFrame, email_column: str, already_uploaded_emails: set[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Splits a leadfile into (rows_to_send, rows_already_uploaded) by
+    email, so a repeated upload of the same (or an overlapping) file never
+    resends a lead Convertr has already accepted -- Convertr itself would
+    likely reject a resend as a duplicate, so this is caught before ever
+    making the call. Both preserve leads_df's own index.
+    """
+    is_duplicate = leads_df[email_column].astype(str).map(_normalize_email).isin(already_uploaded_emails)
+    return leads_df[~is_duplicate], leads_df[is_duplicate]
+
+
 def select_rows_for_test_mode(
     leads_df: pd.DataFrame, cid_column: str, cid_to_campaign_id: dict[str, str],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -89,3 +106,31 @@ def remove_pending_leads(client_name: str, lead_ids: list[str]) -> None:
     for lead_id in lead_ids:
         existing.pop(str(lead_id), None)
     atomic_write_json(path, existing)
+
+
+def _uploaded_emails_path(client_name: str) -> str:
+    root = get_shared_root_dir()
+    return os.path.join(root, "convertr_uploaded_emails", f"{client_name}.json") if root else ""
+
+
+def load_uploaded_emails(client_name: str) -> set[str]:
+    """Every email successfully submitted to Convertr for this client,
+    ever -- across every teammate, and kept even after a lead is later
+    reconciled and removed from load_pending_leads. This is what
+    filter_already_uploaded checks a new upload against, so a repeated (or
+    overlapping) leadfile never resends the same lead.
+    """
+    path = _uploaded_emails_path(client_name)
+    if not path or not os.path.isfile(path):
+        return set()
+    with open(path, "r", encoding="utf-8") as f:
+        return set(json.load(f))
+
+
+def save_uploaded_emails(client_name: str, emails: set[str]) -> None:
+    path = _uploaded_emails_path(client_name)
+    if not path:
+        return
+    existing = load_uploaded_emails(client_name)
+    existing.update(_normalize_email(e) for e in emails if _normalize_email(e))
+    atomic_write_json(path, sorted(existing))

@@ -82,13 +82,24 @@ def test_submit_lead_as_publisher_raises_convertr_error_with_the_response_messag
             submit_lead_as_publisher("amazonbusiness", "tok123", "11003", "44400", "75", {"email": "j@x.com"})
 
 
-def test_submit_lead_as_publisher_raises_when_status_201_but_body_status_mismatched():
-    # Belt-and-suspenders check: both the HTTP status AND the body's own
-    # "status" field must say 201, in case they ever disagree.
-    mock_response = MagicMock(status_code=200, json=lambda: {"status": 400, "message": "Validation failed"})
+def test_submit_lead_as_publisher_raises_on_non_201_http_status_even_with_a_message_body():
+    mock_response = MagicMock(status_code=400, json=lambda: {"code": 400, "message": "Validation failed"})
     with patch("core.convertr_client.requests.post", return_value=mock_response):
         with pytest.raises(ConvertrError, match="Validation failed"):
             submit_lead_as_publisher("amazonbusiness", "tok123", "11003", "44400", "75", {"email": "j@x.com"})
+
+
+def test_submit_lead_as_publisher_succeeds_on_201_regardless_of_the_body_shape():
+    # Convertr's own success message doesn't reliably match what its docs
+    # show ("Model was created successfully" observed vs. documented
+    # "Lead was created successfully"), and there's no consistent
+    # "status"/"code" field to double-check on success -- so a 201 HTTP
+    # status alone must be trusted, not gated on a specific body shape.
+    mock_response = MagicMock(
+        status_code=201, json=lambda: {"data": 55907, "message": "Model was created successfully"})
+    with patch("core.convertr_client.requests.post", return_value=mock_response):
+        result = submit_lead_as_publisher("amazonbusiness", "tok123", "11003", "44400", "75", {"email": "j@x.com"})
+    assert result["data"] == 55907
 
 
 def test_get_lead_result_valid_lead_returns_empty_200():

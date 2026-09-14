@@ -10,7 +10,7 @@ from core import convertr_client
 from core.convertr_client import ConvertrError
 from core.convertr_sync import (
     rejection_reason_from_result, load_pending_leads, save_pending_leads, remove_pending_leads,
-    select_rows_for_test_mode,
+    load_uploaded_emails, save_uploaded_emails, filter_already_uploaded, select_rows_for_test_mode,
 )
 from core.excel_io import read_leadfile, append_leads
 from core import jira_client
@@ -37,7 +37,8 @@ st.divider()
 st.subheader("1. Upload leads to Convertr")
 st.caption(
     "Uploads a client-verified leadfile straight to Convertr — each CID routes to its own campaign, "
-    "per the mapping configured on Client Setup."
+    "per the mapping configured on Client Setup. A lead already uploaded before (by email) is skipped "
+    "automatically, so re-uploading the same or an overlapping file is safe."
 )
 
 _test_mode = st.checkbox(
@@ -73,10 +74,19 @@ if _upload_file:
 
         results = []
         _newly_pending: dict[str, dict] = {}
-        _upload_df = leads_df
+        _newly_uploaded_emails: set[str] = set()
+
+        _already_uploaded = load_uploaded_emails(client_name)
+        _upload_df, _dup_df = filter_already_uploaded(leads_df, profile.field_mapping.email, _already_uploaded)
+        for _, lead in _dup_df.iterrows():
+            results.append({
+                "CID": lead.get(cid_column, ""), "Email": lead.get(profile.field_mapping.email, ""),
+                "Result": "⏭️ Skipped (already uploaded previously)",
+            })
+
         if _test_mode:
             _cid_to_campaign_id = {cid: m.campaign_id for cid, m in _campaign_by_cid.items()}
-            _send_df, _skipped_df = select_rows_for_test_mode(leads_df, cid_column, _cid_to_campaign_id)
+            _send_df, _skipped_df = select_rows_for_test_mode(_upload_df, cid_column, _cid_to_campaign_id)
             for _, lead in _skipped_df.iterrows():
                 _cid = str(lead[cid_column])
                 results.append({
@@ -89,7 +99,7 @@ if _upload_file:
             # that) -- keep those rows in play so they still get the
             # correct "No Convertr campaign mapped" error below, not
             # silently vanish.
-            _unmapped_df = leads_df[~leads_df[cid_column].astype(str).isin(_cid_to_campaign_id)]
+            _unmapped_df = _upload_df[~_upload_df[cid_column].astype(str).isin(_cid_to_campaign_id)]
             _upload_df = pd.concat([_send_df, _unmapped_df])
 
         for cid, group in _upload_df.groupby(_upload_df[cid_column].astype(str)):
@@ -123,19 +133,27 @@ if _upload_file:
                     # for that lead's fields (CID included) once reconcile
                     # writes it to Accumulated/Refund.
                     _newly_pending[lead_id] = {col: lead.get(col, "") for col in leads_df.columns}
+                    _newly_uploaded_emails.add(str(email))
                     results.append({"CID": cid, "Email": email, "Result": f"✅ Lead ID {lead_id}"})
                 except ConvertrError as exc:
                     results.append({"CID": cid, "Email": email, "Result": f"❌ {exc}"})
 
         if _newly_pending:
             save_pending_leads(client_name, _newly_pending)
+        if _newly_uploaded_emails:
+            save_uploaded_emails(client_name, _newly_uploaded_emails)
         st.session_state["convertr_upload_results"] = pd.DataFrame(results)
 
 if st.session_state.get("convertr_upload_results") is not None:
     _results_df = st.session_state["convertr_upload_results"]
+    _ok = int(_results_df["Result"].str.startswith("✅").sum())
+    _failed = int(_results_df["Result"].str.startswith("❌").sum())
+    _skipped = int(_results_df["Result"].str.startswith("⏭️").sum())
+    _sum_col1, _sum_col2, _sum_col3 = st.columns(3)
+    _sum_col1.metric("✅ Uploaded", _ok)
+    _sum_col2.metric("❌ Failed", _failed)
+    _sum_col3.metric("⏭️ Skipped", _skipped)
     st.dataframe(_results_df, hide_index=True)
-    _ok = _results_df["Result"].str.startswith("✅").sum()
-    st.caption(f"{_ok} of {len(_results_df)} lead(s) uploaded successfully.")
 
 st.divider()
 st.subheader("2. Reconcile accepted/rejected leads")

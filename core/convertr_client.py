@@ -62,7 +62,14 @@ def submit_lead_as_publisher(
     except ValueError:
         body = {}
 
-    if response.status_code != 201 or body.get("status") != 201:
+    # The HTTP status is the authoritative success signal here -- the
+    # response body's own success message/field naming isn't consistent
+    # with what Convertr's docs show (observed: "Model was created
+    # successfully" instead of the documented "Lead was created
+    # successfully", with no reliable "status"/"code" field to check
+    # instead), so a 201 alone is trusted rather than also requiring a
+    # specific body shape.
+    if response.status_code != 201:
         message = body.get("message") or response.text[:300]
         raise ConvertrError(f"Convertr returned {response.status_code}: {message}")
     return body
