@@ -6,6 +6,7 @@ import openpyxl
 import pandas as pd
 
 from core.check_result import ReviewDetail
+from core.excel_io import read_csv_bytes_robust
 from core.matching import extract_domain
 
 # Hardcoded to Dell APAC's actual column names (per design decision: not
@@ -373,9 +374,30 @@ def format_phone(value) -> str:
     return digits if len(digits) <= 2 else f"{digits[:2]} {digits[2:]}"
 
 
+def _read_header_and_rows(path: str) -> tuple[list, list[tuple]]:
+    """(header row values, data row value-tuples) from either a CSV or an
+    Excel workbook's first sheet -- the free-text path picker for this
+    kind of reference file doesn't restrict the extension, so both must
+    work the same way the app's other reference-file inputs do (see
+    read_sheet_as_dataframe)."""
+    if path.lower().endswith(".csv"):
+        with open(path, "rb") as f:
+            df = read_csv_bytes_robust(f.read())
+        return list(df.columns), [tuple(row) for row in df.itertuples(index=False, name=None)]
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws = wb[wb.sheetnames[0]]
+        header = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        return header, rows
+    finally:
+        wb.close()
+
+
 def load_asset_specifications(path: str) -> dict[str, dict]:
-    """Reads the "Specifications Campaigns - BANT NTQ & EHS" workbook into
-    normalized-Asset-Name -> {"urn", "au_link", "india_link", "dell_url"}.
+    """Reads the "Specifications Campaigns - BANT NTQ & EHS" workbook (or a
+    CSV export of it) into normalized-Asset-Name -> {"urn", "au_link",
+    "india_link", "dell_url"}.
 
     Header text on this sheet wraps onto a second line and carries
     bracketed "[to be filled in by ...]" annotations that shift over
@@ -383,42 +405,37 @@ def load_asset_specifications(path: str) -> dict[str, dict]:
     sessions of this exact feature) -- matched by substring, not exact
     text, so a minor header edit doesn't silently break the whole thing.
     """
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    try:
-        ws = wb[wb.sheetnames[0]]
-        header_cells = next(ws.iter_rows(min_row=1, max_row=1))
-        name_i = urn_i = au_link_i = india_link_i = dell_i = None
-        for i, cell in enumerate(header_cells):
-            if cell.value is None:
-                continue
-            header = str(cell.value).strip().lower()
-            if "asset name" in header:
-                name_i = i
-            elif "urn" in header:
-                urn_i = i
-            elif "[au]" in header:
-                au_link_i = i
-            elif "india" in header:
-                india_link_i = i
-            elif "dell" in header:
-                dell_i = i
-        if name_i is None:
-            raise ValueError(f"'{path}' has no 'Asset Name' column")
+    header_cells, rows = _read_header_and_rows(path)
+    name_i = urn_i = au_link_i = india_link_i = dell_i = None
+    for i, cell_value in enumerate(header_cells):
+        if cell_value is None:
+            continue
+        header = str(cell_value).strip().lower()
+        if "asset name" in header:
+            name_i = i
+        elif "urn" in header:
+            urn_i = i
+        elif "[au]" in header:
+            au_link_i = i
+        elif "india" in header:
+            india_link_i = i
+        elif "dell" in header:
+            dell_i = i
+    if name_i is None:
+        raise ValueError(f"'{path}' has no 'Asset Name' column")
 
-        specs: dict[str, dict] = {}
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            name = row[name_i] if name_i < len(row) else None
-            if name is None or not str(name).strip():
-                continue
-            specs[str(name).strip().lower()] = {
-                "urn": row[urn_i] if urn_i is not None and urn_i < len(row) else "",
-                "au_link": row[au_link_i] if au_link_i is not None and au_link_i < len(row) else "",
-                "india_link": row[india_link_i] if india_link_i is not None and india_link_i < len(row) else "",
-                "dell_url": row[dell_i] if dell_i is not None and dell_i < len(row) else "",
-            }
-        return specs
-    finally:
-        wb.close()
+    specs: dict[str, dict] = {}
+    for row in rows:
+        name = row[name_i] if name_i < len(row) else None
+        if name is None or not str(name).strip():
+            continue
+        specs[str(name).strip().lower()] = {
+            "urn": row[urn_i] if urn_i is not None and urn_i < len(row) else "",
+            "au_link": row[au_link_i] if au_link_i is not None and au_link_i < len(row) else "",
+            "india_link": row[india_link_i] if india_link_i is not None and india_link_i < len(row) else "",
+            "dell_url": row[dell_i] if dell_i is not None and dell_i < len(row) else "",
+        }
+    return specs
 
 
 def check_asset_url_mismatches(

@@ -225,6 +225,28 @@ def test_load_asset_specifications(tmp_path):
     assert specs["fuel ai innovation"]["dell_url"] == "https://dell.com/x"
 
 
+def test_load_asset_specifications_from_csv(tmp_path):
+    # Every other reference-file input in this app accepts CSV alongside
+    # Excel (see read_sheet_as_dataframe) -- the specifications file's
+    # free-text path picker doesn't restrict the extension either, so a
+    # .csv here must work the same way, not crash trying to open it as a
+    # zip archive.
+    path = str(tmp_path / "specs.csv")
+    path_obj = tmp_path / "specs.csv"
+    path_obj.write_text(
+        "Asset Name,URN,Publisher Link [AU]_BHRS,Publisher Link INDIA]_ECS,Dell Link\n"
+        "Fuel AI Innovation,DT2503G0007_033,https://a.com/au,https://a.com/india,https://dell.com/x\n",
+        encoding="utf-8",
+    )
+
+    specs = load_asset_specifications(path)
+
+    assert specs["fuel ai innovation"]["urn"] == "DT2503G0007_033"
+    assert specs["fuel ai innovation"]["au_link"] == "https://a.com/au"
+    assert specs["fuel ai innovation"]["india_link"] == "https://a.com/india"
+    assert specs["fuel ai innovation"]["dell_url"] == "https://dell.com/x"
+
+
 _ASSET_SPECS = {
     "fuel ai innovation": {
         "urn": "DT2503G0007_033", "au_link": "https://a.com/au",
