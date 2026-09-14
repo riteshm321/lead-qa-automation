@@ -71,6 +71,18 @@ def test_list_profile_names_ignores_non_profile_json_in_same_folder(tmp_path):
     assert list_profile_names(clients_dir=clients_dir) == ["Basware"]
 
 
+def test_list_profile_names_ignores_non_utf8_json_in_same_folder(tmp_path):
+    # A stray .json file that isn't even valid UTF-8 (e.g. a corrupted
+    # OneDrive conflict copy) must be skipped like any other non-profile
+    # file, not crash the whole listing with an unhandled UnicodeDecodeError.
+    clients_dir = str(tmp_path / "clients")
+    save_profile(_sample_profile(), clients_dir=clients_dir)
+    with open(os.path.join(clients_dir, "corrupted.json"), "wb") as f:
+        f.write(b"\xff\xfe\x00\x01not valid utf-8 \xbf")
+
+    assert list_profile_names(clients_dir=clients_dir) == ["Basware"]
+
+
 def test_client_mode_and_lead_template_round_trip(tmp_path):
     clients_dir = str(tmp_path / "clients")
     profile = _sample_profile()

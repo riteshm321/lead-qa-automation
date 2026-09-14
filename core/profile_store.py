@@ -89,7 +89,7 @@ def _looks_like_profile(path: str) -> bool:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return False
     return isinstance(data, dict) and "accumulated_report_path" in data
 

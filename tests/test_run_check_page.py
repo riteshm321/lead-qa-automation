@@ -882,6 +882,73 @@ def test_complex_account_two_stage_finalize_previews_then_writes(tmp_path, monke
     assert written["Business Phone"] == "91 9819719038"
 
 
+def test_complex_account_finalize_fills_segment_from_xlsx_tal_without_crashing(tmp_path, monkeypatch):
+    # Regression test: complex_account.tal_path pointing at a multi-tab
+    # Excel workbook (IBM APAC's shape -- domain->segment by which tab it's
+    # listed on) previously always went through the Dell-only CSV loader
+    # (load_tal_index/pandas.read_csv), which crashed with a
+    # UnicodeDecodeError trying to parse .xlsx bytes as CSV text. The file
+    # extension must route to load_tal_segment_index instead, and the
+    # Segment column must actually get backfilled from it.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email", "First", "Last", "Company", "CID", "Capture Date", "Email Opt-in",
+               "Business Phone", "Segment"])
+    wb.create_sheet("Refund").append(
+        ["Email", "First", "Last", "Company", "CID", "Capture Date", "Email Opt-in",
+         "Business Phone", "Segment"])
+    wb.save(acc_path)
+
+    tal_path = str(tmp_path / "TAL.xlsx")
+    tal_wb = openpyxl.Workbook()
+    select_t = tal_wb.active
+    select_t.title = "TAL Q3 Select T IN"
+    select_t.append(["company_domain"])
+    select_t.append(["wipro.com"])
+    tal_wb.create_sheet("TAL Named IN").append(["company_domain"])
+    tal_wb.save(tal_path)
+
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        complex_account=ComplexAccountConfig(enabled=True, tal_path=tal_path),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email": "a@wipro.com", "First": "A", "Last": "One", "Company": "Wipro", "CID": "1",
+         "Capture Date": "08/17/2026", "Email Opt-in": "Yes, Yes", "Business Phone": 919819719038,
+         "Segment": ""},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    assert not at.exception
+
+    fill_button = next(b for b in at.button if b.label == "Finalize (fill columns)")
+    fill_button.click().run()
+    assert not at.exception
+
+    confirm_button = next(b for b in at.button if b.label == "Confirm & Write")
+    confirm_button.click().run()
+    assert not at.exception
+
+    wb_final = openpyxl.load_workbook(acc_path)
+    row = next(wb_final["Accumulated"].iter_rows(min_row=2, max_row=2, values_only=True))
+    headers = next(wb_final["Accumulated"].iter_rows(min_row=1, max_row=1, values_only=True))
+    written = dict(zip(headers, row))
+    assert written["Segment"] == "SelectT"
+
+
 def test_complex_account_finalize_corrects_mismatched_asset_urls_and_warns(tmp_path, monkeypatch):
     # End-to-end: a lead with a wrong Asset URN/Form URL/Dell Asset URL vs.
     # the specifications file gets corrected during "Finalize (fill

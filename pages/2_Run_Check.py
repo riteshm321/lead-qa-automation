@@ -18,7 +18,7 @@ from core.excel_io import (
 )
 from core.excel_recalc import recalculate_workbook
 from core.complex_account import (
-    load_tal_index, load_asset_specifications, load_domain_value_map,
+    load_tal_index, load_tal_segment_index, load_asset_specifications, load_domain_value_map,
     apply_complex_account_rules, merge_complex_account_review, check_complex_account_conditions,
     ACCOUNT_ID_COLUMN, COMPANY_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
     CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN,
@@ -45,6 +45,12 @@ def _cached_tal_index(path: str, mtime: float):
     # which would silently defeat the whole point of passing it in (to
     # invalidate the cache when the file changes on disk mid-session).
     return load_tal_index(path)
+
+
+@st.cache_data(show_spinner="Loading TAL reference file (large file, first load can take ~15s)...")
+def _cached_tal_segment_index(path: str, mtime: float):
+    # See _cached_tal_index above for the mtime-not-underscored reasoning.
+    return load_tal_segment_index(path)
 
 
 @st.cache_data(show_spinner="Loading asset specifications...")
@@ -703,10 +709,23 @@ if "run_result" in st.session_state:
                 st.button("Finalize (fill columns)"):
             try:
                 with st.spinner("Filling in Complex Account columns..."):
+                    # Two incompatible TAL shapes share this one config field:
+                    # a flat CSV of {web_domain, account_id, account_name,
+                    # country_code} rows (Dell -- account-ID lookup, see
+                    # load_tal_index/match_tal_account) vs. a multi-tab Excel
+                    # workbook where the SHEET a domain appears on IS its
+                    # segment (IBM APAC -- see load_tal_segment_index).
+                    # Branching on file extension routes each client's file
+                    # to the loader that can actually parse it, rather than
+                    # always assuming CSV and crashing on a real .xlsx.
                     tal_index = None
+                    tal_segment_index = None
                     if profile.complex_account.tal_path:
-                        tal_index = _cached_tal_index(
-                            profile.complex_account.tal_path, os.path.getmtime(profile.complex_account.tal_path))
+                        _tal_mtime = os.path.getmtime(profile.complex_account.tal_path)
+                        if profile.complex_account.tal_path.lower().endswith((".xlsx", ".xlsm")):
+                            tal_segment_index = _cached_tal_segment_index(profile.complex_account.tal_path, _tal_mtime)
+                        else:
+                            tal_index = _cached_tal_index(profile.complex_account.tal_path, _tal_mtime)
 
                     installed_tech_map: dict[str, str] = {}
                     if complex_it_file is not None:
@@ -737,7 +756,8 @@ if "run_result" in st.session_state:
 
                     enriched_valid, _, complex_corrections = apply_complex_account_rules(
                         new_leads.loc[final_valid_indices], field_mapping,
-                        tal_index, installed_tech_map, pbs_map, asset_specs=_fill_asset_specs)
+                        tal_index, installed_tech_map, pbs_map, asset_specs=_fill_asset_specs,
+                        tal_segment_index=tal_segment_index)
                     st.session_state["complex_enriched_leads"] = enriched_valid
                     st.session_state["complex_corrections"] = complex_corrections
                     st.session_state["complex_final_refund_reasons"] = final_refund_reasons
