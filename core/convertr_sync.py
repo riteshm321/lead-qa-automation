@@ -64,18 +64,59 @@ def lead_to_leadfile_row(lead: dict, convertr_field_to_leadfile_column: dict[str
     column name} -- the inverse of ConvertrConfig.field_mapping, which
     maps leadfile column -> Convertr field name for uploads).
 
-    IMPORTANT: this can only recover a column if it was actually
-    submitted as a real field on the Convertr form at upload time (see
-    ConvertrConfig.field_mapping) -- most notably CID, which isn't a
-    natural Convertr field. Map CID to a real custom field on the
-    receiving form (and include it in field_mapping) if you need it to
-    round-trip into the Accumulated/Refund tabs, same as any other column.
+    This can only recover a column if it was actually submitted as a real
+    field on the Convertr form at upload time. CID deliberately isn't
+    handled this way at all -- see cid_for_email/save_email_to_cid_map,
+    which look it up from the leadfile used at upload time instead, since
+    Convertr's own forms have no natural place for it.
     """
     values = lead_field_values(lead)
     return {
         leadfile_column: values.get(convertr_field, "")
         for convertr_field, leadfile_column in convertr_field_to_leadfile_column.items()
     }
+
+
+def _normalize_email(email) -> str:
+    return str(email or "").strip().lower()
+
+
+def _uploaded_lookup_path(client_name: str) -> str:
+    root = get_shared_root_dir()
+    return os.path.join(root, "convertr_email_to_cid", f"{client_name}.json") if root else ""
+
+
+def load_email_to_cid_map(client_name: str) -> dict[str, str]:
+    path = _uploaded_lookup_path(client_name)
+    if not path or not os.path.isfile(path):
+        return {}
+    import json
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_email_to_cid_map(client_name: str, email_to_cid: dict[str, object]) -> None:
+    """Records which CID each email belongs to, straight from the leadfile
+    used to upload to Convertr -- so reconcile can recover a returned
+    lead's CID by matching its email back to this, without depending on
+    Convertr's own form carrying a CID field at all (it has none
+    natively). Merges into whatever's already recorded, shared across the
+    team the same way load_synced_lead_ids is; a later upload for the
+    same email overwrites its earlier recorded CID.
+    """
+    path = _uploaded_lookup_path(client_name)
+    if not path:
+        return
+    existing = load_email_to_cid_map(client_name)
+    for email, cid in email_to_cid.items():
+        normalized = _normalize_email(email)
+        if normalized:
+            existing[normalized] = str(cid)
+    atomic_write_json(path, existing)
+
+
+def cid_for_email(email: str, email_to_cid: dict[str, str]) -> str:
+    return email_to_cid.get(_normalize_email(email), "")
 
 
 def _synced_leads_path(client_name: str) -> str:

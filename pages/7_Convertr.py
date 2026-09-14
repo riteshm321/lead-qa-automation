@@ -10,6 +10,7 @@ from core import convertr_client
 from core.convertr_client import ConvertrError
 from core.convertr_sync import (
     classify_lead, rejection_reason, lead_to_leadfile_row, load_synced_lead_ids, mark_leads_synced,
+    save_email_to_cid_map, load_email_to_cid_map, cid_for_email,
 )
 from core.excel_io import read_leadfile, append_leads
 from core.profile_store import list_profile_names, load_profile
@@ -56,6 +57,16 @@ if _upload_file:
         st.stop()
 
     if st.button("Upload to Convertr", type="primary"):
+        # Recorded for every lead in the file regardless of upload outcome
+        # (or test-mode skipping) -- reconcile later looks up a returned
+        # lead's CID by matching its email back to this, since Convertr's
+        # own forms have no native place to carry CID through and echo it
+        # back on their own.
+        save_email_to_cid_map(
+            client_name,
+            dict(zip(leads_df[profile.field_mapping.email].astype(str), leads_df[cid_column].astype(str))),
+        )
+
         results = []
         for cid, group in leads_df.groupby(leads_df[cid_column].astype(str)):
             mapping = _campaign_by_cid.get(cid)
@@ -105,8 +116,9 @@ st.subheader("2. Reconcile accepted/rejected leads")
 st.caption(
     "Fetches each campaign's leads from Convertr, and writes accepted ones into the Accumulated tab and "
     "rejected ones into the Refund tab (with Convertr's reason) — matched by column header, same as any "
-    "other lead write, with that day's date under Date. Only leads Convertr has actually decided on "
-    "(not still mid-QA) are written; a lead already synced in a previous run is never written twice."
+    "other lead write, with that day's date under Date and each lead's CID recovered by matching its "
+    "email back to the leadfile uploaded in step 1. Only leads Convertr has actually decided on (not "
+    "still mid-QA) are written; a lead already synced in a previous run is never written twice."
 )
 
 _unique_campaign_ids = sorted({c.campaign_id for c in _convertr.campaigns})
@@ -125,6 +137,8 @@ if st.button("Fetch decisions from Convertr"):
 
     reverse_field_mapping = {v: k for k, v in _convertr.field_mapping.items()}
     already_synced = load_synced_lead_ids(client_name)
+    email_to_cid = load_email_to_cid_map(client_name)
+    cid_column = profile.field_mapping.cid
     accepted_rows, rejected_rows = [], []
     try:
         with st.spinner("Fetching leads..."):
@@ -141,6 +155,7 @@ if st.button("Fetch decisions from Convertr"):
                         if status == "pending":
                             continue
                         row = lead_to_leadfile_row(lead, reverse_field_mapping)
+                        row[cid_column] = cid_for_email(lead.get("email", ""), email_to_cid)
                         row["_convertr_lead_id"] = lead_id
                         if status == "accepted":
                             accepted_rows.append(row)

@@ -797,7 +797,8 @@ with tab_complex:
 
             st.caption(
                 "Leadfile column → Convertr form field name mapping, one per line, format "
-                "`Leadfile Column,convertrFieldName` (e.g. `Email,email`):"
+                "`Leadfile Column,convertrFieldName` (e.g. `Email,email`) — don't include CID here, it's "
+                "recovered later by matching email back to the uploaded leadfile, not from Convertr itself:"
             )
             _existing_field_map_text = "\n".join(
                 f"{col},{field_name}" for col, field_name in

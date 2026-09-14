@@ -6,6 +6,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_convertr_account_credentials, save_app_settings
+from core.convertr_sync import save_email_to_cid_map
 from core.models import ClientProfile, FieldMapping, ConvertrConfig, ConvertrCampaignMapping
 from core.profile_store import save_profile
 
@@ -32,18 +33,21 @@ def _save_profile(acc_path: str) -> ClientProfile:
                 ConvertrCampaignMapping(cid="120022", campaign_id="44709", global_form_id="75"),
                 ConvertrCampaignMapping(cid="120028", campaign_id="44706", global_form_id="80"),
             ],
-            field_mapping={"Email": "email", "First Name": "firstName", "Last Name": "lastName", "CID": "cid"},
+            field_mapping={"Email": "email", "First Name": "firstName", "Last Name": "lastName"},
         ),
     )
     save_profile(profile, get_clients_dir())
     return profile
 
 
-def _lead(lead_id: int, status: str, cid: str, email: str, reason: str | None = None) -> dict:
+def _lead(lead_id: int, status: str, email: str, reason: str | None = None) -> dict:
+    # Deliberately carries no "cid" field of any kind -- CID is recovered
+    # purely by matching email back to save_email_to_cid_map's record of
+    # the leadfile used at upload time, not from anything Convertr itself
+    # echoes back (it has no native place to carry CID at all).
     lead = {
         "id": lead_id, "email": email, "firstName": "A", "lastName": "One",
         "leadStatus": {"name": status},
-        "leadData": [{"name": "cid", "value": cid}],
     }
     if reason:
         lead["leadFlag"] = {"reason": reason}
@@ -65,9 +69,13 @@ def test_reconcile_writes_accepted_to_accumulated_and_rejected_to_refund_with_ci
     _make_accumulated(acc_path)
     _save_profile(acc_path)
     save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+    # Simulates what step 1 (Upload) records for every lead in the file,
+    # regardless of upload outcome -- reconcile has no other way to know
+    # which CID an email belongs to.
+    save_email_to_cid_map("Amazon Business EMEA", {"accepted@x.com": "120022", "rejected@x.com": "120028"})
 
-    accepted_lead = _lead(101, "Valid", "120022", "accepted@x.com")
-    rejected_lead = _lead(102, "Invalid", "120028", "rejected@x.com", reason="Unable to Contact")
+    accepted_lead = _lead(101, "Valid", "accepted@x.com")
+    rejected_lead = _lead(102, "Invalid", "rejected@x.com", reason="Unable to Contact")
 
     def _fake_get_leads(enterprise, token, campaign_id, page=1, items_per_page=100, updated_after=None):
         if campaign_id == "44709":
@@ -107,8 +115,9 @@ def test_reconcile_does_not_rewrite_already_synced_leads(tmp_path, monkeypatch):
     _make_accumulated(acc_path)
     _save_profile(acc_path)
     save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+    save_email_to_cid_map("Amazon Business EMEA", {"already@x.com": "120022"})
 
-    accepted_lead = _lead(201, "Valid", "120022", "already@x.com")
+    accepted_lead = _lead(201, "Valid", "already@x.com")
 
     def _fake_get_leads(enterprise, token, campaign_id, page=1, items_per_page=100, updated_after=None):
         if campaign_id == "44709":

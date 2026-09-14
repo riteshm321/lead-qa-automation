@@ -2,6 +2,7 @@ from core.app_settings import save_app_settings
 from core.convertr_sync import (
     classify_lead, rejection_reason, lead_field_values, lead_to_leadfile_row,
     load_synced_lead_ids, mark_leads_synced,
+    save_email_to_cid_map, load_email_to_cid_map, cid_for_email,
 )
 
 
@@ -104,3 +105,40 @@ def test_synced_lead_ids_scoped_per_client(tmp_path, monkeypatch):
 def test_synced_lead_ids_empty_when_no_shared_root_configured(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert load_synced_lead_ids("Amazon Business EMEA") == set()
+
+
+def test_email_to_cid_map_round_trip(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    save_email_to_cid_map("Amazon Business EMEA", {"a@x.com": "120022", "b@x.com": "120028"})
+
+    mapping = load_email_to_cid_map("Amazon Business EMEA")
+    assert mapping == {"a@x.com": "120022", "b@x.com": "120028"}
+
+
+def test_email_to_cid_map_matches_case_and_whitespace_insensitively():
+    mapping = {"a@x.com": "120022"}
+    assert cid_for_email("  A@X.com  ", mapping) == "120022"
+    assert cid_for_email("unknown@x.com", mapping) == ""
+
+
+def test_email_to_cid_map_merges_across_multiple_uploads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    save_email_to_cid_map("Amazon Business EMEA", {"a@x.com": "120022"})
+    save_email_to_cid_map("Amazon Business EMEA", {"b@x.com": "120028"})
+
+    mapping = load_email_to_cid_map("Amazon Business EMEA")
+    assert mapping == {"a@x.com": "120022", "b@x.com": "120028"}
+
+
+def test_email_to_cid_map_a_later_upload_overwrites_an_earlier_cid_for_the_same_email(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    save_email_to_cid_map("Amazon Business EMEA", {"a@x.com": "120022"})
+    save_email_to_cid_map("Amazon Business EMEA", {"a@x.com": "120028"})
+
+    assert load_email_to_cid_map("Amazon Business EMEA") == {"a@x.com": "120028"}
