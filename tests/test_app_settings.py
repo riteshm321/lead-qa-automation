@@ -3,6 +3,7 @@ import os
 from core.app_settings import (
     load_app_settings, save_app_settings, get_clients_dir, get_aliases_path, get_shared_root_dir,
     get_jira_settings, save_jira_settings, get_convertr_api_key, save_convertr_api_key,
+    get_convertr_account_credentials, save_convertr_account_credentials,
 )
 
 _ROOT = r"C:\Shared\OneDrive\LeadQA"
@@ -116,6 +117,27 @@ def test_convertr_api_key_never_derives_from_shared_root(tmp_path, monkeypatch):
     with open("app_settings.json", encoding="utf-8") as f:
         raw = f.read()
     assert _ROOT.replace("\\", "\\\\") in raw  # sanity: still the same local settings file
+
+
+def test_get_convertr_account_credentials_defaults_to_blank_when_unset(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert get_convertr_account_credentials("Amazon Business EMEA") == {"username": "", "password": ""}
+
+
+def test_save_and_load_convertr_account_credentials_round_trip(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+    assert get_convertr_account_credentials("Amazon Business EMEA") == {
+        "username": "me@x.com", "password": "hunter2",
+    }
+
+
+def test_convertr_account_credentials_scoped_per_client(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_convertr_account_credentials("Client A", "a@x.com", "pw-a")
+    save_convertr_account_credentials("Client B", "b@x.com", "pw-b")
+    assert get_convertr_account_credentials("Client A")["username"] == "a@x.com"
+    assert get_convertr_account_credentials("Client B")["username"] == "b@x.com"
 
 
 def test_jira_settings_never_derive_from_shared_root(tmp_path, monkeypatch):

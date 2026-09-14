@@ -60,3 +60,44 @@ def submit_lead(
         message = body.get("message") or response.text[:300]
         raise ConvertrError(f"Convertr returned {response.status_code}: {message}")
     return body
+
+
+# --- Public APIs (account-level, OAuth2 password grant) --------------------
+# https://support.convertrmedia.com/hc/en-us/articles/... "Public APIs" --
+# used only for reading back lead outcomes (accepted/rejected), never for
+# uploading -- uploads always go through the per-campaign Campaign Webhook
+# above. This access token is scoped to a real user's whole account, a
+# broader credential than a single campaign's API key.
+
+
+def login(enterprise: str, username: str, password: str) -> dict:
+    """Exchanges an account username/password for an access token via
+    OAuth2's password grant. Returns the full token response
+    ({"access_token", "refresh_token", "expires_in", ...}).
+    """
+    url = f"https://{enterprise}.cvtr.io/api/login"
+    response = requests.post(url, data={"username": username, "password": password}, timeout=30)
+    if response.status_code != 200:
+        raise ConvertrError(f"Convertr login returned {response.status_code}: {response.text[:300]}")
+    return response.json()
+
+
+def get_leads(
+    enterprise: str, access_token: str, campaign_id: str,
+    updated_after: str | None = None, page: int = 1, items_per_page: int = 100,
+) -> dict:
+    """One page of GET /api/v4/leads for a single campaign -- optionally
+    only leads updated on/after `updated_after` (an ISO "yyyy-mm-dd" date),
+    so a repeated sync only re-fetches what's actually new. Returns the
+    raw hydra collection response; the caller reads "hydra:member" for the
+    lead objects and "hydra:totalItems"/"hydra:view" to page through more.
+    """
+    url = f"https://{enterprise}.cvtr.io/api/v4/leads"
+    params = {"campaign.id": campaign_id, "page": page, "itemsPerPage": items_per_page, "partial": "true"}
+    if updated_after:
+        params["updatedTs[after]"] = updated_after
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = requests.get(url, params=params, headers=headers, timeout=30)
+    if response.status_code != 200:
+        raise ConvertrError(f"Convertr returned {response.status_code} fetching leads: {response.text[:300]}")
+    return response.json()

@@ -249,12 +249,14 @@ def test_convertr_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
     assert sum(1 for t in at.text_input if "campaign 44709" in t.label) == 1
     at.text_input(key="convertr_api_key_44709").set_value("key-for-44709").run()
     at.text_input(key="convertr_api_key_44706").set_value("key-for-44706").run()
+    at.text_input(key="convertr_account_username").set_value("me@x.com").run()
+    at.text_input(key="convertr_account_password").set_value("hunter2").run()
 
     save_button = next(b for b in at.button if "Save Client Profile" in b.label)
     save_button.click().run()
     assert not at.exception
 
-    from core.app_settings import get_clients_dir, get_convertr_api_key
+    from core.app_settings import get_clients_dir, get_convertr_api_key, get_convertr_account_credentials
     from core.profile_store import load_profile
 
     loaded = load_profile("Amazon Business EMEA", get_clients_dir())
@@ -272,6 +274,8 @@ def test_convertr_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
         assert "key-for-44709" not in f.read()
     assert get_convertr_api_key("Amazon Business EMEA", "44709") == "key-for-44709"
     assert get_convertr_api_key("Amazon Business EMEA", "44706") == "key-for-44706"
+    assert get_convertr_account_credentials("Amazon Business EMEA") == {
+        "username": "me@x.com", "password": "hunter2"}
 
 
 def test_box_tracker_lead_template_map_and_pacing_skip_fields_save(tmp_path, monkeypatch):

@@ -8,7 +8,10 @@ from core.excel_io import (
     list_sheet_names, read_sheet_as_dataframe, detect_cids_from_pacing_overview, guess_target_field_mapping,
     find_header_row, read_sheet_headers,
 )
-from core.app_settings import get_clients_dir, get_convertr_api_key, save_convertr_api_key
+from core.app_settings import (
+    get_clients_dir, get_convertr_api_key, save_convertr_api_key,
+    get_convertr_account_credentials, save_convertr_account_credentials,
+)
 from core.branding import configure_page
 from core.convertr_client import get_campaign_form_fields, ConvertrError
 from core.file_browser import browse_for_file
@@ -762,6 +765,8 @@ with tab_complex:
         convertr_enterprise = ""
         convertr_campaigns: list[ConvertrCampaignMapping] = []
         convertr_field_mapping: dict[str, str] = {}
+        convertr_account_username = ""
+        convertr_account_password = ""
         _convertr_api_keys_to_save: dict[str, str] = {}
         if convertr_enabled:
             convertr_enterprise = st.text_input(
@@ -838,6 +843,19 @@ with tab_complex:
                                 )
                         except ConvertrError as exc:
                             st.error(f"❌ {exc}")
+
+            st.caption(
+                "Account login (for reading back accepted/rejected leads on the Convertr page only — "
+                "never used for uploading) — stored locally on this machine only:"
+            )
+            _existing_creds = get_convertr_account_credentials(client_name) if client_name else {
+                "username": "", "password": ""}
+            _account_col1, _account_col2 = st.columns(2)
+            convertr_account_username = _account_col1.text_input(
+                "Convertr username", value=_existing_creds["username"], key="convertr_account_username")
+            convertr_account_password = _account_col2.text_input(
+                "Convertr password", value=_existing_creds["password"], type="password",
+                key="convertr_account_password")
         else:
             st.caption("Convertr upload is disabled for this client.")
 
@@ -952,4 +970,7 @@ if st.button("💾 Save Client Profile", type="primary"):
             for _campaign_id, _api_key in _convertr_api_keys_to_save.items():
                 if _api_key:
                     save_convertr_api_key(client_name, _campaign_id, _api_key)
+            if convertr_account_username or convertr_account_password:
+                save_convertr_account_credentials(
+                    client_name, convertr_account_username, convertr_account_password)
         st.toast(f"Saved profile to {saved_path}", icon="✅")

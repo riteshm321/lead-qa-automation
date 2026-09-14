@@ -90,3 +90,19 @@ def save_convertr_api_key(client_name: str, campaign_id: str, api_key: str) -> N
     keys = updated.setdefault("convertr_api_keys", {})
     keys[_convertr_key(client_name, campaign_id)] = api_key
     save_app_settings(updated)
+
+
+def get_convertr_account_credentials(client_name: str) -> dict:
+    # A broader, account-level credential than the per-campaign API key
+    # above (used only to read back accepted/rejected lead outcomes, never
+    # to upload) -- same local-only storage reasoning applies.
+    settings = load_app_settings()
+    creds = settings.get("convertr_account_credentials", {}).get(client_name, {})
+    return {"username": creds.get("username", ""), "password": creds.get("password", "")}
+
+
+def save_convertr_account_credentials(client_name: str, username: str, password: str) -> None:
+    updated = load_app_settings()
+    all_creds = updated.setdefault("convertr_account_credentials", {})
+    all_creds[client_name] = {"username": username.strip(), "password": password}
+    save_app_settings(updated)
