@@ -96,16 +96,29 @@ def test_pick_leads_for_approval_picks_diff_plus_five_per_campaign():
     assert shortfall == {}
 
 
-def test_pick_leads_for_approval_picks_nothing_when_already_ahead_of_pace():
-    # A negative diff (Delivered already exceeds Pending) plus the buffer
-    # can still be negative -- e.g. diff=-7, buffer=5 -> -2. That must
-    # clamp to 0 picks, never pandas' .head(-2) "all but the last 2" trap.
+def test_pick_leads_for_approval_takes_everything_available_when_diff_is_negative():
+    # A negative diff means Delivered already exceeds Pending -- there's
+    # no target left to pick towards (diff + buffer could even go
+    # negative, which must never hit pandas' .head(-N) "all but the last
+    # N" trap), so every available blank-Status lead for that CID goes
+    # out, same as an explicitly uncapped campaign, and no shortfall is
+    # reported since there's no target to fall short of.
     accumulated = _accumulated_df([{"CID": "118741", "Status": ""} for _ in range(5)])
 
     picked, shortfall = pick_leads_for_approval(
         accumulated, "CID", "Status", {"118741": "Bob"}, {"Bob": -7}, buffer=5)
 
-    assert picked.empty
+    assert len(picked) == 5
+    assert shortfall == {}
+
+
+def test_pick_leads_for_approval_takes_everything_available_when_diff_is_zero():
+    accumulated = _accumulated_df([{"CID": "118741", "Status": ""} for _ in range(3)])
+
+    picked, shortfall = pick_leads_for_approval(
+        accumulated, "CID", "Status", {"118741": "Bob"}, {"Bob": 0}, buffer=5)
+
+    assert len(picked) == 3
     assert shortfall == {}
 
 

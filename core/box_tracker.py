@@ -98,12 +98,15 @@ def pick_leads_for_approval(
     entry in diffs (that campaign column doesn't exist in the Pacing
     summary block yet), is skipped entirely -- there's no target count to
     pick towards, so picking arbitrarily would be a guess, not a decision.
-    The one exception is uncapped_campaigns: a campaign listed there takes
-    EVERY available blank-Status lead for its CID(s) regardless of (or
-    absence of) a Diff value, and never appears in shortfall, since there's
-    no target to fall short of -- for a segment that's only just gone
-    live with no established Pacing history yet (see
-    BoxTrackerConfig.pacing_skipped_campaigns).
+
+    Two situations take EVERY available blank-Status lead for a CID
+    instead of a capped (diff + buffer) amount, and never appear in
+    shortfall since there's no target to fall short of: uncapped_campaigns
+    (a segment that's only just gone live with no established Pacing
+    history yet -- see BoxTrackerConfig.pacing_skipped_campaigns), and a
+    Diff of zero or negative (Delivered has already met or exceeded
+    Pending -- there's nothing left to pace towards this cycle, so every
+    available lead goes out rather than none).
 
     Returns (picked_df, shortfall) where shortfall is {cid: amount_short}
     for every capped CID that had fewer than its target available --
@@ -122,7 +125,11 @@ def pick_leads_for_approval(
             continue
         if campaign not in diffs:
             continue
-        target = max(0, diffs[campaign] + buffer)
+        if diffs[campaign] <= 0:
+            if not candidates.empty:
+                picked_frames.append(candidates)
+            continue
+        target = diffs[campaign] + buffer
         picked = candidates.head(target)
         if len(picked) < target:
             shortfall[cid] = target - len(picked)

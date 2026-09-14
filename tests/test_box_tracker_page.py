@@ -1,3 +1,4 @@
+import datetime
 import os
 
 import openpyxl
@@ -5,10 +6,15 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir
+from core.box_tracker import current_week_label
 from core.models import ClientProfile, FieldMapping, BoxTrackerConfig, ComplexAccountConfig
 from core.profile_store import save_profile
 
 _PAGE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pages", "5_Box_Tracker.py")
+# set_pacing_delivered looks up THIS week's column by label -- computing it
+# from today's actual date (rather than hardcoding e.g. "Week of 7") keeps
+# these tests passing regardless of which day they happen to run on.
+_CURRENT_WEEK_LABEL = current_week_label(datetime.date.today())
 
 
 def _make_accumulated(path: str, rows: list[dict]) -> None:
@@ -33,7 +39,7 @@ def _make_mirror(path: str) -> None:
     approval.append(["Company Name", "Market", "Date", "Segment", "Persona/Industry", "Project Code",
                      "Job Title", "AMAL ID", "Approval"])
     pacing = wb.create_sheet("Pacing")
-    pacing.append(["Funding Source", "Publisher", "Country", "Segment", "Campaign", "Week of 7", ""])
+    pacing.append(["Funding Source", "Publisher", "Country", "Segment", "Campaign", _CURRENT_WEEK_LABEL, ""])
     pacing.append([None, None, None, None, None, "P", "D"])
     pacing.append(["Cash", "Madison Logic", "IN", "Select-T", "Bob", 18, 0])
     pacing.append(["Cash", "Madison Logic", "IN", "Named", "CXO", 0, 0])
@@ -115,7 +121,7 @@ def test_pick_and_send_writes_approval_sheet_mirror_and_sets_pacing(tmp_path, mo
     assert row2["Approval"] is None         # left blank for the client to fill in
 
     pacing_ws = wb["Pacing"]
-    assert pacing_ws.cell(row=3, column=7).value == 18  # "D" column under "Week of 7"
+    assert pacing_ws.cell(row=3, column=7).value == 18  # "D" column under this week
 
     accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
     sent_count = (accumulated_df["Status"].astype(str).str.startswith("Sent for Approval")).sum()
