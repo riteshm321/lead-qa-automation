@@ -8,15 +8,18 @@ from core.enhancio_client import (
 )
 
 
-def test_get_access_token_posts_to_the_client_id_scoped_token_endpoint():
+def test_get_access_token_gets_the_client_id_scoped_token_endpoint():
+    # Enhancio's own docs show this as a POST, but the live API returns 405
+    # for POST and only accepts GET -- confirmed directly against
+    # api-pubnet.enhancio.com.
     mock_response = MagicMock(
         status_code=200,
         json=lambda: {"access_token": "tok123", "scope": "LEAD_WRITE", "expires_in": 36000, "token_type": "Bearer"},
     )
-    with patch("core.enhancio_client.requests.post", return_value=mock_response) as mock_post:
+    with patch("core.enhancio_client.requests.get", return_value=mock_response) as mock_get:
         result = get_access_token("CID123")
 
-    args, kwargs = mock_post.call_args
+    args, kwargs = mock_get.call_args
     assert args[0] == "https://api-pubnet.enhancio.com/user/company/public/external/oauth/token/CID123"
     assert kwargs["headers"] == {"Content-Type": "application/json"}
     assert result["access_token"] == "tok123"
@@ -24,7 +27,7 @@ def test_get_access_token_posts_to_the_client_id_scoped_token_endpoint():
 
 def test_get_access_token_raises_on_non_200():
     mock_response = MagicMock(status_code=401, text="invalid client")
-    with patch("core.enhancio_client.requests.post", return_value=mock_response):
+    with patch("core.enhancio_client.requests.get", return_value=mock_response):
         with pytest.raises(EnhancioError):
             get_access_token("bad-id")
 

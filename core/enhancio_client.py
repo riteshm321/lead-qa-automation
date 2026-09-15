@@ -45,9 +45,14 @@ def get_access_token(client_id: str) -> dict:
     token via Enhancio-Managed OAuth2 -- no client secret involved, Enhancio
     holds that server-side for this flow. Returns the full token response
     ({"access_token", "scope", "expires_in", "token_type"}).
+
+    Enhancio's own docs (developer.enhancio.com) show this as a POST, but
+    the live API returns 405 Method Not Allowed for POST and only accepts
+    GET -- confirmed directly against api-pubnet.enhancio.com. The docs
+    example is simply wrong for this endpoint.
     """
     url = f"{_BASE_URL}/user/company/public/external/oauth/token/{client_id}"
-    response = requests.post(url, headers={"Content-Type": "application/json"}, timeout=30)
+    response = requests.get(url, headers={"Content-Type": "application/json"}, timeout=30)
     if response.status_code != 200:
         raise EnhancioError(f"Enhancio token request returned {response.status_code}: {response.text[:300]}")
     return response.json()
