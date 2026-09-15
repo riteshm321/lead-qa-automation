@@ -6,7 +6,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_enhancio_client_id, save_app_settings
-from core.enhancio_sync import save_pending_leads
+from core.enhancio_sync import save_pending_leads, load_pending_leads
 from core.models import ClientProfile, FieldMapping, EnhancioConfig, EnhancioAllocationMapping
 from core.profile_store import save_profile
 
@@ -64,8 +64,10 @@ def test_upload_batches_leads_by_allocation_and_reports_results(tmp_path, monkey
     ]).to_csv(leads_csv, index=False)
 
     def _fake_import_leads(token, allocation_uid, leads):
-        return [{"leadId": f"lead-{allocation_uid}-{i}", "status": "Submitted", "email": lead["Email Address"]}
-                for i, lead in enumerate(leads)]
+        return {"submitted": [
+            {"leadId": f"lead-{allocation_uid}-{i}", "status": "Submitted", "email": lead["Email Address"]}
+            for i, lead in enumerate(leads)
+        ], "errors": []}
 
     with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
          patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
@@ -81,6 +83,56 @@ def test_upload_batches_leads_by_allocation_and_reports_results(tmp_path, monkey
     assert results_df["Result"].str.startswith("✅").sum() == 2
     assert any("lead-L-22256" in r for r in results_df["Result"])
     assert any("lead-L-22257" in r for r in results_df["Result"])
+
+
+def test_upload_keeps_and_saves_successes_when_batch_also_has_rejected_leads(tmp_path, monkeypatch):
+    # Regression test for a real production incident: Enhancio accepted 29
+    # of 160 leads in one batch and rejected 131 as duplicates, all in the
+    # SAME response. The tool must still report the 29 as uploaded and save
+    # their lead IDs for Reconcile, instead of discarding everything and
+    # reporting 0 uploaded just because the response also carried errors.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    profile = _save_profile(acc_path)
+    save_enhancio_client_id("CID123")
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([
+        {"CID": "120022", "Email": "ok1@x.com", "First Name": "A", "Last Name": "One", "Company": "Acme"},
+        {"CID": "120022", "Email": "ok2@x.com", "First Name": "B", "Last Name": "Two", "Company": "Acme"},
+        {"CID": "120022", "Email": "dup@x.com", "First Name": "C", "Last Name": "Three", "Company": "Acme"},
+    ]).to_csv(leads_csv, index=False)
+
+    def _fake_import_leads(token, allocation_uid, leads):
+        return {
+            "submitted": [
+                {"leadId": "lead-ok1", "status": "Submitted", "email": "ok1@x.com"},
+                {"leadId": "lead-ok2", "status": "Submitted", "email": "ok2@x.com"},
+            ],
+            "errors": [
+                {"message": "Duplicate lead within the campaign allocation", "email": "dup@x.com"},
+            ],
+        }
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+        assert not at.exception
+
+    results_df = at.session_state["enhancio_upload_results"]
+    assert results_df["Result"].str.startswith("✅").sum() == 2
+    assert results_df["Result"].str.startswith("❌").sum() == 1
+    assert any("Duplicate lead within the campaign allocation" in w.value for w in at.warning)
+
+    pending = load_pending_leads(profile.name)
+    assert set(pending.keys()) == {"lead-ok1", "lead-ok2"}
 
 
 def test_reuploading_the_same_file_skips_leads_already_uploaded_to_that_allocation(tmp_path, monkeypatch):
@@ -101,8 +153,10 @@ def test_reuploading_the_same_file_skips_leads_already_uploaded_to_that_allocati
 
     def _fake_import_leads(token, allocation_uid, leads):
         import_calls.append((allocation_uid, leads))
-        return [{"leadId": f"lead-{allocation_uid}-{i}", "status": "Submitted", "email": lead["Email Address"]}
-                for i, lead in enumerate(leads)]
+        return {"submitted": [
+            {"leadId": f"lead-{allocation_uid}-{i}", "status": "Submitted", "email": lead["Email Address"]}
+            for i, lead in enumerate(leads)
+        ], "errors": []}
 
     with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
          patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
@@ -149,8 +203,10 @@ def test_reupload_checkbox_lets_you_resend_an_already_uploaded_lead(tmp_path, mo
 
     def _fake_import_leads(token, allocation_uid, leads):
         import_calls.append((allocation_uid, leads))
-        return [{"leadId": f"lead-{allocation_uid}-{len(import_calls)}-{i}", "status": "Submitted",
-                  "email": lead["Email Address"]} for i, lead in enumerate(leads)]
+        return {"submitted": [
+            {"leadId": f"lead-{allocation_uid}-{len(import_calls)}-{i}", "status": "Submitted",
+             "email": lead["Email Address"]} for i, lead in enumerate(leads)
+        ], "errors": []}
 
     with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
          patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
@@ -199,8 +255,10 @@ def test_same_email_can_still_upload_to_a_different_allocation(tmp_path, monkeyp
     save_enhancio_client_id("CID123")
 
     def _fake_import_leads(token, allocation_uid, leads):
-        return [{"leadId": f"lead-{allocation_uid}-{i}", "status": "Submitted", "email": lead["Email Address"]}
-                for i, lead in enumerate(leads)]
+        return {"submitted": [
+            {"leadId": f"lead-{allocation_uid}-{i}", "status": "Submitted", "email": lead["Email Address"]}
+            for i, lead in enumerate(leads)
+        ], "errors": []}
 
     with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
          patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
@@ -259,8 +317,10 @@ def test_upload_applies_fixed_field_values_only_to_the_matching_allocation(tmp_p
 
     def _fake_import_leads(token, allocation_uid, leads):
         captured_calls[allocation_uid] = leads
-        return [{"leadId": f"lead-{allocation_uid}-{i}", "status": "Submitted", "email": lead["Email Address"]}
-                for i, lead in enumerate(leads)]
+        return {"submitted": [
+            {"leadId": f"lead-{allocation_uid}-{i}", "status": "Submitted", "email": lead["Email Address"]}
+            for i, lead in enumerate(leads)
+        ], "errors": []}
 
     with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
          patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
@@ -303,7 +363,8 @@ def test_upload_reformats_a_date_field_to_enhancios_required_format(tmp_path, mo
 
     def _fake_import_leads(token, allocation_uid, leads):
         captured["leads"] = leads
-        return [{"leadId": "lead-1", "status": "Submitted", "email": leads[0]["Email Address"]}]
+        return {"submitted": [{"leadId": "lead-1", "status": "Submitted", "email": leads[0]["Email Address"]}],
+                "errors": []}
 
     with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
          patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):

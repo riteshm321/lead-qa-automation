@@ -184,18 +184,39 @@ if _upload_file:
                 for _, lead in _send_df.iterrows()
             ]
             try:
-                submitted = enhancio_client.import_leads(_token, allocation_uid, lead_payloads)
+                _import_result = enhancio_client.import_leads(_token, allocation_uid, lead_payloads)
             except EnhancioError as exc:
                 for _, lead in _send_df.iterrows():
                     results.append({"CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
                                      "Result": f"❌ {exc}"})
                 continue
-            for (_, lead), submitted_entry in zip(_send_df.iterrows(), submitted):
+
+            # A batch can accept some leads and reject others (e.g.
+            # duplicates) in the SAME response -- Enhancio doesn't echo
+            # back one outcome per lead sent, in order, so successes are
+            # matched to leadfile rows by email rather than assumed to line
+            # up positionally with what was sent.
+            _submitted_by_email = {
+                str(entry.get("email", "")).strip().lower(): entry
+                for entry in _import_result["submitted"] if entry.get("email")
+            }
+            _distinct_batch_errors = sorted({
+                str(err.get("message", err)) if isinstance(err, dict) else str(err)
+                for err in _import_result["errors"]
+            })
+            if _distinct_batch_errors:
+                st.warning(
+                    f"Allocation {allocation_uid}: Enhancio reported {len(_distinct_batch_errors)} distinct "
+                    f"error reason(s) for leads it did not accept in this batch: "
+                    + "; ".join(_distinct_batch_errors)
+                )
+            for _, lead in _send_df.iterrows():
                 cid = lead.get(cid_column, "")
                 email = lead.get(_leadfile_mapping.email, "")
-                lead_id = submitted_entry.get("leadId")
-                status = submitted_entry.get("status", "")
-                if lead_id:
+                submitted_entry = _submitted_by_email.get(str(email).strip().lower())
+                if submitted_entry is not None:
+                    lead_id = submitted_entry.get("leadId")
+                    status = submitted_entry.get("status", "")
                     # The original leadfile row, kept exactly as uploaded --
                     # reconcile has no other way to recover a lead's data
                     # once it writes to Accumulated/Refund later.
@@ -203,7 +224,10 @@ if _upload_file:
                     _newly_uploaded_emails_by_allocation[allocation_uid].add(str(email))
                     results.append({"CID": cid, "Email": email, "Result": f"✅ Lead ID {lead_id} ({status})"})
                 else:
-                    results.append({"CID": cid, "Email": email, "Result": f"❌ {status or 'Not submitted'}"})
+                    results.append({
+                        "CID": cid, "Email": email,
+                        "Result": "❌ Not accepted by Enhancio (see batch error reasons above)",
+                    })
 
         if _newly_pending:
             save_pending_leads(client_name, _newly_pending)

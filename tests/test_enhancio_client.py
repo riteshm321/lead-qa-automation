@@ -70,14 +70,14 @@ def test_import_leads_posts_lead_list_and_allocation_uid():
         ]}},
     )
     with patch("core.enhancio_client.requests.post", return_value=mock_response) as mock_post:
-        submitted = import_leads("tok123", "L-22256", [{"First Name": "Joe", "Email Address": "j@x.com"}])
+        result = import_leads("tok123", "L-22256", [{"First Name": "Joe", "Email Address": "j@x.com"}])
 
     args, kwargs = mock_post.call_args
     assert args[0] == "https://api-pubnet.enhancio.com/external/lead-api/v1/import"
     assert kwargs["json"] == {
         "leadList": [{"First Name": "Joe", "Email Address": "j@x.com"}], "allocationUid": "L-22256",
     }
-    assert submitted == [{"leadId": "abc123", "status": "Submitted", "email": "j@x.com"}]
+    assert result == {"submitted": [{"leadId": "abc123", "status": "Submitted", "email": "j@x.com"}], "errors": []}
 
 
 def test_import_leads_batches_in_chunks_of_1000():
@@ -85,17 +85,17 @@ def test_import_leads_batches_in_chunks_of_1000():
     mock_response = MagicMock(
         status_code=200, json=lambda: {"success": True, "result": {"submittedLeads": [{"leadId": "1", "status": "Submitted", "email": "x"}]}})
     with patch("core.enhancio_client.requests.post", return_value=mock_response) as mock_post:
-        submitted = import_leads("tok123", "L-22256", leads)
+        result = import_leads("tok123", "L-22256", leads)
 
     assert mock_post.call_count == 2
     first_call_leads = mock_post.call_args_list[0].kwargs["json"]["leadList"]
     second_call_leads = mock_post.call_args_list[1].kwargs["json"]["leadList"]
     assert len(first_call_leads) == 1000
     assert len(second_call_leads) == 500
-    assert len(submitted) == 2  # one submittedLeads entry per batch, from the mocked response
+    assert len(result["submitted"]) == 2  # one submittedLeads entry per batch, from the mocked response
 
 
-def test_import_leads_raises_enhancio_error_when_response_carries_errors():
+def test_import_leads_raises_enhancio_error_when_response_carries_errors_and_no_result():
     mock_response = MagicMock(
         status_code=200,
         json=lambda: {"success": False, "errors": [{"message": "Campaign doesn't exist", "errorCode": 900}]},
@@ -103,6 +103,29 @@ def test_import_leads_raises_enhancio_error_when_response_carries_errors():
     with patch("core.enhancio_client.requests.post", return_value=mock_response):
         with pytest.raises(EnhancioError, match="Campaign doesn't exist"):
             import_leads("tok123", "bad-alloc", [{"Email Address": "j@x.com"}])
+
+
+def test_import_leads_keeps_successes_when_batch_also_reports_per_lead_errors():
+    # A single Import Lead call can accept some leads and reject others
+    # (e.g. duplicates) in the SAME response -- errors being present must
+    # not discard the leads that DID succeed (this previously caused a
+    # batch of e.g. 29 accepted + 131 duplicates to be reported as 0
+    # accepted, and none of the 29 real leadIds got saved for Reconcile).
+    mock_response = MagicMock(
+        status_code=200,
+        json=lambda: {
+            "success": True,
+            "result": {"submittedLeads": [{"leadId": "abc123", "status": "Submitted", "email": "j@x.com"}]},
+            "errors": [{"message": "Duplicate lead within the campaign allocation", "email": "dup@x.com"}],
+        },
+    )
+    with patch("core.enhancio_client.requests.post", return_value=mock_response):
+        result = import_leads("tok123", "L-22256", [
+            {"Email Address": "j@x.com"}, {"Email Address": "dup@x.com"},
+        ])
+
+    assert result["submitted"] == [{"leadId": "abc123", "status": "Submitted", "email": "j@x.com"}]
+    assert result["errors"] == [{"message": "Duplicate lead within the campaign allocation", "email": "dup@x.com"}]
 
 
 def test_import_leads_raises_on_non_200_http_status():
