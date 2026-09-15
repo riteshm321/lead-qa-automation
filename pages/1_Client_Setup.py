@@ -299,6 +299,55 @@ def _render_leadfile_column_mapping(key_prefix: str, existing: FieldMapping | No
     return FieldMapping(email=email, first_name=first_name, last_name=last_name, company=company, cid=cid)
 
 
+def _render_paired_field_mapping(key_prefix: str, target_name: str, existing: dict[str, str]) -> dict[str, str]:
+    # Two plain lists, paired by line position, instead of one delimited
+    # line per mapping ("Column,Field" or "Column -> Field"). A real
+    # leadfile column is often a verbatim survey/consent question that can
+    # contain commas, arrows, or any other punctuation a delimiter might
+    # pick -- no delimiter at all is the only scheme that can't be
+    # misparsed by the leadfile's own text. Self-mapped fields (column name
+    # == target name, the common case) just get typed once, at the same
+    # line in both boxes -- never twice on one line, which is what
+    # actually kept going wrong here.
+    st.caption(
+        f"Leadfile columns to send to {target_name}, one per line — don't include CID here, the "
+        "uploaded row itself is kept and reused when writing Accumulated/Refund later, not anything "
+        f"{target_name} echoes back:"
+    )
+    _cols_text = st.text_area(
+        f"{target_name} leadfile columns", value="\n".join(existing.keys()),
+        key=f"{key_prefix}_field_map_cols_input", label_visibility="collapsed", height=100)
+
+    st.caption(
+        f"The matching {target_name} field name for each column above — same order, one per line. Type "
+        "the column name again on its own line when it's identical on both sides (the common case for a "
+        "survey/consent question worded the same way on both ends):"
+    )
+    _targets_text = st.text_area(
+        f"{target_name} field names", value="\n".join(existing.values()),
+        key=f"{key_prefix}_field_map_targets_input", label_visibility="collapsed", height=100)
+
+    _cols = [line.strip() for line in _cols_text.splitlines() if line.strip()]
+    _targets = [line.strip() for line in _targets_text.splitlines() if line.strip()]
+
+    if len(_cols) != len(_targets):
+        st.error(
+            f"Leadfile columns ({len(_cols)} line(s)) and {target_name} field names ({len(_targets)} "
+            "line(s)) don't have the same number of lines — line N in one box has to be line N's match "
+            "in the other. Keeping the previously saved mapping until these line up."
+        )
+        return dict(existing)
+
+    mapping = dict(zip(_cols, _targets))
+    if mapping:
+        st.caption("Preview — this is exactly what will be sent:")
+        st.dataframe(
+            {"Leadfile column": list(mapping.keys()), f"{target_name} field": list(mapping.values())},
+            hide_index=True, use_container_width=True,
+        )
+    return mapping
+
+
 @st.cache_data(show_spinner=False)
 def _cached_profile_names(clients_dir: str, dir_mtime: float) -> list[str]:
     # dir_mtime must NOT be underscore-prefixed -- Streamlit excludes any
@@ -827,38 +876,8 @@ with tab_complex:
                 convertr_campaigns.append(ConvertrCampaignMapping(
                     cid=_cid, campaign_id=_campaign_id, global_form_id=_global_form_id))
 
-            st.caption(
-                "Leadfile column → Convertr form field name mapping, one per line, format "
-                "`Leadfile Column -> convertrFieldName` (e.g. `Email -> email`) — or just the column "
-                "name alone (no arrow) when it's identical on both sides, e.g. a consent/opt-in "
-                "question whose Convertr field name is the verbatim question text itself (safe even "
-                "if that text contains commas — a comma is never treated as a separator here). Don't "
-                "include CID here, the uploaded row itself is kept and reused when writing "
-                "Accumulated/Refund later, not anything Convertr echoes back:"
-            )
-            _existing_field_map_text = "\n".join(
-                col if col == field_name else f"{col} -> {field_name}" for col, field_name in
-                (profile.convertr.field_mapping.items() if profile else [])
-            )
-            _field_map_text = st.text_area(
-                "Convertr field mapping", value=_existing_field_map_text,
-                key="convertr_field_map_input", label_visibility="collapsed", height=120)
-            for _line in _field_map_text.splitlines():
-                _line = _line.strip()
-                if not _line:
-                    continue
-                if " -> " in _line:
-                    _col, _field_name = _line.split(" -> ", 1)
-                else:
-                    # No arrow -- this is a column whose name IS the target
-                    # field name verbatim (common for a survey/consent
-                    # question worded identically to what Convertr
-                    # expects). A comma is deliberately NOT treated as a
-                    # separator here: that text can itself contain commas
-                    # (or even several), which would make a comma-based
-                    # split ambiguous no matter which comma was picked.
-                    _col = _field_name = _line
-                convertr_field_mapping[_col.strip()] = _field_name.strip()
+            convertr_field_mapping = _render_paired_field_mapping(
+                "convertr", "Convertr", profile.convertr.field_mapping if profile else {})
 
             convertr_leadfile_mapping = _render_leadfile_column_mapping(
                 "convertr", profile.convertr.leadfile_field_mapping if profile else None)
@@ -937,37 +956,11 @@ with tab_complex:
                 enhancio_allocations.append(EnhancioAllocationMapping(cid=_cid, allocation_uid=_allocation_uid))
 
             st.caption(
-                "Leadfile column → Enhancio field label mapping, one per line, format `Leadfile "
-                "Column -> Enhancio Field Label` (e.g. `Email -> Email Address`) — or just the column "
-                "name alone (no arrow) when it's identical on both sides, e.g. a consent/opt-in "
-                "question whose Enhancio field label is the verbatim question text itself (safe even "
-                "if that text contains commas — a comma is never treated as a separator here). Use "
-                "the field labels the Describe Fields API reports for the allocation (Test connection "
-                "below). Don't include CID here, the uploaded row itself is kept and reused when "
-                "writing Accumulated/Refund later, not anything Enhancio echoes back:"
+                "Use the field labels the Describe Fields API reports for the allocation (Test "
+                "connection below) as the target names."
             )
-            _existing_enhancio_field_map_text = "\n".join(
-                col if col == field_name else f"{col} -> {field_name}" for col, field_name in
-                (profile.enhancio.field_mapping.items() if profile else [])
-            )
-            _enhancio_field_map_text = st.text_area(
-                "Enhancio field mapping", value=_existing_enhancio_field_map_text,
-                key="enhancio_field_map_input", label_visibility="collapsed", height=120)
-            for _line in _enhancio_field_map_text.splitlines():
-                _line = _line.strip()
-                if not _line:
-                    continue
-                if " -> " in _line:
-                    _col, _field_name = _line.split(" -> ", 1)
-                else:
-                    # No arrow -- this column's name IS the Enhancio field
-                    # label verbatim (common for consent/opt-in questions).
-                    # A comma is deliberately NOT treated as a separator
-                    # here: that text can itself contain commas (or even
-                    # several), which would make a comma-based split
-                    # ambiguous no matter which comma was picked.
-                    _col = _field_name = _line
-                enhancio_field_mapping[_col.strip()] = _field_name.strip()
+            enhancio_field_mapping = _render_paired_field_mapping(
+                "enhancio", "Enhancio", profile.enhancio.field_mapping if profile else {})
 
             st.caption(
                 "Fixed field values per allocation, one per line, format `allocationUid,Field "

@@ -10,6 +10,7 @@ from core.app_settings import get_clients_dir, save_jira_settings
 from core.check_result import ReviewDetail
 from core.jira_client import JiraError
 from core.models import ClientProfile, FieldMapping, DuplicateConfig, LeadTemplateTab, ComplexAccountConfig
+from core.models import EnhancioConfig, EnhancioAllocationMapping
 from core.pipeline import PipelineResult, run_pipeline
 from core.profile_store import save_profile
 
@@ -120,6 +121,29 @@ def test_using_a_collated_file_does_not_crash_with_nameerror(tmp_path, monkeypat
 
     assert not at.exception
     assert any("Using the collated file" in c.value for c in at.caption)
+
+
+def test_collated_file_offers_a_download_button(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    save_profile(ClientProfile(
+        name="Collation Client", accumulated_report_path=acc_path, field_mapping=fm,
+        collation_enabled=True,
+    ), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["collated_new_leads_Collation Client"] = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "Acme", "CID": "1"},
+    ])
+    at.run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("Collation Client").run()
+
+    assert not at.exception
+    download_button = next(d for d in at.download_button if d.key == "collated_download_button")
+    assert download_button.label == "⬇️ Download"
 
 
 def test_approved_refund_lead_lands_in_accumulated_tab_not_just_refund(tmp_path, monkeypatch):
@@ -387,6 +411,97 @@ def test_finalize_for_convertr_client_skips_accumulated_but_still_writes_refund(
     assert "existing@dup.com" in refund_df["Email_Address"].values  # QA-failed leads still write immediately
 
     assert any("Valid leads ready for Convertr" in s.value for s in at.subheader)
+    assert any(d.label == "Download valid leads" for d in at.download_button)
+
+
+def test_finalize_for_enhancio_client_skips_accumulated_and_downloads_valid_leads(tmp_path, monkeypatch):
+    # Same behavior as Convertr must hold for Enhancio -- the shared
+    # _finalize_write() helper used to check only profile.convertr.enabled,
+    # so an Enhancio-only client's valid leads were written straight to
+    # Accumulated on Finalize instead of being held back for Upload +
+    # Reconcile like Convertr's leads already correctly were.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        enhancio=EnhancioConfig(enabled=True, allocations=[EnhancioAllocationMapping(cid="1", allocation_uid="L-1")]),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "valid@new.com", "First_Name": "V", "Last_Name": "Lid", "Company_Name": "X", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
+    assert "valid@new.com" not in accumulated_df["Email_Address"].values  # not written yet
+
+    assert any("Valid leads ready for Enhancio" in s.value for s in at.subheader)
+    assert any(d.label == "Download valid leads" for d in at.download_button)
+
+
+def test_complex_account_finalize_skips_accumulated_and_downloads_when_enhancio_enabled(tmp_path, monkeypatch):
+    # The same "hold back for the upload tool" behavior must also hold on
+    # the Complex Account two-stage Finalize path (Finalize (fill columns)
+    # -> Confirm & Write), which shares _finalize_write() with the plain
+    # single-step Finalize button above.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email", "First", "Last", "Company", "CID"])
+    wb.create_sheet("Refund").append(["Email", "First", "Last", "Company", "CID"])
+    wb.save(acc_path)
+
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        complex_account=ComplexAccountConfig(enabled=True),
+        enhancio=EnhancioConfig(enabled=True, allocations=[EnhancioAllocationMapping(cid="1", allocation_uid="L-1")]),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email": "a@wipro.com", "First": "A", "Last": "One", "Company": "Wipro", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    assert not at.exception
+
+    next(b for b in at.button if b.label == "Finalize (fill columns)").click().run()
+    assert not at.exception
+
+    confirm_button = next(b for b in at.button if b.label == "Confirm & Write")
+    confirm_button.click().run()
+    assert not at.exception
+
+    # Still just the header row -- held back for Enhancio, not written here.
+    wb_after = openpyxl.load_workbook(acc_path)
+    assert wb_after["Accumulated"].max_row == 1
+
+    assert any("Valid leads ready for Enhancio" in s.value for s in at.subheader)
     assert any(d.label == "Download valid leads" for d in at.download_button)
 
 

@@ -103,7 +103,7 @@ with col_clear:
     if st.button("🔄 Clear", use_container_width=True,
                  help="Clear the uploaded files and any displayed results, and start a fresh run."):
         for key in ("run_result", "run_new_leads", "run_result_for", "last_finalized_summary",
-                    "convertr_pending_export"):
+                    "upload_tool_pending_export"):
             st.session_state.pop(key, None)
         st.session_state["upload_reset_counter"] = st.session_state.get("upload_reset_counter", 0) + 1
         st.rerun()
@@ -211,8 +211,14 @@ if profile.collation_enabled:
 
         if _collated_key in st.session_state:
             _collated_df = st.session_state[_collated_key]
-            col_use, col_clear = st.columns([3, 1])
+            col_use, col_download, col_clear = st.columns([3, 1, 1])
             col_use.success(f"Collated file ready: {len(_collated_df)} lead(s), {len(_collated_df.columns)} column(s).")
+            col_download.download_button(
+                "⬇️ Download", key="collated_download_button",
+                data=dataframe_to_excel_bytes(_collated_df, sheet_name="Collated"),
+                file_name=f"{client_name}_collated_{datetime.date.today():%Y-%m-%d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
             if col_clear.button("Clear", key="clear_collated_button"):
                 del st.session_state[_collated_key]
                 st.rerun()
@@ -620,6 +626,17 @@ if "run_result" in st.session_state:
                    + (" Complex Account: column filling runs first and shows a preview — nothing is "
                       "written until you click Confirm & Write." if profile.complex_account.enabled else ""))
 
+    # Convertr and Enhancio both need their leads to go through Upload +
+    # Reconcile before they're accepted/rejected -- neither can be written
+    # to Accumulated straight from Finalize like a plain Lead QA client,
+    # complex account or not. "Any upload tool enabled" gates that below,
+    # and this label names whichever one(s) actually are, for the messages
+    # shown once the leads are queued for download instead.
+    _upload_tools_enabled = [
+        name for name, on in [("Convertr", profile.convertr.enabled), ("Enhancio", profile.enhancio.enabled)] if on
+    ]
+    _upload_tools_label = " / ".join(_upload_tools_enabled) or "the upload tool"
+
     def _finalize_write(valid_leads_df, refund_leads_df, refund_reasons):
         """Backs up, writes valid_leads_df/refund_leads_df to the Accumulated
         Report (and valid_leads_df to the Lead Template(s) if configured),
@@ -635,20 +652,21 @@ if "run_result" in st.session_state:
         # append_leads), not from pre-formatting this into a string.
         run_date = datetime.date.today()
         unmatched_headers: set[str] = set()
-        if not valid_leads_df.empty and not profile.convertr.enabled:
+        if not valid_leads_df.empty and not _upload_tools_enabled:
             unmatched_headers.update(append_leads(
                 profile.accumulated_report_path, profile.accumulated_tab_name,
                 valid_leads_df, profile.field_mapping, run_date,
                 target_field_mapping=profile.accumulated_field_mapping))
         elif not valid_leads_df.empty:
-            # Convertr-enabled clients skip the Accumulated write here
-            # entirely -- these leads still have to go to Convertr (and,
-            # in between, often a client job-title review) before they're
-            # accepted or rejected. Only the Convertr Reconcile step
-            # writes them to Accumulated/Refund, once that's decided.
-            # Queued for a download button rendered after the rerun below
-            # (a button created here would vanish immediately).
-            st.session_state["convertr_pending_export"] = {
+            # A client with Convertr and/or Enhancio enabled skips the
+            # Accumulated write here entirely -- these leads still have to
+            # go through that tool's own Upload + Reconcile (and, in
+            # between, often a client job-title review) before they're
+            # accepted or rejected. Only that tool's Reconcile step writes
+            # them to Accumulated/Refund, once that's decided. Queued for a
+            # download button rendered after the rerun below (a button
+            # created here would vanish immediately).
+            st.session_state["upload_tool_pending_export"] = {
                 "client_name": client_name,
                 "bytes": dataframe_to_excel_bytes(valid_leads_df, sheet_name="Valid Leads"),
                 "count": len(valid_leads_df),
@@ -738,8 +756,8 @@ if "run_result" in st.session_state:
         # path added its own rerun below to match), so the confirmation must
         # be queued rather than shown directly here — see core/toast.py.
         queue_toast_before_rerun(
-            "Refund tab updated — valid leads ready for Convertr, see below."
-            if profile.convertr.enabled else "Accumulated Report updated."
+            f"Refund tab updated — valid leads ready for {_upload_tools_label}, see below."
+            if _upload_tools_enabled else "Accumulated Report updated."
         )
         return lead_template_links_used
 
@@ -891,17 +909,22 @@ if _just_posted_ticket:
     # anything shown just before a rerun before the user ever sees it.
     st.success(f"Posted to {_just_posted_ticket}.")
 
-_pending_convertr_export = st.session_state.get("convertr_pending_export")
-if _pending_convertr_export and _pending_convertr_export["client_name"] == client_name:
+_pending_upload_export = st.session_state.get("upload_tool_pending_export")
+if _pending_upload_export and _pending_upload_export["client_name"] == client_name:
+    _export_tools = [
+        name for name, on in [("Convertr", profile.convertr.enabled), ("Enhancio", profile.enhancio.enabled)] if on
+    ]
+    _export_tools_label = " / ".join(_export_tools) or "the upload tool"
     st.divider()
-    st.subheader("Valid leads ready for Convertr")
+    st.subheader(f"Valid leads ready for {_export_tools_label}")
     st.caption(
-        f"{_pending_convertr_export['count']} valid lead(s) — not written to Accumulated. Download, run "
-        "through Fuzzy Match / client review as needed, then upload the final file on the Convertr page."
+        f"{_pending_upload_export['count']} valid lead(s) — not written to Accumulated. Download, run "
+        f"through Fuzzy Match / client review as needed, then upload the final file on the "
+        f"{_export_tools_label} page."
     )
     st.download_button(
         "Download valid leads",
-        data=_pending_convertr_export["bytes"],
+        data=_pending_upload_export["bytes"],
         file_name=f"{client_name}_valid_leads_{datetime.date.today():%Y-%m-%d}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
