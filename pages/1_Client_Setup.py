@@ -829,12 +829,15 @@ with tab_complex:
 
             st.caption(
                 "Leadfile column → Convertr form field name mapping, one per line, format "
-                "`Leadfile Column,convertrFieldName` (e.g. `Email,email`) — don't include CID here, the "
-                "uploaded row itself is kept and reused when writing Accumulated/Refund later, not "
-                "anything Convertr echoes back:"
+                "`Leadfile Column -> convertrFieldName` (e.g. `Email -> email`) — or just the column "
+                "name alone (no arrow) when it's identical on both sides, e.g. a consent/opt-in "
+                "question whose Convertr field name is the verbatim question text itself (safe even "
+                "if that text contains commas — a comma is never treated as a separator here). Don't "
+                "include CID here, the uploaded row itself is kept and reused when writing "
+                "Accumulated/Refund later, not anything Convertr echoes back:"
             )
             _existing_field_map_text = "\n".join(
-                f"{col},{field_name}" for col, field_name in
+                col if col == field_name else f"{col} -> {field_name}" for col, field_name in
                 (profile.convertr.field_mapping.items() if profile else [])
             )
             _field_map_text = st.text_area(
@@ -842,15 +845,19 @@ with tab_complex:
                 key="convertr_field_map_input", label_visibility="collapsed", height=120)
             for _line in _field_map_text.splitlines():
                 _line = _line.strip()
-                if not _line or "," not in _line:
+                if not _line:
                     continue
-                # rsplit, not split -- a real leadfile column is often a
-                # verbatim survey/consent question ("I'd like to receive
-                # ..., and I agree to ...") that itself contains commas,
-                # while the short target field name on the right essentially
-                # never does. Splitting on the FIRST comma silently mangled
-                # any such column into a garbled key/value pair.
-                _col, _field_name = _line.rsplit(",", 1)
+                if " -> " in _line:
+                    _col, _field_name = _line.split(" -> ", 1)
+                else:
+                    # No arrow -- this is a column whose name IS the target
+                    # field name verbatim (common for a survey/consent
+                    # question worded identically to what Convertr
+                    # expects). A comma is deliberately NOT treated as a
+                    # separator here: that text can itself contain commas
+                    # (or even several), which would make a comma-based
+                    # split ambiguous no matter which comma was picked.
+                    _col = _field_name = _line
                 convertr_field_mapping[_col.strip()] = _field_name.strip()
 
             convertr_leadfile_mapping = _render_leadfile_column_mapping(
@@ -931,13 +938,16 @@ with tab_complex:
 
             st.caption(
                 "Leadfile column → Enhancio field label mapping, one per line, format `Leadfile "
-                "Column,Enhancio Field Label` (e.g. `Email,Email Address`) — use the field labels the "
-                "Describe Fields API reports for the allocation (Test connection below). Don't include "
-                "CID here, the uploaded row itself is kept and reused when writing Accumulated/Refund "
-                "later, not anything Enhancio echoes back:"
+                "Column -> Enhancio Field Label` (e.g. `Email -> Email Address`) — or just the column "
+                "name alone (no arrow) when it's identical on both sides, e.g. a consent/opt-in "
+                "question whose Enhancio field label is the verbatim question text itself (safe even "
+                "if that text contains commas — a comma is never treated as a separator here). Use "
+                "the field labels the Describe Fields API reports for the allocation (Test connection "
+                "below). Don't include CID here, the uploaded row itself is kept and reused when "
+                "writing Accumulated/Refund later, not anything Enhancio echoes back:"
             )
             _existing_enhancio_field_map_text = "\n".join(
-                f"{col},{field_name}" for col, field_name in
+                col if col == field_name else f"{col} -> {field_name}" for col, field_name in
                 (profile.enhancio.field_mapping.items() if profile else [])
             )
             _enhancio_field_map_text = st.text_area(
@@ -945,11 +955,18 @@ with tab_complex:
                 key="enhancio_field_map_input", label_visibility="collapsed", height=120)
             for _line in _enhancio_field_map_text.splitlines():
                 _line = _line.strip()
-                if not _line or "," not in _line:
+                if not _line:
                     continue
-                # rsplit, not split -- see the identical comment on
-                # Convertr's field mapping above for why.
-                _col, _field_name = _line.rsplit(",", 1)
+                if " -> " in _line:
+                    _col, _field_name = _line.split(" -> ", 1)
+                else:
+                    # No arrow -- this column's name IS the Enhancio field
+                    # label verbatim (common for consent/opt-in questions).
+                    # A comma is deliberately NOT treated as a separator
+                    # here: that text can itself contain commas (or even
+                    # several), which would make a comma-based split
+                    # ambiguous no matter which comma was picked.
+                    _col = _field_name = _line
                 enhancio_field_mapping[_col.strip()] = _field_name.strip()
 
             st.caption(

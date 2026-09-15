@@ -243,7 +243,7 @@ def test_convertr_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
     next(t for t in at.text_input if "Convertr Publisher ID" in t.label).set_value("11003").run()
     at.text_area(key="convertr_campaigns_input").set_value(
         "120022,44709\n120021,44709\n120028,44706,80").run()
-    at.text_area(key="convertr_field_map_input").set_value("Email,email\nFirst Name,firstName").run()
+    at.text_area(key="convertr_field_map_input").set_value("Email -> email\nFirst Name -> firstName").run()
 
     # No per-campaign API key inputs anymore -- the Publisher API uses the
     # one account login for every campaign, so only a single "Test
@@ -325,7 +325,7 @@ def test_enhancio_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
     next(t for t in at.text_input if t.label == "Client name").set_value("Amazon Business EMEA").run()
     at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
     at.text_area(key="enhancio_allocations_input").set_value("120022,L-22256\n120028,L-22257").run()
-    at.text_area(key="enhancio_field_map_input").set_value("Email,Email Address\nFirst Name,First Name").run()
+    at.text_area(key="enhancio_field_map_input").set_value("Email -> Email Address\nFirst Name").run()
     at.text_area(key="enhancio_fixed_values_input").set_value(
         "L-22256,Company Size,1M - 5M\nL-22256,Lead Source,Website").run()
     at.text_input(key="enhancio_lf_email").set_value("Email").run()
@@ -353,9 +353,8 @@ def test_enhancio_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
 def test_enhancio_field_mapping_survives_a_leadfile_column_containing_a_comma(tmp_path, monkeypatch):
     # Regression test: a real leadfile column is often a verbatim
     # survey/consent question ("I'd like to receive news..., and I agree
-    # to...") that itself contains commas. Splitting the pasted
-    # "Column,Field Label" line on the FIRST comma mangled this into a
-    # garbled key/value pair instead of the intended single mapping.
+    # to...") that itself contains commas -- must never be treated as a
+    # separator, only " -> " is.
     monkeypatch.chdir(tmp_path)
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
@@ -364,7 +363,7 @@ def test_enhancio_field_mapping_survives_a_leadfile_column_containing_a_comma(tm
     next(t for t in at.text_input if t.label == "Client name").set_value("Comma Client").run()
     at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
     at.text_area(key="enhancio_field_map_input").set_value(
-        "I'd like to receive news, and I agree to the policy,Opt In").run()
+        "I'd like to receive news, and I agree to the policy -> Opt In").run()
 
     next(b for b in at.button if "Save Client Profile" in b.label).click().run()
     assert not at.exception
@@ -377,6 +376,65 @@ def test_enhancio_field_mapping_survives_a_leadfile_column_containing_a_comma(tm
         "I'd like to receive news, and I agree to the policy": "Opt In"}
 
 
+def test_enhancio_field_mapping_supports_a_self_mapped_column_with_commas_in_its_name(tmp_path, monkeypatch):
+    # Regression test: a consent/opt-in question is often worded IDENTICALLY
+    # in both the leadfile column and the Enhancio field label -- and that
+    # shared text can itself contain several commas. There is no comma
+    # (first, last, or any other) that would unambiguously split such a
+    # line if it were typed twice, comma-joined -- so a bare line with no
+    # " -> " at all means "same name on both sides," sidestepping commas
+    # entirely rather than trying to out-guess them.
+    monkeypatch.chdir(tmp_path)
+    consent_text = (
+        "I'd like to receive news, and I agree to the collection of info, "
+        "for more details, please read our Privacy Policy."
+    )
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Enhancio").set_value(True).run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("Comma Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_area(key="enhancio_field_map_input").set_value(f"Email -> Email Address\n{consent_text}").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Comma Client", get_clients_dir())
+    assert loaded.enhancio.field_mapping == {
+        "Email": "Email Address",
+        consent_text: consent_text,
+    }
+
+
+def test_enhancio_field_mapping_round_trips_a_self_mapped_comma_containing_column(tmp_path, monkeypatch):
+    # The textarea must redisplay a self-mapped entry as the bare column
+    # name (no arrow) on reload -- redisplaying it as "text -> text" would
+    # work too, but the bare form is the more natural round trip and
+    # confirms the comma-containing text is never mistaken for two fields.
+    monkeypatch.chdir(tmp_path)
+    consent_text = "I'd like to receive news, and I agree, for more details, read the policy."
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Enhancio").set_value(True).run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("Comma Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_area(key="enhancio_field_map_input").set_value(consent_text).run()
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+
+    at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at2.run()
+    next(r for r in at2.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at2.selectbox if s.label == "Client").set_value("Comma Client").run()
+
+    field_map_area = next(t for t in at2.text_area if t.key == "enhancio_field_map_input")
+    assert field_map_area.value == consent_text
+
+
 def test_convertr_field_mapping_survives_a_leadfile_column_containing_a_comma(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
@@ -386,7 +444,7 @@ def test_convertr_field_mapping_survives_a_leadfile_column_containing_a_comma(tm
     next(t for t in at.text_input if t.label == "Client name").set_value("Comma Client").run()
     at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
     at.text_area(key="convertr_field_map_input").set_value(
-        "I'd like to receive news, and I agree to the policy,optIn").run()
+        "I'd like to receive news, and I agree to the policy -> optIn").run()
 
     next(b for b in at.button if "Save Client Profile" in b.label).click().run()
     assert not at.exception
