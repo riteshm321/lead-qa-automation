@@ -37,16 +37,24 @@ def _first_error_message(body: dict) -> str:
     return ""
 
 
-def _post(url: str, headers: dict, payload: dict | None, action: str) -> dict:
+def _post(url: str, headers: dict, payload: dict | None, action: str, allow_partial: bool = False) -> dict:
     response = requests.post(url, headers=headers, json=payload, timeout=60)
     try:
         body = response.json()
     except ValueError:
         body = {}
-    # Enhancio's envelope can report failure with errors present even on a
-    # 200 (result is then omitted per its own docs), so both conditions are
-    # checked, not just the HTTP status.
-    if response.status_code != 200 or body.get("errors"):
+    # Enhancio's envelope can report a full failure with errors present
+    # even on a 200 (result is then omitted per its own docs) -- but for
+    # batch endpoints (Import Lead, Lead Status) a 200 can also legitimately
+    # carry BOTH a real result (the leads that succeeded) AND per-lead
+    # errors (the leads that didn't, e.g. duplicates) in the SAME response.
+    # Callers that pass allow_partial=True keep that partial result instead
+    # of having it discarded just because errors is also non-empty -- this
+    # was silently dropping real accepted leads whenever a batch also had
+    # any rejected ones. Only a response with no result at all (or a
+    # non-200) is treated as a total failure.
+    has_result = body.get("result") is not None
+    if response.status_code != 200 or (body.get("errors") and not (allow_partial and has_result)):
         message = _first_error_message(body) or response.text[:300]
         raise EnhancioError(f"Enhancio returned {response.status_code} {action}: {message}")
     return body
@@ -96,23 +104,35 @@ def list_publisher_allocations(access_token: str, page: int = 1, size: int = 100
     return body.get("result") or []
 
 
-def import_leads(access_token: str, allocation_uid: str, leads: list[dict]) -> list[dict]:
+def import_leads(access_token: str, allocation_uid: str, leads: list[dict]) -> dict:
     """Submits leads to the Lead Import API for one allocation -- leads:
     [{Enhancio field label: value}], e.g. [{"First Name": "Joe", "Email
-    Address": "j@x.com"}]. Returns the combined submittedLeads list
-    ({"leadId", "status", "email"} per lead) across every batch, in the
-    same order submitted.
+    Address": "j@x.com"}]. Returns {"submitted": [...], "errors": [...]}
+    combined across every batch: submitted has one {"leadId", "status",
+    "email"} entry per lead Enhancio actually accepted, in whatever order
+    Enhancio returns them (NOT assumed to match the order/count of leads
+    sent -- a batch can drop leads, e.g. duplicates, without saying which
+    position they were at); errors has every raw per-batch error entry
+    Enhancio reported, so a caller can show every distinct reason instead
+    of just the first one.
+
+    A single batch can legitimately contain both at once (e.g. 29 accepted
+    + 131 duplicates in one call) -- that is not treated as a failure here,
+    only surfaced as-is. See _post's allow_partial.
     """
     submitted: list[dict] = []
+    errors: list = []
     for start in range(0, len(leads), _MAX_BATCH_SIZE):
         chunk = leads[start:start + _MAX_BATCH_SIZE]
         url = f"{_LEAD_API_BASE}/import"
         body = _post(
             url, _auth_headers(access_token),
             {"leadList": chunk, "allocationUid": allocation_uid}, "importing leads",
+            allow_partial=True,
         )
         submitted.extend((body.get("result") or {}).get("submittedLeads") or [])
-    return submitted
+        errors.extend(body.get("errors") or [])
+    return {"submitted": submitted, "errors": errors}
 
 
 def get_lead_status(access_token: str, lead_ids: list[str]) -> list[dict]:
@@ -124,6 +144,9 @@ def get_lead_status(access_token: str, lead_ids: list[str]) -> list[dict]:
     for start in range(0, len(lead_ids), _MAX_BATCH_SIZE):
         chunk = lead_ids[start:start + _MAX_BATCH_SIZE]
         url = f"{_LEAD_API_BASE}/lead-status"
-        body = _post(url, _auth_headers(access_token), {"leadIds": chunk}, "fetching lead status")
+        body = _post(
+            url, _auth_headers(access_token), {"leadIds": chunk}, "fetching lead status",
+            allow_partial=True,
+        )
         resolved.extend((body.get("result") or {}).get("leadList") or [])
     return resolved
