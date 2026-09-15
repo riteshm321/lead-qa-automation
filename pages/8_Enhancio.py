@@ -11,10 +11,10 @@ from core import enhancio_client
 from core.enhancio_client import EnhancioError
 from core.enhancio_sync import (
     rejection_reason_from_status_entry, load_pending_leads, save_pending_leads, remove_pending_leads,
-    load_uploaded_emails, save_uploaded_emails, filter_already_uploaded, select_rows_for_test_mode,
-    format_enhancio_field_value,
+    load_uploaded_emails, save_uploaded_emails, clear_uploaded_emails, filter_already_uploaded,
+    select_rows_for_test_mode, format_enhancio_field_value,
 )
-from core.excel_io import read_leadfile, append_leads
+from core.excel_io import read_leadfile, append_leads, read_sheet_as_dataframe, set_status_for_emails
 from core import jira_client
 from core.jira_client import JiraError
 from core.profile_store import list_profile_names, load_profile
@@ -36,12 +36,8 @@ client_name = st.selectbox("Client", _profile_names)
 profile = load_profile(client_name, get_clients_dir())
 _enhancio = profile.enhancio
 _allocation_by_cid = {a.cid: a.allocation_uid for a in _enhancio.allocations}
-# Enhancio's own mapping (set on Client Setup's Enhancio section) takes
-# priority; falls back to the client's QA field_mapping so an
-# already-configured client keeps working unchanged. This is what lets a
-# client with no QA at all (e.g. uploaded straight to Enhancio) use this
-# page without ever visiting Run Check first.
-_leadfile_mapping = _enhancio.leadfile_field_mapping or profile.field_mapping
+_ACCUMULATED_DATE_COLUMN = "Date"
+_ACCUMULATED_STATUS_COLUMN = "Status"
 
 
 def _get_token() -> str:
@@ -69,15 +65,64 @@ _test_mode = st.checkbox(
     help="Use this for a first-time check before uploading real volume. Several CIDs can share one "
          "allocation, so this touches each real allocation exactly once, not once per CID.",
 )
-_upload_file = st.file_uploader("Verified leadfile", type=["xlsx", "csv"], key="enhancio_upload_file")
 
-if _upload_file:
-    try:
-        leads_df = read_leadfile(_upload_file)
-    except Exception as exc:
-        st.error(f"Could not read this file: {exc}")
+_lead_source = st.radio(
+    "Lead source", ["Upload a file", "Pull from Accumulated Report by date range"],
+    key="enhancio_lead_source", horizontal=True,
+    help="\"Pull from Accumulated Report\" is for leads a client has already approved out-of-band "
+         "(e.g. over email) — you tell it which day(s) to send, it does the rest.",
+)
+_from_accumulated = _lead_source == "Pull from Accumulated Report by date range"
+
+leads_df = None
+if _from_accumulated:
+    # Every DataFrame here comes from re-reading the Accumulated Report,
+    # never a raw uploaded leadfile -- accumulated_field_mapping describes
+    # what the 5 known roles are actually called INSIDE that report (which
+    # can differ from field_mapping, the raw leadfile's own convention;
+    # see the identical fix in pages/5_Box_Tracker.py for why this
+    # distinction matters).
+    _leadfile_mapping = profile.accumulated_field_mapping or profile.field_mapping
+    if not profile.accumulated_report_path:
+        st.error("This client has no Accumulated Report configured on Client Setup — set one first.")
         st.stop()
+    _today = datetime.date.today()
+    _range_col1, _range_col2 = st.columns(2)
+    _range_start = _range_col1.date_input(
+        "From date", value=_today - datetime.timedelta(days=1), key="enhancio_range_start")
+    _range_end = _range_col2.date_input("To date", value=_today, key="enhancio_range_end")
+    if _range_start > _range_end:
+        st.error("\"From date\" must not be after \"To date\".")
+        st.stop()
+    try:
+        _accumulated_df = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
+    except Exception as exc:
+        st.error(f"Could not load Accumulated Report: {exc}")
+        st.stop()
+    if _ACCUMULATED_DATE_COLUMN not in _accumulated_df.columns:
+        st.error(f"The Accumulated Report has no \"{_ACCUMULATED_DATE_COLUMN}\" column to filter by.")
+        st.stop()
+    _row_dates = pd.to_datetime(_accumulated_df[_ACCUMULATED_DATE_COLUMN], errors="coerce").dt.date
+    leads_df = _accumulated_df[_row_dates.between(_range_start, _range_end)]
+    if leads_df.empty:
+        st.info(f"No leads in the Accumulated Report between {_range_start} and {_range_end}.")
+        st.stop()
+else:
+    # Enhancio's own mapping (set on Client Setup's Enhancio section) takes
+    # priority; falls back to the client's QA field_mapping so an
+    # already-configured client keeps working unchanged. This is what lets
+    # a client with no QA at all (e.g. uploaded straight to Enhancio) use
+    # this page without ever visiting Run Check first.
+    _leadfile_mapping = _enhancio.leadfile_field_mapping or profile.field_mapping
+    _upload_file = st.file_uploader("Verified leadfile", type=["xlsx", "csv"], key="enhancio_upload_file")
+    if _upload_file:
+        try:
+            leads_df = read_leadfile(_upload_file)
+        except Exception as exc:
+            st.error(f"Could not read this file: {exc}")
+            st.stop()
 
+if leads_df is not None:
     if not _leadfile_mapping:
         st.error(
             "This client has no leadfile column mapping for Enhancio yet — set one under Client Setup's "
@@ -88,6 +133,18 @@ if _upload_file:
     if not cid_column or cid_column not in leads_df.columns:
         st.error(f"This client's CID column (\"{cid_column}\") isn't in the uploaded file.")
         st.stop()
+
+    # Every allocation this file's CIDs actually route to -- computed once
+    # and reused below for the duplicate preview, test mode's per-allocation
+    # slot selection, and the reset control, instead of re-reading each
+    # allocation's already-uploaded-email memory from disk repeatedly.
+    _file_allocation_uids = sorted({
+        _allocation_by_cid[_cid] for _cid in leads_df[cid_column].astype(str).unique()
+        if _cid in _allocation_by_cid
+    })
+    _already_uploaded_by_allocation = {
+        _uid: load_uploaded_emails(client_name, _uid) for _uid in _file_allocation_uids
+    }
 
     # Preview, before anything is actually sent, how many of these leads
     # were already uploaded before -- scoped per ALLOCATION (AID), not per
@@ -100,7 +157,7 @@ if _upload_file:
         if _allocation_uid is None:
             continue
         _, _dup_group = filter_already_uploaded(
-            _group, _leadfile_mapping.email, load_uploaded_emails(client_name, _allocation_uid))
+            _group, _leadfile_mapping.email, _already_uploaded_by_allocation[_allocation_uid])
         _dup_preview_count += len(_dup_group)
     _reupload_duplicates = False
     if _dup_preview_count:
@@ -110,6 +167,22 @@ if _upload_file:
             key="enhancio_reupload_duplicates",
             help="Leave unchecked to skip them as usual (recommended, avoids duplicate submissions to Enhancio).",
         )
+
+    with st.expander("Reset already-uploaded memory for an allocation"):
+        st.caption(
+            "Wipes this tool's own record of which leads it already sent to an allocation (does not touch "
+            "anything in Enhancio itself). Use this if you deliberately want to re-send leads Enhancio "
+            "already has, or if Test mode keeps skipping every CID for an allocation because the one lead "
+            "it already tried was itself an already-uploaded lead."
+        )
+        for _uid in _file_allocation_uids:
+            _count = len(_already_uploaded_by_allocation[_uid])
+            _reset_col1, _reset_col2 = st.columns([3, 1])
+            _reset_col1.write(f"**{_uid}** — {_count} email(s) remembered")
+            if _reset_col2.button("Reset", key=f"enhancio_reset_{_uid}", disabled=_count == 0):
+                clear_uploaded_emails(client_name, _uid)
+                queue_toast_before_rerun(f"Cleared already-uploaded memory for allocation {_uid}.")
+                st.rerun()
 
     if st.button("Upload to Enhancio", type="primary"):
         _token = _get_token()
@@ -121,7 +194,11 @@ if _upload_file:
         _upload_df = leads_df
 
         if _test_mode:
-            _send_df, _skipped_df = select_rows_for_test_mode(_upload_df, cid_column, _allocation_by_cid)
+            _send_df, _skipped_df = select_rows_for_test_mode(
+                _upload_df, cid_column, _allocation_by_cid,
+                email_column=_leadfile_mapping.email,
+                already_uploaded_by_allocation=_already_uploaded_by_allocation,
+            )
             for _, lead in _skipped_df.iterrows():
                 _cid = str(lead[cid_column])
                 results.append({
@@ -154,7 +231,7 @@ if _upload_file:
 
         for allocation_uid, groups in _df_by_allocation.items():
             allocation_df = pd.concat(groups)
-            _already_uploaded = load_uploaded_emails(client_name, allocation_uid)
+            _already_uploaded = _already_uploaded_by_allocation[allocation_uid]
             _send_df, _dup_df = filter_already_uploaded(allocation_df, _leadfile_mapping.email, _already_uploaded)
             if _reupload_duplicates:
                 _send_df = pd.concat([_send_df, _dup_df])
@@ -233,6 +310,18 @@ if _upload_file:
             save_pending_leads(client_name, _newly_pending)
         for allocation_uid, emails in _newly_uploaded_emails_by_allocation.items():
             save_uploaded_emails(client_name, allocation_uid, emails)
+
+        if _from_accumulated:
+            _all_newly_uploaded_emails = {
+                email for emails in _newly_uploaded_emails_by_allocation.values() for email in emails
+            }
+            if _all_newly_uploaded_emails:
+                set_status_for_emails(
+                    profile.accumulated_report_path, profile.accumulated_tab_name,
+                    _ACCUMULATED_STATUS_COLUMN, _leadfile_mapping.email, _all_newly_uploaded_emails,
+                    f"Uploaded to Enhancio - {datetime.date.today():%d-%b}",
+                )
+
         st.session_state["enhancio_upload_results"] = pd.DataFrame(results)
 
 if st.session_state.get("enhancio_upload_results") is not None:

@@ -538,6 +538,35 @@ def test_apply_complex_account_rules_prefixes_customer_comments_for_non_apac_cid
     assert enriched.loc[1, "Customer Comments"] == ""
 
 
+def test_apply_complex_account_rules_does_not_double_prefix_customer_comments():
+    # Regression test: confirmed in real output as "Accounts Researching -
+    # Accounts Researching - ..." -- if the leadfile's own value already
+    # carries the prefix (e.g. this same row filled a second time), it must
+    # not be prepended again.
+    df = pd.DataFrame([{
+        **_base_leads_df().iloc[0].to_dict(), "CID": "205001",
+        "Customer Comments": "Accounts Researching - Evaluating cloud migration options",
+    }])
+
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert enriched.loc[0, "Customer Comments"] == "Accounts Researching - Evaluating cloud migration options"
+
+
+def test_apply_complex_account_rules_treats_blank_customer_comments_cell_as_blank():
+    # Regression test: a genuinely blank Excel cell comes back from pandas
+    # as float NaN, not "" -- `nan or ""` evaluates to nan itself (NaN is
+    # truthy), which used to produce the literal text "Accounts Researching
+    # - nan" in the real output instead of leaving the cell blank.
+    df = pd.DataFrame([{
+        **_base_leads_df().iloc[0].to_dict(), "CID": "205001", "Customer Comments": float("nan"),
+    }])
+
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert enriched.loc[0, "Customer Comments"] == ""
+
+
 def test_apply_complex_account_rules_leaves_customer_comments_untouched_for_dell_apac():
     df = pd.DataFrame([{
         **_base_leads_df().iloc[0].to_dict(), "CID": "119414",  # Dell APAC

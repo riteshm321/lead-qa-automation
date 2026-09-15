@@ -177,6 +177,32 @@ def read_sheet_as_dataframe(path: str, sheet_name: str) -> pd.DataFrame:
     return pd.read_excel(path, sheet_name=sheet_name)
 
 
+def set_status_for_emails(
+    path: str, tab_name: str, status_column: str, email_column: str, emails: set[str], label: str,
+) -> None:
+    """Writes `label` into `status_column` for every row in `tab_name`
+    (header on row 1) whose `email_column` cell's text matches one of
+    `emails` -- matching by email rather than positional row index, for a
+    caller that only has a filtered/re-read DataFrame slice, not the
+    original full-sheet row positions. Shared by every workflow that
+    marks Accumulated Report leads as having moved to some next stage
+    (Box Tracker's approval/clearance/reconciliation labels, Enhancio's
+    own upload label) without rewriting the whole row.
+    """
+    wb = openpyxl.load_workbook(path)
+    try:
+        ws = wb[tab_name]
+        headers = [cell.value for cell in ws[1]]
+        status_col = headers.index(status_column) + 1
+        email_col_idx = headers.index(email_column) + 1
+        for row in ws.iter_rows(min_row=2):
+            if str(row[email_col_idx - 1].value or "") in emails:
+                ws.cell(row=row[0].row, column=status_col, value=label)
+        wb.save(path)
+    finally:
+        wb.close()
+
+
 def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
     """Serializes a DataFrame to real .xlsx bytes, for st.download_button --
     lets a user pull a list (refund/needs-review leads) into Excel to

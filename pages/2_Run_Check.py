@@ -864,7 +864,15 @@ if "run_result" in st.session_state:
                 ACCOUNT_ID_COLUMN, COMPANY_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
                 CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN,
             ] if c and c in enriched_valid.columns]
-            st.dataframe(enriched_valid[_preview_cols], hide_index=True)
+            st.dataframe(
+                enriched_valid[_preview_cols], hide_index=True,
+                # Without this, Streamlit's default date rendering doesn't
+                # match what actually gets written to the file (mm/dd/yyyy)
+                # -- looks like a formatting bug even though the write
+                # itself is correct.
+                column_config={CAPTURE_DATE_COLUMN: st.column_config.DateColumn(format="MM/DD/YYYY")}
+                if CAPTURE_DATE_COLUMN in _preview_cols else None,
+            )
 
             col_write, col_discard = st.columns(2)
             if col_write.button("Confirm & Write", type="primary", use_container_width=True):

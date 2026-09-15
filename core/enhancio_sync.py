@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import re
@@ -70,11 +71,25 @@ def filter_already_uploaded(
 
 def select_rows_for_test_mode(
     leads_df: pd.DataFrame, cid_column: str, cid_to_allocation_uid: dict[str, str],
+    email_column: str | None = None,
+    already_uploaded_by_allocation: dict[str, set[str]] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """For the Upload page's test mode: exactly one row per unique Enhancio
     allocation, not one per CID -- several CIDs can share one allocation,
     and the point of a test run is to touch each real allocation exactly
     once, not once per CID.
+
+    already_uploaded_by_allocation (allocation_uid -> already-uploaded
+    emails, from load_uploaded_emails) lets the picked representative skip
+    past a lead that was already uploaded to that allocation before. Such a
+    lead gets filtered out later by filter_already_uploaded regardless, so
+    picking it as the one test lead would leave the allocation with nothing
+    actually sent this run -- while every OTHER CID sharing that allocation
+    is still reported as "already tested", even though the allocation was
+    never actually touched this time. That row is still returned in
+    rows_to_send (so the later dedupe step reports it honestly as already
+    uploaded) but doesn't use up the allocation's one slot, so the next CID
+    for that allocation gets a real chance to be the test lead instead.
 
     Returns (rows_to_send, rows_skipped), both preserving leads_df's own
     index. A CID with no entry in cid_to_allocation_uid (no allocation
@@ -82,6 +97,7 @@ def select_rows_for_test_mode(
     separately, it has nothing to do with test-mode's per-allocation
     limiting.
     """
+    already_uploaded_by_allocation = already_uploaded_by_allocation or {}
     seen_allocation_uids: set[str] = set()
     send_indices, skip_indices = [], []
     for idx, cid in leads_df[cid_column].astype(str).items():
@@ -90,9 +106,13 @@ def select_rows_for_test_mode(
             continue
         if allocation_uid in seen_allocation_uids:
             skip_indices.append(idx)
-        else:
-            seen_allocation_uids.add(allocation_uid)
+            continue
+        email = _normalize_email(leads_df.at[idx, email_column]) if email_column else ""
+        if email and email in already_uploaded_by_allocation.get(allocation_uid, set()):
             send_indices.append(idx)
+            continue
+        seen_allocation_uids.add(allocation_uid)
+        send_indices.append(idx)
     return leads_df.loc[send_indices], leads_df.loc[skip_indices]
 
 
@@ -115,12 +135,29 @@ def load_pending_leads(client_name: str) -> dict[str, dict]:
         return json.load(f)
 
 
+def _json_safe_value(value):
+    # A row pulled from a re-read Excel sheet (see the Enhancio page's
+    # "pull from Accumulated Report" mode) can carry a real pd.Timestamp/
+    # datetime -- json.dump has no idea how to serialize those, and this
+    # store's whole point is being safely written/re-read as JSON.
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+    if pd.isna(value):
+        return ""
+    return value
+
+
 def save_pending_leads(client_name: str, lead_id_to_row: dict[str, dict]) -> None:
     path = _pending_leads_path(client_name)
     if not path:
         return
     existing = load_pending_leads(client_name)
-    existing.update({str(lead_id): row for lead_id, row in lead_id_to_row.items()})
+    existing.update({
+        str(lead_id): {col: _json_safe_value(value) for col, value in row.items()}
+        for lead_id, row in lead_id_to_row.items()
+    })
     atomic_write_json(path, existing)
 
 
@@ -171,3 +208,15 @@ def save_uploaded_emails(client_name: str, allocation_uid: str, emails: set[str]
     existing = load_uploaded_emails(client_name, allocation_uid)
     existing.update(_normalize_email(e) for e in emails if _normalize_email(e))
     atomic_write_json(path, sorted(existing))
+
+
+def clear_uploaded_emails(client_name: str, allocation_uid: str) -> None:
+    """Wipes this allocation's already-uploaded-email memory, so the next
+    upload treats every lead as new again -- for a deliberate re-test (test
+    mode's one-lead-per-allocation slot is otherwise stuck on whatever was
+    sent first) or to recover from a mismatch against Enhancio's own state.
+    """
+    path = _uploaded_emails_path(client_name, allocation_uid)
+    if not path:
+        return
+    atomic_write_json(path, [])

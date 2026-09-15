@@ -1,10 +1,12 @@
 """Automation for IBM APAC's Box-hosted lead-approval tracker workbook.
 
-This app has no Box API access (see docs/superpowers/plans/
-2026-09-07-ibm-apac-box-tracker-automation.md for why), so every function
-here reads from or writes to a LOCAL MIRROR workbook that the user
-maintains with the same tab/column shape as the real Box file, copying
-ranges between the two by hand. Nothing in this module ever talks to Box.
+This app has no Box REST API access (see docs/superpowers/plans/
+2026-09-07-ibm-apac-box-tracker-automation.md for why) -- every function
+here reads from or writes to whatever local .xlsx file
+BoxTrackerConfig.mirror_workbook_path points at. Since 2026-09-16 that's
+Box Desktop's own local sync copy of the real file (no in-between manual
+copy-paste step anymore), but nothing here ever calls Box's API directly;
+it's a plain local file write that Box Desktop then syncs on its own.
 """
 import datetime
 
@@ -141,15 +143,21 @@ def pick_leads_for_approval(
     return pd.concat(picked_frames), shortfall
 
 
-def append_mirror_rows(mirror_path: str, tab_name: str, rows: list[dict], header_row: int = 1) -> None:
+def append_mirror_rows(mirror_path: str, tab_name: str, rows: list[dict], header_row: int = 1) -> list[str]:
     """Appends rows to a mirror workbook tab, matching each dict's keys to
     that tab's header cells by exact text (case/whitespace-insensitive) --
     unlike core/excel_io.py's append_leads, there's no FieldMapping role
-    model here, just plain header-name matching, since these are the
-    tool's own mirror files with fixed, known business-column headers
-    (Company Name, Market, Segment, ...), not a generic leadfile.
-    A dict key with no matching header is silently ignored; a header with
-    no matching key is left blank for that row.
+    model or fuzzy/synonym matching here, just plain exact header-name
+    matching, since these are the tool's own mirror files with fixed,
+    known business-column headers (Company Name, Market, Segment, ...),
+    not a generic leadfile. A dict key with no matching header is silently
+    ignored; a header with no matching key is left blank for every row.
+
+    Returns the list of this tab's own headers that had no matching key in
+    ANY row just appended -- e.g. because the real workbook has a column
+    this function was never told how to fill. The caller should surface
+    this exactly like append_leads' own unmatched-header return value, so
+    a real column going permanently blank is never silent.
     """
     wb = openpyxl.load_workbook(mirror_path)
     try:
@@ -158,6 +166,12 @@ def append_mirror_rows(mirror_path: str, tab_name: str, rows: list[dict], header
         header_to_col = {
             str(h).strip().lower(): i + 1 for i, h in enumerate(headers) if h is not None
         }
+        if not rows:
+            return []
+        all_keys = {str(k).strip().lower() for row_dict in rows for k in row_dict}
+        unmatched_headers = [
+            h for h in headers if h is not None and str(h).strip().lower() not in all_keys
+        ]
         next_row = ws.max_row + 1
         for offset, row_dict in enumerate(rows):
             excel_row = next_row + offset
@@ -166,6 +180,7 @@ def append_mirror_rows(mirror_path: str, tab_name: str, rows: list[dict], header
                 if col is not None:
                     ws.cell(row=excel_row, column=col, value=value)
         wb.save(mirror_path)
+        return unmatched_headers
     finally:
         wb.close()
 

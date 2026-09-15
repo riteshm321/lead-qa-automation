@@ -225,6 +225,36 @@ def test_append_mirror_rows_leaves_unmatched_dict_keys_out(tmp_path):
     assert ws2.cell(row=2, column=2).value is None
 
 
+def test_append_mirror_rows_reports_real_headers_with_no_matching_key(tmp_path):
+    # Regression test: this function has no fuzzy matching at all (unlike
+    # append_leads) -- a real header with no matching dict key went
+    # permanently blank with zero feedback. It must now report exactly
+    # which real headers it couldn't fill, so the caller can warn.
+    path = str(tmp_path / "mirror.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["A", "B", "C"])
+    wb.save(path)
+
+    unmatched = append_mirror_rows(path, "Sheet1", [{"A": "value", "NotAColumn": "ignored"}])
+
+    assert unmatched == ["B", "C"]
+
+
+def test_append_mirror_rows_reports_nothing_unmatched_when_every_header_is_covered(tmp_path):
+    path = str(tmp_path / "mirror.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["A", "B"])
+    wb.save(path)
+
+    unmatched = append_mirror_rows(path, "Sheet1", [{"A": "1", "B": "2"}])
+
+    assert unmatched == []
+
+
 def test_set_pacing_delivered_writes_the_current_weeks_column(tmp_path):
     path = str(tmp_path / "mirror.xlsx")
     wb = openpyxl.Workbook()

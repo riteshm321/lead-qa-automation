@@ -6,7 +6,7 @@ from core.app_settings import save_app_settings
 from core.enhancio_sync import (
     rejection_reason_from_status_entry, select_rows_for_test_mode, filter_already_uploaded,
     load_pending_leads, save_pending_leads, remove_pending_leads,
-    load_uploaded_emails, save_uploaded_emails, format_enhancio_field_value,
+    load_uploaded_emails, save_uploaded_emails, clear_uploaded_emails, format_enhancio_field_value,
 )
 
 
@@ -91,6 +91,46 @@ def test_select_rows_for_test_mode_ignores_cids_with_no_allocation_mapping():
     assert skip_df.empty
 
 
+def test_select_rows_for_test_mode_skips_past_an_already_uploaded_representative():
+    # Regression test: if the FIRST CID for an allocation happens to be a
+    # lead already uploaded before, it would just get filtered out later as
+    # a duplicate -- proving nothing. It must not use up the allocation's
+    # one test slot; the next CID for that allocation should become the
+    # real test lead, and only CIDs after THAT get skipped as "already
+    # tested". Previously the already-uploaded lead claimed the slot, so
+    # the whole allocation ended up with nothing sent this run while every
+    # other CID was reported as "already tested via another CID".
+    leads_df = pd.DataFrame([
+        {"CID": "118166", "Email": "old@x.com"},   # already uploaded before
+        {"CID": "118167", "Email": "new1@x.com"},  # should become the test lead
+        {"CID": "118168", "Email": "new2@x.com"},  # should be skipped -- slot taken by new1
+    ])
+    cid_to_allocation_uid = {"118166": "L-22T8J", "118167": "L-22T8J", "118168": "L-22T8J"}
+
+    send_df, skip_df = select_rows_for_test_mode(
+        leads_df, "CID", cid_to_allocation_uid,
+        email_column="Email",
+        already_uploaded_by_allocation={"L-22T8J": {"old@x.com"}},
+    )
+
+    # old@x.com is still returned in send_df -- so it flows through to the
+    # normal already-uploaded dedupe step and gets reported honestly --
+    # but it did not consume the allocation's slot.
+    assert list(send_df["Email"]) == ["old@x.com", "new1@x.com"]
+    assert list(skip_df["Email"]) == ["new2@x.com"]
+
+
+def test_clear_uploaded_emails_resets_an_allocations_memory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    save_uploaded_emails("Amazon Business EMEA", "L-22256", {"a@x.com"})
+    assert load_uploaded_emails("Amazon Business EMEA", "L-22256") == {"a@x.com"}
+
+    clear_uploaded_emails("Amazon Business EMEA", "L-22256")
+    assert load_uploaded_emails("Amazon Business EMEA", "L-22256") == set()
+
+
 def test_filter_already_uploaded_splits_by_normalized_email():
     leads_df = pd.DataFrame([
         {"Email": "A@x.com", "CID": "1"},
@@ -112,6 +152,24 @@ def test_pending_leads_round_trip(tmp_path, monkeypatch):
 
     save_pending_leads("Amazon Business EMEA", {"1": {"Email": "a@x.com", "CID": "120022"}})
     assert load_pending_leads("Amazon Business EMEA") == {"1": {"Email": "a@x.com", "CID": "120022"}}
+
+
+def test_save_pending_leads_serializes_timestamp_and_nan_values(tmp_path, monkeypatch):
+    # Regression test: a row pulled from a re-read Excel sheet (the
+    # Enhancio page's "pull from Accumulated Report" mode) carries real
+    # pd.Timestamp/NaN values -- json.dump can't serialize those at all,
+    # which crashed the whole upload after Enhancio had already accepted
+    # the lead.
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    save_pending_leads("Amazon Business EMEA", {
+        "1": {"Email": "a@x.com", "Date": pd.Timestamp("2026-09-15"), "Comment": float("nan")},
+    })
+
+    assert load_pending_leads("Amazon Business EMEA") == {
+        "1": {"Email": "a@x.com", "Date": "2026-09-15T00:00:00", "Comment": ""},
+    }
 
 
 def test_pending_leads_scoped_per_client(tmp_path, monkeypatch):

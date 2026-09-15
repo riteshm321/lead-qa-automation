@@ -14,7 +14,7 @@ from core.box_tracker import (
     uploaded_to_approval_sheet_label,
 )
 from core.branding import configure_page
-from core.excel_io import read_sheet_as_dataframe, append_leads, find_header_row
+from core.excel_io import read_sheet_as_dataframe, append_leads, find_header_row, set_status_for_emails
 from core.profile_store import list_profile_names, load_profile
 
 _current_user = configure_page("Box Tracker")
@@ -49,28 +49,30 @@ if not profile.box_tracker.enabled:
     st.warning("Box Tracker isn't enabled for this client yet. Enable it on the Client Setup page first.")
     st.stop()
 _pacing_skipped = set(profile.box_tracker.pacing_skipped_campaigns)
+# Every DataFrame this page ever works with comes from re-reading the
+# ACCUMULATED REPORT (read_sheet_as_dataframe calls throughout) -- never
+# straight from a raw uploaded leadfile. profile.field_mapping describes
+# the RAW LEADFILE's own column names (e.g. "company" for this client);
+# profile.accumulated_field_mapping describes what those same roles are
+# actually called INSIDE the Accumulated Report (e.g. "Company").
+# Confirmed as the cause of "Company"/"Company Name" silently writing
+# blank everywhere on this page whenever the two mappings disagree --
+# using the accumulated one (falling back to field_mapping only if it was
+# never set) everywhere below fixes that and prevents the same class of
+# bug for any other role that drifts between the two in the future.
+_acc_fm = profile.accumulated_field_mapping or profile.field_mapping
 
 st.caption(
-    f"**{_IBM_APAC_CLIENT_NAME}**'s Box-hosted lead-approval tracker has no API access, so every "
-    "write here goes to a LOCAL MIRROR workbook — you copy the results into the real Box file by "
-    "hand. Work through the 3 steps below in order."
+    f"**{_IBM_APAC_CLIENT_NAME}**'s Box-hosted lead-approval tracker has no API access, so every write "
+    "here goes straight to Box Desktop's local sync copy of the real file at "
+    f"`{profile.box_tracker.mirror_workbook_path}` — Box syncs it from there on its own, no manual "
+    "copy-paste step. Work through the 3 steps below in order."
 )
 
 
 def _set_status_for_emails(email_col: str, emails: set[str], label: str) -> None:
-    """Writes `label` into the Accumulated Report's Status column for every
-    row whose email matches one in `emails` -- matching by email (not
-    positional index) since this is called from steps that only have a
-    DataFrame slice, not the original full-sheet row positions."""
-    wb = openpyxl.load_workbook(profile.accumulated_report_path)
-    ws = wb[profile.accumulated_tab_name]
-    headers = [cell.value for cell in ws[1]]
-    status_col = headers.index(_STATUS_COLUMN) + 1
-    email_col_idx = headers.index(email_col) + 1
-    for row in ws.iter_rows(min_row=2):
-        if str(row[email_col_idx - 1].value or "") in emails:
-            ws.cell(row=row[0].row, column=status_col, value=label)
-    wb.save(profile.accumulated_report_path)
+    set_status_for_emails(
+        profile.accumulated_report_path, profile.accumulated_tab_name, _STATUS_COLUMN, email_col, emails, label)
 
 
 st.subheader("1. Send leads for approval")
@@ -93,7 +95,7 @@ if st.button("Pick leads and send for approval", key="pick_and_send_button"):
         accumulated_df = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
         diffs = read_pacing_diffs(profile.box_tracker.mirror_workbook_path, _PACING_TAB)
         picked_df, shortfall = pick_leads_for_approval(
-            accumulated_df, profile.field_mapping.cid, _STATUS_COLUMN,
+            accumulated_df, _acc_fm.cid, _STATUS_COLUMN,
             profile.box_tracker.cid_campaign_map, diffs, buffer=5,
             uncapped_campaigns=_pacing_skipped,
         )
@@ -129,9 +131,9 @@ if st.button("Pick leads and send for approval", key="pick_and_send_button"):
         cid_to_campaign = profile.box_tracker.cid_campaign_map
         rows = []
         for _, lead in picked_df.iterrows():
-            cid = str(lead.get(profile.field_mapping.cid, ""))
+            cid = str(lead.get(_acc_fm.cid, ""))
             rows.append({
-                "Company Name": lead.get(profile.field_mapping.company, ""),
+                "Company Name": lead.get(_acc_fm.company, ""),
                 "Segment": lead.get("Segment", ""),
                 "Persona/Industry": strip_country_suffix(cid_to_campaign.get(cid, "")),
                 "Project Code": project_code_for_cid(cid, lead.get("Project Code", "")),
@@ -140,18 +142,27 @@ if st.button("Pick leads and send for approval", key="pick_and_send_button"):
                 "AMAL ID": parse_amal_id(lead.get("AMAL ID", "")),
                 "Date": date_label,
             })
-        append_mirror_rows(profile.box_tracker.mirror_workbook_path, _APPROVAL_SHEET_TAB, rows)
+        _approval_unmatched = append_mirror_rows(profile.box_tracker.mirror_workbook_path, _APPROVAL_SHEET_TAB, rows)
+        # "Approval" is deliberately never filled by this tool -- the
+        # client fills it in -- so it's not a real mismatch to warn about.
+        _approval_unmatched = [h for h in _approval_unmatched if str(h).strip().lower() != "approval"]
 
         # Set Pacing's Delivered count per campaign, for leads actually
         # sent -- except campaigns still on the skip list.
         cid_to_campaign = profile.box_tracker.cid_campaign_map
-        picked_counts = picked_df[profile.field_mapping.cid].astype(str).value_counts()
+        picked_counts = picked_df[_acc_fm.cid].astype(str).value_counts()
         for cid, count in picked_counts.items():
             campaign = cid_to_campaign.get(cid)
             if campaign and campaign not in _pacing_skipped:
                 set_pacing_delivered(profile.box_tracker.mirror_workbook_path, campaign, int(count))
 
         st.success(f"Sent {len(picked_df)} lead(s) for approval — see {_APPROVAL_SHEET_TAB} in the mirror workbook.")
+        if _approval_unmatched:
+            st.warning(
+                f"⚠️ The {_APPROVAL_SHEET_TAB} tab has column(s) this tool doesn't fill in and left blank: "
+                f"{', '.join(sorted(_approval_unmatched))}. If that's unexpected, the mirror workbook's real "
+                "header text may not match what this page writes."
+            )
         if shortfall:
             for cid, amount in shortfall.items():
                 st.warning(f"CID {cid} was short by {amount} lead(s) — sent all that were available.")
@@ -176,7 +187,7 @@ with st.expander("✋ Or: I already added these leads to the real Approval Sheet
     if _blank_status_df.empty:
         st.caption("No blank-Status leads available to mark.")
     else:
-        _manual_email_col = profile.field_mapping.email
+        _manual_email_col = _acc_fm.email
         manual_flags: dict[str, bool] = {}
         for _, lead in _blank_status_df.iterrows():
             email = str(lead.get(_manual_email_col, ""))
@@ -223,7 +234,7 @@ except Exception as exc:
 if _awaiting_clearance_df.empty:
     st.caption(f"No leads currently marked \"{_SENT_STATUS_PREFIX}\" or \"{_MANUAL_STATUS_PREFIX}\".")
 else:
-    _clear_email_col = profile.field_mapping.email
+    _clear_email_col = _acc_fm.email
     clear_flags: dict[str, bool] = {}
     for _, lead in _awaiting_clearance_df.iterrows():
         email = str(lead.get(_clear_email_col, ""))
@@ -246,15 +257,16 @@ else:
             # would write one CID's rows with clear_existing=True and then
             # wipe them out again writing the next CID into the same file.
             cleared_df = cleared_df.copy()
-            cleared_df["_template_path"] = cleared_df[profile.field_mapping.cid].astype(str).map(
+            cleared_df["_template_path"] = cleared_df[_acc_fm.cid].astype(str).map(
                 profile.box_tracker.cid_lead_template_path.get)
 
             missing_template_cids: set[str] = set(
-                cleared_df.loc[cleared_df["_template_path"].isna(), profile.field_mapping.cid].astype(str)
+                cleared_df.loc[cleared_df["_template_path"].isna(), _acc_fm.cid].astype(str)
             )
 
             written_cids: list[str] = []
             written_emails: set[str] = set()
+            unmatched_headers: set[str] = set()
             routed_df = cleared_df[cleared_df["_template_path"].notna()]
             for template_path, group in routed_df.groupby("_template_path"):
                 group = group.drop(columns="_template_path")
@@ -268,25 +280,31 @@ else:
                 # every row in this one file, never derived from the leadfile.
                 template_constants = read_lead_template_constants(template_path, sheet_name)
                 enriched_group = add_lead_template_columns(
-                    group, profile.field_mapping.cid, template_constants=template_constants)
+                    group, _acc_fm.cid, template_constants=template_constants)
 
                 expected = [v for v in [
-                    profile.field_mapping.email, profile.field_mapping.first_name,
-                    profile.field_mapping.last_name, profile.field_mapping.company,
-                    profile.field_mapping.cid,
+                    _acc_fm.email, _acc_fm.first_name,
+                    _acc_fm.last_name, _acc_fm.company,
+                    _acc_fm.cid,
                 ] if v]
                 header_row = find_header_row(template_path, sheet_name, expected)
-                append_leads(
-                    template_path, sheet_name, enriched_group, profile.field_mapping,
+                unmatched_headers.update(append_leads(
+                    template_path, sheet_name, enriched_group, _acc_fm,
                     datetime.date.today(), header_row=header_row, clear_existing=True,
-                )
-                written_cids.extend(sorted(group[profile.field_mapping.cid].astype(str).unique()))
+                ))
+                written_cids.extend(sorted(group[_acc_fm.cid].astype(str).unique()))
                 written_emails.update(group[_clear_email_col].astype(str))
 
             if written_emails:
                 _set_status_for_emails(_clear_email_col, written_emails, cleared_for_upload_label(datetime.date.today()))
                 st.success(
                     f"Wrote {len(written_emails)} lead(s) to their Lead Template(s) (CIDs: {', '.join(written_cids)}).")
+            if unmatched_headers:
+                st.warning(
+                    "⚠️ These Lead Template columns had no matching Accumulated Report column and were left "
+                    f"blank: {', '.join(sorted(unmatched_headers))}. If that data does exist under a different "
+                    "column name, rename it (or the Lead Template's header) to something closer and re-run."
+                )
             if missing_template_cids:
                 st.warning(
                     f"No Lead Template path configured for CID(s): {', '.join(sorted(missing_template_cids))} "
@@ -321,7 +339,7 @@ except Exception as exc:
 if _sent_df.empty:
     st.caption(f"No leads currently marked \"{_CLEARED_STATUS_PREFIX}\".")
 else:
-    _email_col = profile.field_mapping.email
+    _email_col = _acc_fm.email
     reject_flags: dict[str, bool] = {}
     reject_reasons: dict[str, str] = {}
     for _, lead in _sent_df.iterrows():
@@ -349,7 +367,7 @@ else:
                 reasons = {idx: reject_reasons[str(row[_email_col])] for idx, row in rejected_df.iterrows()}
                 append_leads(
                     profile.accumulated_report_path, profile.refund_tab_name,
-                    rejected_df, profile.field_mapping, today, reasons=reasons,
+                    rejected_df, _acc_fm, today, reasons=reasons,
                 )
                 _set_status_for_emails(
                     _email_col, set(rejected_df[_email_col].astype(str)), uploaded_rejected_label(today))
@@ -358,13 +376,13 @@ else:
                 cid_to_campaign = profile.box_tracker.cid_campaign_map
                 response_rows = []
                 for _, lead in accepted_df.iterrows():
-                    cid = str(lead.get(profile.field_mapping.cid, ""))
+                    cid = str(lead.get(_acc_fm.cid, ""))
                     campaign = strip_country_suffix(cid_to_campaign.get(cid, ""))
                     response_rows.append({
                         "Publisher Name": _RESPONSE_DETAILS_PUBLISHER_NAME,
                         "source_site": _RESPONSE_DETAILS_SOURCE_SITE,
                         "Market": lead.get("Country", ""),
-                        "Company": lead.get(profile.field_mapping.company, ""),
+                        "Company": lead.get(_acc_fm.company, ""),
                         "UUCID": lead.get("2nd Asset OV Code", ""),
                         "Project Code": project_code_for_cid(cid, lead.get("Project Code", "")),
                         "Campaign Name": campaign,
@@ -377,22 +395,30 @@ else:
                         "Asset Link": lead.get("Asset Link", ""),
                         "Uploaded Date": today.strftime("%d-%b"),
                     })
-                append_mirror_rows(
+                _response_unmatched = append_mirror_rows(
                     profile.box_tracker.mirror_workbook_path, _RESPONSE_DETAILS_TAB, response_rows,
                     header_row=_RESPONSE_DETAILS_HEADER_ROW,
                 )
                 _set_status_for_emails(
                     _email_col, set(accepted_df[_email_col].astype(str)), uploaded_accepted_label(today))
 
-                accepted_counts = accepted_df[profile.field_mapping.cid].astype(str).value_counts()
+                accepted_counts = accepted_df[_acc_fm.cid].astype(str).value_counts()
                 for cid, count in accepted_counts.items():
                     campaign = cid_to_campaign.get(cid)
                     if campaign and campaign not in _pacing_skipped:
                         set_pacing_delivered(profile.box_tracker.mirror_workbook_path, campaign, int(count))
+            else:
+                _response_unmatched = []
 
             st.success(
                 f"Reconciled: {len(accepted_df)} accepted (logged to {_RESPONSE_DETAILS_TAB}, Pacing updated), "
                 f"{len(rejected_df)} rejected (moved to Refund)."
             )
+            if _response_unmatched:
+                st.warning(
+                    f"⚠️ The {_RESPONSE_DETAILS_TAB} tab has column(s) this tool doesn't fill in and left "
+                    f"blank: {', '.join(sorted(_response_unmatched))}. If that's unexpected, the mirror "
+                    "workbook's real header text may not match what this page writes."
+                )
         except Exception as exc:
             st.error(f"Error: {exc}")
