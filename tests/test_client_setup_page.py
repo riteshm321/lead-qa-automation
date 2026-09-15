@@ -326,6 +326,8 @@ def test_enhancio_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
     at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
     at.text_area(key="enhancio_allocations_input").set_value("120022,L-22256\n120028,L-22257").run()
     at.text_area(key="enhancio_field_map_input").set_value("Email,Email Address\nFirst Name,First Name").run()
+    at.text_area(key="enhancio_fixed_values_input").set_value(
+        "L-22256,Company Size,1M - 5M\nL-22256,Lead Source,Website").run()
     at.text_input(key="enhancio_lf_email").set_value("Email").run()
     at.text_input(key="enhancio_lf_cid").set_value("CID").run()
 
@@ -342,6 +344,8 @@ def test_enhancio_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
     allocations_by_cid = {a.cid: a for a in loaded.enhancio.allocations}
     assert allocations_by_cid["120022"].allocation_uid == "L-22256"
     assert allocations_by_cid["120028"].allocation_uid == "L-22257"
+    assert loaded.enhancio.fixed_field_values == {
+        "L-22256": {"Company Size": "1M - 5M", "Lead Source": "Website"}}
     assert loaded.enhancio.leadfile_field_mapping.email == "Email"
     assert loaded.enhancio.leadfile_field_mapping.cid == "CID"
 

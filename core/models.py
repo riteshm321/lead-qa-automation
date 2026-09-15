@@ -200,6 +200,13 @@ class EnhancioConfig:
     # Address", "First Name": "First Name"} -- keyed by the exact fieldLabel
     # the Describe Fields API reports for the allocation, not a fixed code.
     field_mapping: dict[str, str] = field(default_factory=dict)
+    # {allocationUid: {Enhancio field label: fixed value}} -- fields that
+    # Enhancio requires but which take the SAME value for every lead sent to
+    # that allocation (e.g. Company Size, Lead Source), rather than varying
+    # per row like field_mapping. Confirmed once here at Client Setup time;
+    # every future upload to that allocation applies them automatically, no
+    # re-confirmation at upload time.
+    fixed_field_values: dict[str, dict[str, str]] = field(default_factory=dict)
     # Same purpose and fallback behavior as ConvertrConfig.leadfile_field_mapping.
     leadfile_field_mapping: Optional[FieldMapping] = None
 

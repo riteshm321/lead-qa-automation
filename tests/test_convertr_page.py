@@ -49,6 +49,59 @@ def test_warns_when_no_client_has_convertr_enabled(tmp_path, monkeypatch):
     assert any("No client has Convertr enabled" in w.value for w in at.warning)
 
 
+def test_reupload_checkbox_lets_you_resend_an_already_uploaded_lead(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([{"CID": "120022", "Email": "a@x.com", "First Name": "A", "Last Name": "One"}]).to_csv(
+        leads_csv, index=False)
+
+    submit_calls = []
+
+    def _fake_submit(enterprise, token, publisher_id, campaign_id, form_id, form_data, link_id=""):
+        submit_calls.append(form_data)
+        return {"data": len(submit_calls), "message": "ok"}
+
+    with patch("core.convertr_client.login", return_value={"access_token": "tok"}), \
+         patch("core.convertr_client.submit_lead_as_publisher", side_effect=_fake_submit):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Convertr").click().run()
+        assert not at.exception
+        assert len(submit_calls) == 1
+
+        # Re-uploading the same file without the checkbox: skipped, nothing new sent.
+        at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at2.run()
+        next(s for s in at2.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at2.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        assert any("already uploaded" in w.value for w in at2.warning)
+        next(b for b in at2.button if b.label == "Upload to Convertr").click().run()
+        assert not at2.exception
+        assert len(submit_calls) == 1
+
+        # Checking "upload anyway" resends it.
+        at3 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at3.run()
+        next(s for s in at3.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at3.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        at3.checkbox(key="convertr_reupload_duplicates").set_value(True).run()
+        next(b for b in at3.button if b.label == "Upload to Convertr").click().run()
+        assert not at3.exception
+
+    assert len(submit_calls) == 2
+
+
 def test_reconcile_works_with_no_qa_field_mapping_using_convertrs_own_leadfile_mapping(tmp_path, monkeypatch):
     # Regression: a client with no QA configured at all (e.g. Amazon) used
     # to force a trip through Run Check just to populate field_mapping,

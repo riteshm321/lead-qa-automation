@@ -902,6 +902,7 @@ with tab_complex:
             "This client uploads to Enhancio", value=profile.enhancio.enabled if profile else False)
         enhancio_allocations: list[EnhancioAllocationMapping] = []
         enhancio_field_mapping: dict[str, str] = {}
+        enhancio_fixed_values: dict[str, dict[str, str]] = {}
         enhancio_leadfile_mapping: FieldMapping | None = None
         if enhancio_enabled:
             st.caption(
@@ -942,6 +943,28 @@ with tab_complex:
                     continue
                 _col, _field_name = _line.split(",", 1)
                 enhancio_field_mapping[_col.strip()] = _field_name.strip()
+
+            st.caption(
+                "Fixed field values per allocation, one per line, format `allocationUid,Field "
+                "Label,Fixed Value` — for a field that's the SAME for every lead sent to that "
+                "allocation (e.g. Company Size, Lead Source), not read from the leadfile. Confirmed "
+                "once here — every future upload to that allocation applies it automatically, no "
+                "need to set it again:"
+            )
+            _existing_fixed_values_text = "\n".join(
+                f"{allocation_uid},{field_label},{fixed_value}"
+                for allocation_uid, fields in (profile.enhancio.fixed_field_values.items() if profile else [])
+                for field_label, fixed_value in fields.items()
+            )
+            _fixed_values_text = st.text_area(
+                "Enhancio fixed field values", value=_existing_fixed_values_text,
+                key="enhancio_fixed_values_input", label_visibility="collapsed", height=100)
+            for _line in _fixed_values_text.splitlines():
+                _line = _line.strip()
+                if not _line or _line.count(",") < 2:
+                    continue
+                _allocation_uid, _field_label, _fixed_value = (p.strip() for p in _line.split(",", 2))
+                enhancio_fixed_values.setdefault(_allocation_uid, {})[_field_label] = _fixed_value
 
             enhancio_leadfile_mapping = _render_leadfile_column_mapping(
                 "enhancio", profile.enhancio.leadfile_field_mapping if profile else None)
@@ -1095,6 +1118,7 @@ if st.button("💾 Save Client Profile", type="primary"):
                 enabled=enhancio_enabled,
                 allocations=enhancio_allocations if enhancio_enabled else [],
                 field_mapping=enhancio_field_mapping if enhancio_enabled else {},
+                fixed_field_values=enhancio_fixed_values if enhancio_enabled else {},
                 leadfile_field_mapping=enhancio_leadfile_mapping if enhancio_enabled else None,
             ),
         )

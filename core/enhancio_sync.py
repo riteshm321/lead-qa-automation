@@ -107,29 +107,36 @@ def remove_pending_leads(client_name: str, lead_ids: list[str]) -> None:
     atomic_write_json(path, existing)
 
 
-def _uploaded_emails_path(client_name: str) -> str:
+def _uploaded_emails_path(client_name: str, allocation_uid: str) -> str:
     root = get_shared_root_dir()
-    return os.path.join(root, "enhancio_uploaded_emails", f"{client_name}.json") if root else ""
+    return (
+        os.path.join(root, "enhancio_uploaded_emails", client_name, f"{allocation_uid}.json")
+        if root else ""
+    )
 
 
-def load_uploaded_emails(client_name: str) -> set[str]:
-    """Every email successfully submitted to Enhancio for this client, ever
-    -- across every teammate, and kept even after a lead is later
-    reconciled and removed from load_pending_leads. This is what
-    filter_already_uploaded checks a new upload against, so a repeated (or
-    overlapping) leadfile never resends the same lead.
+def load_uploaded_emails(client_name: str, allocation_uid: str) -> set[str]:
+    """Every email successfully submitted to this ALLOCATION (AID) for this
+    client, ever -- across every teammate, and kept even after a lead is
+    later reconciled and removed from load_pending_leads. Scoped per
+    allocation rather than per client: the same lead can legitimately be
+    routed to two different allocations (e.g. two CIDs for the same client
+    mapped to different allocations), and uploading it to one must not
+    block uploading it to the other. This is what filter_already_uploaded
+    checks a new upload against, so a repeated (or overlapping) leadfile
+    never resends the same lead to the same allocation.
     """
-    path = _uploaded_emails_path(client_name)
+    path = _uploaded_emails_path(client_name, allocation_uid)
     if not path or not os.path.isfile(path):
         return set()
     with open(path, "r", encoding="utf-8") as f:
         return set(json.load(f))
 
 
-def save_uploaded_emails(client_name: str, emails: set[str]) -> None:
-    path = _uploaded_emails_path(client_name)
+def save_uploaded_emails(client_name: str, allocation_uid: str, emails: set[str]) -> None:
+    path = _uploaded_emails_path(client_name, allocation_uid)
     if not path:
         return
-    existing = load_uploaded_emails(client_name)
+    existing = load_uploaded_emails(client_name, allocation_uid)
     existing.update(_normalize_email(e) for e in emails if _normalize_email(e))
     atomic_write_json(path, sorted(existing))

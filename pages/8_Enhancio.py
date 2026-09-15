@@ -86,20 +86,36 @@ if _upload_file:
         st.error(f"This client's CID column (\"{cid_column}\") isn't in the uploaded file.")
         st.stop()
 
+    # Preview, before anything is actually sent, how many of these leads
+    # were already uploaded before -- scoped per ALLOCATION (AID), not per
+    # client, since the same lead can legitimately go to two different
+    # allocations. Lets the user choose to re-send them anyway instead of
+    # always silently skipping them.
+    _dup_preview_count = 0
+    for _cid, _group in leads_df.groupby(leads_df[cid_column].astype(str)):
+        _allocation_uid = _allocation_by_cid.get(_cid)
+        if _allocation_uid is None:
+            continue
+        _, _dup_group = filter_already_uploaded(
+            _group, _leadfile_mapping.email, load_uploaded_emails(client_name, _allocation_uid))
+        _dup_preview_count += len(_dup_group)
+    _reupload_duplicates = False
+    if _dup_preview_count:
+        st.warning(f"{_dup_preview_count} lead(s) in this file were already uploaded to their allocation before.")
+        _reupload_duplicates = st.checkbox(
+            "Upload these already-uploaded leads again anyway", value=False,
+            key="enhancio_reupload_duplicates",
+            help="Leave unchecked to skip them as usual (recommended, avoids duplicate submissions to Enhancio).",
+        )
+
     if st.button("Upload to Enhancio", type="primary"):
         _token = _get_token()
 
         results = []
         _newly_pending: dict[str, dict] = {}
-        _newly_uploaded_emails: set[str] = set()
+        _newly_uploaded_emails_by_allocation: dict[str, set[str]] = defaultdict(set)
 
-        _already_uploaded = load_uploaded_emails(client_name)
-        _upload_df, _dup_df = filter_already_uploaded(leads_df, _leadfile_mapping.email, _already_uploaded)
-        for _, lead in _dup_df.iterrows():
-            results.append({
-                "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
-                "Result": "⏭️ Skipped (already uploaded previously)",
-            })
+        _upload_df = leads_df
 
         if _test_mode:
             _send_df, _skipped_df = select_rows_for_test_mode(_upload_df, cid_column, _allocation_by_cid)
@@ -119,10 +135,11 @@ if _upload_file:
             _upload_df = pd.concat([_send_df, _unmapped_df])
 
         # Rows to actually send, grouped by allocation_uid rather than CID --
-        # several CIDs commonly share one allocation, and the Lead Import
-        # API takes a whole batch of leads per allocation in one call rather
-        # than one HTTP request per lead.
-        _rows_by_allocation: dict[str, list] = defaultdict(list)
+        # several CIDs commonly share one allocation, the Lead Import API
+        # takes a whole batch of leads per allocation in one call rather
+        # than one HTTP request per lead, and "already uploaded" is checked
+        # per allocation too (see load_uploaded_emails).
+        _df_by_allocation: dict[str, list] = defaultdict(list)
         for cid, group in _upload_df.groupby(_upload_df[cid_column].astype(str)):
             allocation_uid = _allocation_by_cid.get(cid)
             if allocation_uid is None:
@@ -130,25 +147,48 @@ if _upload_file:
                     results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
                                      "Result": "❌ No Enhancio allocation mapped for this CID"})
                 continue
-            for _, lead in group.iterrows():
-                _rows_by_allocation[allocation_uid].append((cid, lead))
+            _df_by_allocation[allocation_uid].append(group)
 
-        for allocation_uid, entries in _rows_by_allocation.items():
+        for allocation_uid, groups in _df_by_allocation.items():
+            allocation_df = pd.concat(groups)
+            _already_uploaded = load_uploaded_emails(client_name, allocation_uid)
+            _send_df, _dup_df = filter_already_uploaded(allocation_df, _leadfile_mapping.email, _already_uploaded)
+            if _reupload_duplicates:
+                _send_df = pd.concat([_send_df, _dup_df])
+                _dup_df = _dup_df.iloc[0:0]
+            for _, lead in _dup_df.iterrows():
+                results.append({
+                    "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
+                    "Result": "⏭️ Skipped (already uploaded to this allocation previously)",
+                })
+            if _send_df.empty:
+                continue
+
+            # Fixed values (confirmed once on Client Setup, per allocation --
+            # a field like Company Size that's the same for every lead sent
+            # to this allocation rather than read from the leadfile) applied
+            # after the per-row mapping, so they always win if a field
+            # somehow appears in both.
+            _fixed_values = _enhancio.fixed_field_values.get(allocation_uid, {})
             lead_payloads = [
                 {
-                    enhancio_field: str(lead.get(leadfile_col, "") or "")
-                    for leadfile_col, enhancio_field in _enhancio.field_mapping.items()
+                    **{
+                        enhancio_field: str(lead.get(leadfile_col, "") or "")
+                        for leadfile_col, enhancio_field in _enhancio.field_mapping.items()
+                    },
+                    **_fixed_values,
                 }
-                for _cid, lead in entries
+                for _, lead in _send_df.iterrows()
             ]
             try:
                 submitted = enhancio_client.import_leads(_token, allocation_uid, lead_payloads)
             except EnhancioError as exc:
-                for cid, lead in entries:
-                    results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
+                for _, lead in _send_df.iterrows():
+                    results.append({"CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
                                      "Result": f"❌ {exc}"})
                 continue
-            for (cid, lead), submitted_entry in zip(entries, submitted):
+            for (_, lead), submitted_entry in zip(_send_df.iterrows(), submitted):
+                cid = lead.get(cid_column, "")
                 email = lead.get(_leadfile_mapping.email, "")
                 lead_id = submitted_entry.get("leadId")
                 status = submitted_entry.get("status", "")
@@ -157,15 +197,15 @@ if _upload_file:
                     # reconcile has no other way to recover a lead's data
                     # once it writes to Accumulated/Refund later.
                     _newly_pending[str(lead_id)] = {col: lead.get(col, "") for col in leads_df.columns}
-                    _newly_uploaded_emails.add(str(email))
+                    _newly_uploaded_emails_by_allocation[allocation_uid].add(str(email))
                     results.append({"CID": cid, "Email": email, "Result": f"✅ Lead ID {lead_id} ({status})"})
                 else:
                     results.append({"CID": cid, "Email": email, "Result": f"❌ {status or 'Not submitted'}"})
 
         if _newly_pending:
             save_pending_leads(client_name, _newly_pending)
-        if _newly_uploaded_emails:
-            save_uploaded_emails(client_name, _newly_uploaded_emails)
+        for allocation_uid, emails in _newly_uploaded_emails_by_allocation.items():
+            save_uploaded_emails(client_name, allocation_uid, emails)
         st.session_state["enhancio_upload_results"] = pd.DataFrame(results)
 
 if st.session_state.get("enhancio_upload_results") is not None:

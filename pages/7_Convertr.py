@@ -72,6 +72,21 @@ if _upload_file:
         st.error(f"This client's CID column (\"{cid_column}\") isn't in the uploaded file.")
         st.stop()
 
+    # Preview, before anything is actually sent, how many of these leads
+    # were already uploaded to Convertr for THIS CLIENT before (scoped per
+    # client, not per campaign) -- lets the user choose to re-send them
+    # anyway instead of always silently skipping them.
+    _, _dup_preview_df = filter_already_uploaded(
+        leads_df, _leadfile_mapping.email, load_uploaded_emails(client_name))
+    _reupload_duplicates = False
+    if not _dup_preview_df.empty:
+        st.warning(f"{len(_dup_preview_df)} lead(s) in this file were already uploaded to Convertr before.")
+        _reupload_duplicates = st.checkbox(
+            "Upload these already-uploaded leads again anyway", value=False,
+            key="convertr_reupload_duplicates",
+            help="Leave unchecked to skip them as usual (recommended, avoids duplicate submissions to Convertr).",
+        )
+
     if st.button("Upload to Convertr", type="primary"):
         _creds = get_convertr_account_credentials(client_name)
         if not _creds["username"] or not _creds["password"]:
@@ -90,6 +105,9 @@ if _upload_file:
 
         _already_uploaded = load_uploaded_emails(client_name)
         _upload_df, _dup_df = filter_already_uploaded(leads_df, _leadfile_mapping.email, _already_uploaded)
+        if _reupload_duplicates:
+            _upload_df = pd.concat([_upload_df, _dup_df])
+            _dup_df = _dup_df.iloc[0:0]
         for _, lead in _dup_df.iterrows():
             results.append({
                 "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),

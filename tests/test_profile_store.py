@@ -146,6 +146,7 @@ def test_enhancio_config_round_trip(tmp_path):
             EnhancioAllocationMapping(cid="118742", allocation_uid="L-22257"),
         ],
         field_mapping={"Email": "Email Address", "First Name": "First Name"},
+        fixed_field_values={"L-22256": {"Company Size": "1M - 5M", "Lead Source": "Website"}},
         leadfile_field_mapping=FieldMapping(
             email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID"),
     )

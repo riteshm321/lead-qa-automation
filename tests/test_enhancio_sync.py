@@ -89,7 +89,20 @@ def test_uploaded_emails_round_trip_and_normalizes(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
 
-    assert load_uploaded_emails("Amazon Business EMEA") == set()
+    assert load_uploaded_emails("Amazon Business EMEA", "L-22256") == set()
 
-    save_uploaded_emails("Amazon Business EMEA", {" A@X.com ", "b@x.com"})
-    assert load_uploaded_emails("Amazon Business EMEA") == {"a@x.com", "b@x.com"}
+    save_uploaded_emails("Amazon Business EMEA", "L-22256", {" A@X.com ", "b@x.com"})
+    assert load_uploaded_emails("Amazon Business EMEA", "L-22256") == {"a@x.com", "b@x.com"}
+
+
+def test_uploaded_emails_scoped_per_allocation_not_per_client(tmp_path, monkeypatch):
+    # The same lead can legitimately be routed to two different
+    # allocations for the same client (e.g. two CIDs mapped to different
+    # allocations) -- uploading it to one must not block uploading it to
+    # the other.
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    save_uploaded_emails("Amazon Business EMEA", "L-22256", {"a@x.com"})
+    assert load_uploaded_emails("Amazon Business EMEA", "L-22256") == {"a@x.com"}
+    assert load_uploaded_emails("Amazon Business EMEA", "L-22257") == set()
