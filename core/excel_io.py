@@ -203,6 +203,27 @@ def set_status_for_emails(
         wb.close()
 
 
+def set_status_by_row_index(path: str, tab_name: str, status_column: str, index_to_label: dict[int, str]) -> None:
+    """Writes label into status_column for specific rows, addressed by
+    their 0-based pandas index from a plain read of this same sheet
+    (header on row 1, so worksheet row = index + 2). Use this instead of
+    set_status_for_emails whenever the caller already has definite row
+    identity -- matching by email breaks down the moment two rows share
+    the same email, or (a real, confirmed case) both have a blank one:
+    every blank-email row would match every other blank-email row.
+    """
+    wb = openpyxl.load_workbook(path)
+    try:
+        ws = wb[tab_name]
+        headers = [cell.value for cell in ws[1]]
+        status_col = headers.index(status_column) + 1
+        for idx, label in index_to_label.items():
+            ws.cell(row=idx + 2, column=status_col, value=label)
+        wb.save(path)
+    finally:
+        wb.close()
+
+
 def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
     """Serializes a DataFrame to real .xlsx bytes, for st.download_button --
     lets a user pull a list (refund/needs-review leads) into Excel to

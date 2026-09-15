@@ -196,7 +196,7 @@ def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existi
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
 
-    clear_checkbox = next(cb for cb in at.checkbox if cb.key == "clear_lead1@x.com")
+    clear_checkbox = next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com")
     clear_checkbox.set_value(True).run()
 
     write_button = next(b for b in at.button if b.key == "write_lead_template_button")
@@ -259,7 +259,7 @@ def test_write_cleared_leads_uses_accumulated_field_mapping_not_raw_leadfile_map
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
 
-    clear_checkbox = next(cb for cb in at.checkbox if cb.key == "clear_lead1@x.com")
+    clear_checkbox = next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com")
     clear_checkbox.set_value(True).run()
     write_button = next(b for b in at.button if b.key == "write_lead_template_button")
     write_button.click().run()
@@ -289,10 +289,10 @@ def test_manual_marking_hides_blank_leads_from_step_2_until_marked(tmp_path, mon
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
 
-    assert not any(cb.key == "clear_manual@x.com" for cb in at.checkbox)
-    assert any(cb.key == "manual_manual@x.com" for cb in at.checkbox)
+    assert not any(cb.label == "Clear manual@x.com" for cb in at.checkbox)
+    assert any(cb.label == "Mark manual@x.com" for cb in at.checkbox)
 
-    at.checkbox(key="manual_manual@x.com").set_value(True).run()
+    next(cb for cb in at.checkbox if cb.label == "Mark manual@x.com").set_value(True).run()
     at.button(key="mark_manual_button").click().run()
 
     assert not at.exception
@@ -300,7 +300,42 @@ def test_manual_marking_hides_blank_leads_from_step_2_until_marked(tmp_path, mon
     status = accumulated_df.loc[accumulated_df["Email"] == "manual@x.com", "Status"].iloc[0]
     assert status.startswith("Uploaded to Approval Sheet")
 
-    assert any(cb.key == "clear_manual@x.com" for cb in at.checkbox)
+    assert any(cb.label == "Clear manual@x.com" for cb in at.checkbox)
+
+
+def test_manual_marking_handles_two_leads_with_a_blank_email_without_crashing(tmp_path, monkeypatch):
+    # Regression test for a real production crash: two blank-Status leads
+    # both had a blank email (a genuine data-quality gap in the real
+    # Accumulated Report, not a fixture artifact). Email-keyed checkbox
+    # keys collapsed both into "manual_" and Streamlit raised
+    # StreamlitDuplicateElementKey. Row-index-keyed widgets must handle
+    # this instead of crashing the whole page.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": "", "First": "F", "Last": "L", "Company": "X", "CID": "118741", "Status": ""},
+        {"Email": "", "First": "F", "Last": "L", "Company": "Y", "CID": "118741", "Status": ""},
+    ])
+    _make_mirror(mirror_path)
+    _save_profile(acc_path, mirror_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    assert not at.exception
+    mark_checkboxes = [cb for cb in at.checkbox if cb.label.startswith("Mark (no email")]
+    assert len(mark_checkboxes) == 2
+
+    mark_checkboxes[0].set_value(True).run()
+    at.button(key="mark_manual_button").click().run()
+
+    assert not at.exception
+    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
+    statuses = accumulated_df["Status"].fillna("").astype(str)
+    # Only the ONE checked row was marked -- not both, which a
+    # blank-email-keyed write-back would have done.
+    assert statuses.str.startswith("Uploaded to Approval Sheet").sum() == 1
 
 
 def test_write_cleared_leads_copies_lob_for_wxo_cids(tmp_path, monkeypatch):
@@ -321,7 +356,7 @@ def test_write_cleared_leads_copies_lob_for_wxo_cids(tmp_path, monkeypatch):
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.checkbox(key="clear_lead1@x.com").set_value(True).run()
+    next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
     at.button(key="write_lead_template_button").click().run()
 
     assert not at.exception
@@ -355,8 +390,8 @@ def test_write_cleared_leads_combines_multiple_cids_sharing_one_template(tmp_pat
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.checkbox(key="clear_lead1@x.com").set_value(True).run()
-    at.checkbox(key="clear_lead2@x.com").set_value(True).run()
+    next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
+    next(cb for cb in at.checkbox if cb.label == "Clear lead2@x.com").set_value(True).run()
     at.button(key="write_lead_template_button").click().run()
 
     assert not at.exception
@@ -382,7 +417,7 @@ def test_write_cleared_leads_warns_when_no_template_path_configured(tmp_path, mo
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
-    at.checkbox(key="clear_lead1@x.com").set_value(True).run()
+    next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
     at.button(key="write_lead_template_button").click().run()
 
     assert not at.exception
@@ -409,9 +444,9 @@ def test_upload_reconciliation_moves_rejected_to_refund_and_logs_accepted(tmp_pa
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
 
-    reject_checkbox = next(cb for cb in at.checkbox if cb.key == "reject_lead2@x.com")
+    reject_checkbox = next(cb for cb in at.checkbox if cb.label == "Reject lead2@x.com")
     reject_checkbox.set_value(True).run()
-    reason_input = next(t for t in at.text_input if t.key == "reject_reason_lead2@x.com")
+    reason_input = next(t for t in at.text_input if t.key == "reject_reason_" + reject_checkbox.key.removeprefix("reject_"))
     reason_input.set_value("Portal duplicate").run()
 
     reconcile_button = next(b for b in at.button if b.key == "reconcile_upload_button")
@@ -486,7 +521,7 @@ def test_upload_reconciliation_requires_a_reason_for_rejected_leads(tmp_path, mo
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
 
-    reject_checkbox = next(cb for cb in at.checkbox if cb.key == "reject_lead1@x.com")
+    reject_checkbox = next(cb for cb in at.checkbox if cb.label == "Reject lead1@x.com")
     reject_checkbox.set_value(True).run()
 
     reconcile_button = next(b for b in at.button if b.key == "reconcile_upload_button")

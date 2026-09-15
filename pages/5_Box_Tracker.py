@@ -14,7 +14,7 @@ from core.box_tracker import (
     uploaded_to_approval_sheet_label,
 )
 from core.branding import configure_page
-from core.excel_io import read_sheet_as_dataframe, append_leads, find_header_row, set_status_for_emails
+from core.excel_io import read_sheet_as_dataframe, append_leads, find_header_row, set_status_by_row_index
 from core.profile_store import list_profile_names, load_profile
 
 _current_user = configure_page("Box Tracker")
@@ -70,11 +70,6 @@ st.caption(
 )
 
 
-def _set_status_for_emails(email_col: str, emails: set[str], label: str) -> None:
-    set_status_for_emails(
-        profile.accumulated_report_path, profile.accumulated_tab_name, _STATUS_COLUMN, email_col, emails, label)
-
-
 st.subheader("1. Send leads for approval")
 st.caption(
     "**Use this when:** you want the tool to pick leads for you, based on this week's Pacing "
@@ -113,14 +108,10 @@ if st.button("Pick leads and send for approval", key="pick_and_send_button"):
         # (pandas preserves index labels through boolean filtering/.head()),
         # and read_sheet_as_dataframe is a plain pd.read_excel with header
         # row 1, so worksheet row = index + 2.
-        wb = openpyxl.load_workbook(profile.accumulated_report_path)
-        ws = wb[profile.accumulated_tab_name]
-        headers = [cell.value for cell in ws[1]]
-        status_col = headers.index(_STATUS_COLUMN) + 1
-        picked_indices = set(picked_df.index)
-        for idx in picked_indices:
-            ws.cell(row=idx + 2, column=status_col, value=status_label)
-        wb.save(profile.accumulated_report_path)
+        set_status_by_row_index(
+            profile.accumulated_report_path, profile.accumulated_tab_name, _STATUS_COLUMN,
+            {idx: status_label for idx in picked_df.index},
+        )
 
         # Write the Approval Sheet mirror rows. Persona/Industry is the
         # campaign name; Project Code and AMAL ID normally pass through
@@ -188,20 +179,28 @@ with st.expander("✋ Or: I already added these leads to the real Approval Sheet
         st.caption("No blank-Status leads available to mark.")
     else:
         _manual_email_col = _acc_fm.email
-        manual_flags: dict[str, bool] = {}
-        for _, lead in _blank_status_df.iterrows():
-            email = str(lead.get(_manual_email_col, ""))
-            manual_flags[email] = st.checkbox(f"Mark {email}", key=f"manual_{email}")
+        # Keyed by row index, not email -- two leads can share the same
+        # email, or (confirmed in real IBM APAC data) both have a blank
+        # one, and email-keyed widget keys/dicts collapse those into one,
+        # crashing with a duplicate Streamlit element key.
+        manual_flags: dict[int, bool] = {}
+        for idx, lead in _blank_status_df.iterrows():
+            _raw_manual_email = lead.get(_manual_email_col, "")
+            email = str(_raw_manual_email).strip() if pd.notna(_raw_manual_email) else ""
+            label_text = email if email else f"(no email — row {idx + 2})"
+            manual_flags[idx] = st.checkbox(f"Mark {label_text}", key=f"manual_{idx}")
 
         if st.button("Mark as added to Approval Sheet", key="mark_manual_button"):
-            marked_emails = {e for e, flag in manual_flags.items() if flag}
-            if not marked_emails:
+            marked_indices = {idx for idx, flag in manual_flags.items() if flag}
+            if not marked_indices:
                 st.warning("No leads checked — nothing to mark.")
             else:
-                _set_status_for_emails(
-                    _manual_email_col, marked_emails, uploaded_to_approval_sheet_label(datetime.date.today()))
+                set_status_by_row_index(
+                    profile.accumulated_report_path, profile.accumulated_tab_name, _STATUS_COLUMN,
+                    {idx: uploaded_to_approval_sheet_label(datetime.date.today()) for idx in marked_indices},
+                )
                 st.success(
-                    f"Marked {len(marked_emails)} lead(s) as \"{_MANUAL_STATUS_PREFIX}\" — "
+                    f"Marked {len(marked_indices)} lead(s) as \"{_MANUAL_STATUS_PREFIX}\" — "
                     "they'll show up in step 2 below."
                 )
 
@@ -235,21 +234,23 @@ if _awaiting_clearance_df.empty:
     st.caption(f"No leads currently marked \"{_SENT_STATUS_PREFIX}\" or \"{_MANUAL_STATUS_PREFIX}\".")
 else:
     _clear_email_col = _acc_fm.email
-    clear_flags: dict[str, bool] = {}
-    for _, lead in _awaiting_clearance_df.iterrows():
-        email = str(lead.get(_clear_email_col, ""))
-        clear_flags[email] = st.checkbox(f"Clear {email}", key=f"clear_{email}")
+    # Keyed by row index -- see the identical comment on manual_flags
+    # above; email alone can't be trusted as a unique widget/dict key.
+    clear_flags: dict[int, bool] = {}
+    for idx, lead in _awaiting_clearance_df.iterrows():
+        _raw_clear_email = lead.get(_clear_email_col, "")
+        email = str(_raw_clear_email).strip() if pd.notna(_raw_clear_email) else ""
+        label_text = email if email else f"(no email — row {idx + 2})"
+        clear_flags[idx] = st.checkbox(f"Clear {label_text}", key=f"clear_{idx}")
 
     if st.button("Write cleared leads to Lead Template", key="write_lead_template_button"):
         try:
-            cleared_emails = {e for e, flag in clear_flags.items() if flag}
-            if not cleared_emails:
+            cleared_indices = {idx for idx, flag in clear_flags.items() if flag}
+            if not cleared_indices:
                 st.warning("No leads checked — nothing to write.")
                 st.stop()
 
-            cleared_df = _awaiting_clearance_df[
-                _awaiting_clearance_df[_clear_email_col].astype(str).isin(cleared_emails)
-            ]
+            cleared_df = _awaiting_clearance_df.loc[sorted(cleared_indices)]
 
             # Group by the resolved TEMPLATE FILE, not by CID -- several
             # CIDs can route to the same Lead Template (e.g. IN LOB and
@@ -265,7 +266,7 @@ else:
             )
 
             written_cids: list[str] = []
-            written_emails: set[str] = set()
+            written_indices: set[int] = set()
             unmatched_headers: set[str] = set()
             routed_df = cleared_df[cleared_df["_template_path"].notna()]
             for template_path, group in routed_df.groupby("_template_path"):
@@ -293,12 +294,15 @@ else:
                     datetime.date.today(), header_row=header_row, clear_existing=True,
                 ))
                 written_cids.extend(sorted(group[_acc_fm.cid].astype(str).unique()))
-                written_emails.update(group[_clear_email_col].astype(str))
+                written_indices.update(group.index)
 
-            if written_emails:
-                _set_status_for_emails(_clear_email_col, written_emails, cleared_for_upload_label(datetime.date.today()))
+            if written_indices:
+                set_status_by_row_index(
+                    profile.accumulated_report_path, profile.accumulated_tab_name, _STATUS_COLUMN,
+                    {idx: cleared_for_upload_label(datetime.date.today()) for idx in written_indices},
+                )
                 st.success(
-                    f"Wrote {len(written_emails)} lead(s) to their Lead Template(s) (CIDs: {', '.join(written_cids)}).")
+                    f"Wrote {len(written_indices)} lead(s) to their Lead Template(s) (CIDs: {', '.join(written_cids)}).")
             if unmatched_headers:
                 st.warning(
                     "⚠️ These Lead Template columns had no matching Accumulated Report column and were left "
@@ -340,37 +344,45 @@ if _sent_df.empty:
     st.caption(f"No leads currently marked \"{_CLEARED_STATUS_PREFIX}\".")
 else:
     _email_col = _acc_fm.email
-    reject_flags: dict[str, bool] = {}
-    reject_reasons: dict[str, str] = {}
-    for _, lead in _sent_df.iterrows():
-        email = str(lead.get(_email_col, ""))
+    # Keyed by row index -- see the identical comment on manual_flags in
+    # step 1; email alone can't be trusted as a unique widget/dict key.
+    reject_flags: dict[int, bool] = {}
+    reject_reasons: dict[int, str] = {}
+    for idx, lead in _sent_df.iterrows():
+        _raw_reject_email = lead.get(_email_col, "")
+        email = str(_raw_reject_email).strip() if pd.notna(_raw_reject_email) else ""
+        label_text = email if email else f"(no email — row {idx + 2})"
         col_check, col_reason = st.columns([1, 3])
-        reject_flags[email] = col_check.checkbox(
-            f"Reject {email}", key=f"reject_{email}", label_visibility="collapsed")
-        reject_reasons[email] = col_reason.text_input(
-            "Reason", key=f"reject_reason_{email}", label_visibility="collapsed",
-            placeholder=f"Reason for rejecting {email} (required if rejected)")
+        reject_flags[idx] = col_check.checkbox(
+            f"Reject {label_text}", key=f"reject_{idx}", label_visibility="collapsed")
+        reject_reasons[idx] = col_reason.text_input(
+            "Reason", key=f"reject_reason_{idx}", label_visibility="collapsed",
+            placeholder=f"Reason for rejecting {label_text} (required if rejected)")
 
     if st.button("Reconcile upload status", key="reconcile_upload_button"):
         try:
-            rejected_emails = {e for e, flag in reject_flags.items() if flag}
-            missing_reasons = [e for e in rejected_emails if not reject_reasons.get(e, "").strip()]
+            rejected_indices = {idx for idx, flag in reject_flags.items() if flag}
+            missing_reasons = [idx for idx in rejected_indices if not reject_reasons.get(idx, "").strip()]
             if missing_reasons:
-                st.error(f"Missing rejection reason for: {', '.join(missing_reasons)}")
+                _missing_labels = [
+                    str(_sent_df.loc[idx, _email_col] or "") or f"row {idx + 2}" for idx in missing_reasons]
+                st.error(f"Missing rejection reason for: {', '.join(_missing_labels)}")
                 st.stop()
 
-            accepted_df = _sent_df[~_sent_df[_email_col].astype(str).isin(rejected_emails)]
-            rejected_df = _sent_df[_sent_df[_email_col].astype(str).isin(rejected_emails)]
+            accepted_df = _sent_df[~_sent_df.index.isin(rejected_indices)]
+            rejected_df = _sent_df[_sent_df.index.isin(rejected_indices)]
             today = datetime.date.today()
 
             if not rejected_df.empty:
-                reasons = {idx: reject_reasons[str(row[_email_col])] for idx, row in rejected_df.iterrows()}
+                reasons = {idx: reject_reasons[idx] for idx in rejected_df.index}
                 append_leads(
                     profile.accumulated_report_path, profile.refund_tab_name,
                     rejected_df, _acc_fm, today, reasons=reasons,
                 )
-                _set_status_for_emails(
-                    _email_col, set(rejected_df[_email_col].astype(str)), uploaded_rejected_label(today))
+                set_status_by_row_index(
+                    profile.accumulated_report_path, profile.accumulated_tab_name, _STATUS_COLUMN,
+                    {idx: uploaded_rejected_label(today) for idx in rejected_df.index},
+                )
 
             if not accepted_df.empty:
                 cid_to_campaign = profile.box_tracker.cid_campaign_map
@@ -399,8 +411,10 @@ else:
                     profile.box_tracker.mirror_workbook_path, _RESPONSE_DETAILS_TAB, response_rows,
                     header_row=_RESPONSE_DETAILS_HEADER_ROW,
                 )
-                _set_status_for_emails(
-                    _email_col, set(accepted_df[_email_col].astype(str)), uploaded_accepted_label(today))
+                set_status_by_row_index(
+                    profile.accumulated_report_path, profile.accumulated_tab_name, _STATUS_COLUMN,
+                    {idx: uploaded_accepted_label(today) for idx in accepted_df.index},
+                )
 
                 accepted_counts = accepted_df[_acc_fm.cid].astype(str).value_counts()
                 for cid, count in accepted_counts.items():
