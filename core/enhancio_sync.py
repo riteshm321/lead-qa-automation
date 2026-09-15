@@ -37,15 +37,18 @@ def format_enhancio_field_value(enhancio_field: str, value) -> str:
 
 def rejection_reason_from_status_entry(entry: dict) -> str:
     """Best-effort human-readable reason a lead was rejected, so Refund
-    Reason is never left blank for one -- Enhancio's own rejectionReason,
-    else its comments, else a generic fallback.
+    Reason is never left blank for one -- Enhancio's own comments field
+    first (observed to carry the actual detail, e.g. "Lead validation
+    failed: Duplicate lead within the campaign allocation"), else the
+    terser rejectionReason (e.g. just "Lead Duplicate"), else a generic
+    fallback.
     """
-    reason = str(entry.get("rejectionReason") or "").strip()
-    if reason:
-        return reason
     comments = str(entry.get("comments") or "").strip()
     if comments:
         return comments
+    reason = str(entry.get("rejectionReason") or "").strip()
+    if reason:
+        return reason
     return "Rejected by Enhancio"
 
 

@@ -54,14 +54,17 @@ def test_format_enhancio_field_value_handles_blank_values():
     assert format_enhancio_field_value("First Name", None) == ""
 
 
-def test_rejection_reason_prefers_rejection_reason_field():
+def test_rejection_reason_prefers_comments_field():
+    # comments carries the actual detail (e.g. "Lead validation failed:
+    # Duplicate lead within the campaign allocation"); rejectionReason is
+    # often just a terse code (e.g. "Lead Duplicate") -- comments wins.
     entry = {"status": "Rejected", "rejectionReason": "Lead Duplicate", "comments": "Duplicate lead within campaign"}
-    assert rejection_reason_from_status_entry(entry) == "Lead Duplicate"
+    assert rejection_reason_from_status_entry(entry) == "Duplicate lead within campaign"
 
 
-def test_rejection_reason_falls_back_to_comments_then_generic():
+def test_rejection_reason_falls_back_to_rejection_reason_then_generic():
     assert rejection_reason_from_status_entry(
-        {"status": "Rejected", "comments": "Invalid domain"}) == "Invalid domain"
+        {"status": "Rejected", "rejectionReason": "Invalid domain"}) == "Invalid domain"
     assert rejection_reason_from_status_entry({"status": "Rejected"}) == "Rejected by Enhancio"
 
 

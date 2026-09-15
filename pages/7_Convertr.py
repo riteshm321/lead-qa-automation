@@ -16,8 +16,10 @@ from core.excel_io import read_leadfile, append_leads
 from core import jira_client
 from core.jira_client import JiraError
 from core.profile_store import list_profile_names, load_profile
+from core.toast import queue_toast_before_rerun, show_pending_toast
 
 _current_user = configure_page("Convertr")
+show_pending_toast()
 st.title("🔗 Convertr")
 
 _profile_names = [
@@ -273,7 +275,8 @@ if _accepted_rows or _rejected_rows:
         }
         st.session_state["convertr_accepted_rows"] = []
         st.session_state["convertr_rejected_rows"] = []
-        st.success(f"Wrote {len(_accepted_rows)} accepted lead(s) and {len(_rejected_rows)} rejected lead(s).")
+        queue_toast_before_rerun(
+            f"Wrote {len(_accepted_rows)} accepted lead(s) and {len(_rejected_rows)} rejected lead(s).")
         st.rerun()
 elif "convertr_accepted_rows" in st.session_state:
     st.caption("No new decided leads since the last sync.")
@@ -312,7 +315,14 @@ else:
             st.error("Set up your Jira account (site URL, email, API token) in Client Setup first.")
         else:
             try:
-                adf_body = jira_client.build_comment_body(opening_text=st.session_state["convertr_jira_message"])
+                _accumulated_href = (
+                    profile.accumulated_report_link
+                    or jira_client.path_to_link_href(profile.accumulated_report_path)
+                )
+                adf_body = jira_client.build_comment_body(
+                    opening_text=st.session_state["convertr_jira_message"],
+                    file_links=[("Accumulated File", _accumulated_href)],
+                )
                 jira_client.post_comment_body(
                     jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"],
                     jira_client.extract_ticket_key(profile.jira_ticket_key), adf_body,

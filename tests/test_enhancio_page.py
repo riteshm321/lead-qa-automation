@@ -23,11 +23,11 @@ def _make_accumulated(path: str) -> None:
     wb.save(path)
 
 
-def _save_profile(acc_path: str, jira_ticket_key: str = "") -> ClientProfile:
+def _save_profile(acc_path: str, jira_ticket_key: str = "", accumulated_report_link: str = "") -> ClientProfile:
     fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
     profile = ClientProfile(
         name="Amazon Business EMEA", accumulated_report_path=acc_path, field_mapping=fm,
-        jira_ticket_key=jira_ticket_key,
+        jira_ticket_key=jira_ticket_key, accumulated_report_link=accumulated_report_link,
         enhancio=EnhancioConfig(
             enabled=True,
             allocations=[
@@ -362,6 +362,57 @@ def test_reconcile_writes_accepted_to_accumulated_and_rejected_to_refund_with_ci
     assert refund_df.loc[0, "Refund Reason"] == "Lead Duplicate"
 
 
+def test_reconcile_prefers_comments_over_rejection_reason_for_refund_reason(tmp_path, monkeypatch):
+    # comments carries the actual detail; rejectionReason is often just a
+    # terse code -- comments must win when both are present.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_enhancio_client_id("CID123")
+    save_pending_leads("Amazon Business EMEA", {"102": {"Email": "rejected@x.com", "CID": "120028"}})
+
+    def _fake_get_lead_status(token, lead_ids):
+        return [{"leadId": "102", "status": "Rejected", "email": "rejected@x.com",
+                  "rejectionReason": "Lead Duplicate",
+                  "comments": "Lead validation failed: Duplicate lead within the campaign allocation"}]
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.get_lead_status", side_effect=_fake_get_lead_status):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        next(b for b in at.button if b.label == "Fetch decisions from Enhancio").click().run()
+        next(b for b in at.button if b.label == "Write to Accumulated & Refund").click().run()
+        assert not at.exception
+
+    refund_df = pd.read_excel(acc_path, sheet_name="Refund")
+    assert refund_df.loc[0, "Refund Reason"] == "Lead validation failed: Duplicate lead within the campaign allocation"
+
+
+def test_write_to_accumulated_shows_a_toast_that_survives_the_rerun(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_enhancio_client_id("CID123")
+    save_pending_leads("Amazon Business EMEA", {"101": {"Email": "accepted@x.com", "CID": "120022"}})
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.get_lead_status", return_value=[
+             {"leadId": "101", "status": "Accepted", "email": "accepted@x.com"}]):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        next(b for b in at.button if b.label == "Fetch decisions from Enhancio").click().run()
+        next(b for b in at.button if b.label == "Write to Accumulated & Refund").click().run()
+        assert not at.exception
+
+    assert any("1 accepted" in t.value and "0 rejected" in t.value for t in at.toast)
+
+
 def test_reconcile_leaves_unresolved_leads_pending(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
@@ -402,7 +453,8 @@ def test_jira_section_posts_a_summary_after_reconcile(tmp_path, monkeypatch):
     acc_path = str(tmp_path / "accumulated.xlsx")
     save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
     _make_accumulated(acc_path)
-    _save_profile(acc_path, jira_ticket_key="PROJ-1234")
+    _save_profile(acc_path, jira_ticket_key="PROJ-1234",
+                  accumulated_report_link="https://madlog.sharepoint.com/:x:/s/Team/AccLink")
     save_enhancio_client_id("CID123")
     save_pending_leads("Amazon Business EMEA", {"301": {"Email": "accepted@x.com", "CID": "120022"}})
 
@@ -429,3 +481,6 @@ def test_jira_section_posts_a_summary_after_reconcile(tmp_path, monkeypatch):
             args, _ = mock_post.call_args
             assert args[0] == "https://example.atlassian.net"
             assert args[3] == "PROJ-1234"
+            adf_body = args[4]
+            assert "https://madlog.sharepoint.com/:x:/s/Team/AccLink" in str(adf_body)
+            assert "Accumulated File" in str(adf_body)

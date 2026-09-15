@@ -23,11 +23,11 @@ def _make_accumulated(path: str) -> None:
     wb.save(path)
 
 
-def _save_profile(acc_path: str, jira_ticket_key: str = "") -> ClientProfile:
+def _save_profile(acc_path: str, jira_ticket_key: str = "", accumulated_report_link: str = "") -> ClientProfile:
     fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
     profile = ClientProfile(
         name="Amazon Business EMEA", accumulated_report_path=acc_path, field_mapping=fm,
-        jira_ticket_key=jira_ticket_key,
+        jira_ticket_key=jira_ticket_key, accumulated_report_link=accumulated_report_link,
         convertr=ConvertrConfig(
             enabled=True, enterprise="amazonbusiness", publisher_id="11003",
             campaigns=[
@@ -242,7 +242,8 @@ def test_jira_section_posts_a_summary_after_reconcile(tmp_path, monkeypatch):
     acc_path = str(tmp_path / "accumulated.xlsx")
     save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
     _make_accumulated(acc_path)
-    _save_profile(acc_path, jira_ticket_key="PROJ-1234")
+    _save_profile(acc_path, jira_ticket_key="PROJ-1234",
+                  accumulated_report_link="https://madlog.sharepoint.com/:x:/s/Team/AccLink")
     save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
     save_pending_leads("Amazon Business EMEA", {"301": {"Email": "accepted@x.com", "CID": "120022"}})
 
@@ -268,3 +269,27 @@ def test_jira_section_posts_a_summary_after_reconcile(tmp_path, monkeypatch):
             args, _ = mock_post.call_args
             assert args[0] == "https://example.atlassian.net"
             assert args[3] == "PROJ-1234"
+            adf_body = args[4]
+            assert "https://madlog.sharepoint.com/:x:/s/Team/AccLink" in str(adf_body)
+            assert "Accumulated File" in str(adf_body)
+
+
+def test_write_to_accumulated_shows_a_toast_that_survives_the_rerun(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+    save_pending_leads("Amazon Business EMEA", {"101": {"Email": "accepted@x.com", "CID": "120022"}})
+
+    with patch("core.convertr_client.login", return_value={"access_token": "tok"}), \
+         patch("core.convertr_client.get_lead_result", return_value={"status": "valid"}):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        next(b for b in at.button if b.label == "Fetch decisions from Convertr").click().run()
+        next(b for b in at.button if b.label == "Write to Accumulated & Refund").click().run()
+        assert not at.exception
+
+    assert any("1 accepted" in t.value and "0 rejected" in t.value for t in at.toast)
