@@ -95,6 +95,33 @@ def test_collation_expander_appears_only_when_enabled_and_leaves_normal_upload_i
     assert any("Collate multiple files" in e.label for e in at2.expander)
 
 
+def test_using_a_collated_file_does_not_crash_with_nameerror(tmp_path, monkeypatch):
+    # Regression test for a real crash: new_leads_file was only assigned in
+    # the non-collation upload branch, so a client with a collated file
+    # already ready (the raw file_uploader branch never runs) crashed with
+    # "NameError: name 'new_leads_file' is not defined" the moment the page
+    # reached the mapping/Run Check button checks below.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    save_profile(ClientProfile(
+        name="Collation Client", accumulated_report_path=acc_path, field_mapping=fm,
+        collation_enabled=True,
+    ), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["collated_new_leads_Collation Client"] = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "Acme", "CID": "1"},
+    ])
+    at.run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("Collation Client").run()
+
+    assert not at.exception
+    assert any("Using the collated file" in c.value for c in at.caption)
+
+
 def test_approved_refund_lead_lands_in_accumulated_tab_not_just_refund(tmp_path, monkeypatch):
     # End-to-end regression test for the "approve a refunded lead as valid"
     # feature: AppTest can't simulate a real file upload, so this pre-seeds

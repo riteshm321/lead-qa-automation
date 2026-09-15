@@ -180,6 +180,7 @@ st.divider()
 _collated_key = f"collated_new_leads_{client_name}"
 new_leads_df = None
 new_leads_headers: list[str] = []
+new_leads_file = None
 
 if profile.collation_enabled:
     with st.expander("🗂️ Collate multiple files into one New Leads file (optional)"):
@@ -219,6 +220,7 @@ if profile.collation_enabled:
 if _collated_key in st.session_state:
     new_leads_df = st.session_state[_collated_key]
     new_leads_headers = list(new_leads_df.columns)
+    new_leads_file = True  # a collated file counts as "ready" below, same as a raw upload
     st.caption(f"📎 Using the collated file ({len(new_leads_df)} lead(s)) as New Leads.")
 else:
     _new_leads_widget = st.file_uploader(
