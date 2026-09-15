@@ -609,6 +609,13 @@ def apply_complex_account_rules(
     if tal_segment_index is not None:
         df = fill_blank_segments(df, field_mapping.email, tal_segment_index)
 
+    if CUSTOMER_COMMENTS_COLUMN in df.columns:
+        # A leadfile where every row's Customer Comments is blank infers a
+        # float64 column (all-NaN) -- assigning a string into that below
+        # raises TypeError. Widen to object dtype first, same reasoning as
+        # Capture Date/Asset download day/year further down.
+        df[CUSTOMER_COMMENTS_COLUMN] = df[CUSTOMER_COMMENTS_COLUMN].astype(object)
+
     for idx, row in df.iterrows():
         domain = _norm_domain(extract_domain(row.get(field_mapping.email)))
 
@@ -629,8 +636,22 @@ def apply_complex_account_rules(
             df.at[idx, SIGNAL_NOTES_COLUMN] = ""
 
         if CUSTOMER_COMMENTS_COLUMN in df.columns and cid not in _DELL_APAC_CIDS:
-            comment = str(row.get(CUSTOMER_COMMENTS_COLUMN, "") or "").strip()
-            df.at[idx, CUSTOMER_COMMENTS_COLUMN] = f"{CUSTOMER_COMMENTS_PREFIX}{comment}" if comment else ""
+            _raw_comment = row.get(CUSTOMER_COMMENTS_COLUMN, "")
+            # pd.notna, not `or ""` -- a blank cell comes back as float NaN,
+            # and NaN is truthy in Python, so `nan or ""` evaluates to nan
+            # itself and str()'s to the literal text "nan" (confirmed in
+            # the real Accumulated Report/Lead Template output).
+            comment = str(_raw_comment).strip() if pd.notna(_raw_comment) else ""
+            if not comment:
+                df.at[idx, CUSTOMER_COMMENTS_COLUMN] = ""
+            elif comment.startswith(CUSTOMER_COMMENTS_PREFIX):
+                # Already carries the prefix (e.g. this exact row was
+                # filled once before) -- prepending it again produced
+                # "Accounts Researching - Accounts Researching - ..." in
+                # the real output.
+                df.at[idx, CUSTOMER_COMMENTS_COLUMN] = comment
+            else:
+                df.at[idx, CUSTOMER_COMMENTS_COLUMN] = f"{CUSTOMER_COMMENTS_PREFIX}{comment}"
 
         if asset_specs is not None and ASSET_TITLE_COLUMN in df.columns:
             spec = asset_specs.get(str(row.get(ASSET_TITLE_COLUMN, "") or "").strip().lower())

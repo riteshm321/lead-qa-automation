@@ -8,6 +8,7 @@ from openpyxl.worksheet.table import Table
 
 from core.excel_io import (
     append_leads, guess_target_field_mapping, find_header_row, read_sheet_headers, route_leads_by_cid,
+    set_status_for_emails,
 )
 from core.models import FieldMapping, LeadTemplateTab
 
@@ -872,3 +873,23 @@ def test_read_sheet_headers_on_genuinely_empty_sheet_returns_empty_list_not_inde
 
     header_row = find_header_row(path, "Blank")
     assert read_sheet_headers(path, "Blank", header_row) == []
+
+
+def test_set_status_for_emails_matches_by_email_not_row_position(tmp_path):
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email", "Status"])
+    ws.append(["a@x.com", ""])
+    ws.append(["b@x.com", ""])
+    ws.append(["c@x.com", "Untouched"])
+    wb.save(path)
+
+    set_status_for_emails(path, "Accumulated", "Status", "Email", {"a@x.com", "b@x.com"}, "Uploaded to Enhancio")
+
+    wb2 = openpyxl.load_workbook(path)
+    ws2 = wb2["Accumulated"]
+    assert ws2.cell(row=2, column=2).value == "Uploaded to Enhancio"
+    assert ws2.cell(row=3, column=2).value == "Uploaded to Enhancio"
+    assert ws2.cell(row=4, column=2).value == "Untouched"

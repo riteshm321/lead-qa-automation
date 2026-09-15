@@ -1,3 +1,4 @@
+import datetime
 import os
 from unittest.mock import patch
 
@@ -6,7 +7,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_enhancio_client_id, save_app_settings
-from core.enhancio_sync import save_pending_leads, load_pending_leads
+from core.enhancio_sync import save_pending_leads, load_pending_leads, save_uploaded_emails, load_uploaded_emails
 from core.models import ClientProfile, FieldMapping, EnhancioConfig, EnhancioAllocationMapping
 from core.profile_store import save_profile
 
@@ -39,6 +40,66 @@ def _save_profile(acc_path: str, jira_ticket_key: str = "", accumulated_report_l
     )
     save_profile(profile, get_clients_dir())
     return profile
+
+
+def _make_accumulated_with_status(path: str, rows: list[dict]) -> None:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Date", "CID", "Email", "First Name", "Last Name", "Company", "Status"])
+    for row in rows:
+        ws.append([
+            row.get("Date"), row["CID"], row["Email"], row.get("First Name", ""),
+            row.get("Last Name", ""), row.get("Company", ""), row.get("Status", ""),
+        ])
+    wb.create_sheet("Refund").append(
+        ["Date", "CID", "Email", "First Name", "Last Name", "Company", "Refund Reason"])
+    wb.save(path)
+
+
+def test_pull_from_accumulated_report_filters_by_date_range_and_stamps_status(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    today = datetime.date.today()
+    yesterday = today - datetime.timedelta(days=1)
+    too_old = today - datetime.timedelta(days=10)
+    _make_accumulated_with_status(acc_path, [
+        {"Date": yesterday, "CID": "120022", "Email": "in_range@x.com",
+         "First Name": "A", "Last Name": "One", "Company": "Acme"},
+        {"Date": too_old, "CID": "120022", "Email": "too_old@x.com",
+         "First Name": "B", "Last Name": "Two", "Company": "Acme"},
+    ])
+    _save_profile(acc_path)
+    save_enhancio_client_id("CID123")
+
+    def _fake_import_leads(token, allocation_uid, leads):
+        return {"submitted": [
+            {"leadId": f"lead-{i}", "status": "Submitted", "email": lead["Email Address"]}
+            for i, lead in enumerate(leads)
+        ], "errors": []}
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        at.radio(key="enhancio_lead_source").set_value("Pull from Accumulated Report by date range").run()
+        at.date_input(key="enhancio_range_start").set_value(yesterday).run()
+        at.date_input(key="enhancio_range_end").set_value(today).run()
+        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+        assert not at.exception
+
+    results_df = at.session_state["enhancio_upload_results"]
+    assert results_df["Result"].str.startswith("✅").sum() == 1
+    assert "in_range@x.com" in results_df["Email"].values
+    assert "too_old@x.com" not in results_df["Email"].values
+
+    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
+    status = accumulated_df.loc[accumulated_df["Email"] == "in_range@x.com", "Status"].iloc[0]
+    assert status.startswith("Uploaded to Enhancio")
+    old_status = accumulated_df.loc[accumulated_df["Email"] == "too_old@x.com", "Status"].iloc[0]
+    assert old_status == "" or pd.isna(old_status)
 
 
 def test_warns_when_no_client_has_enhancio_enabled(tmp_path, monkeypatch):
@@ -133,6 +194,32 @@ def test_upload_keeps_and_saves_successes_when_batch_also_has_rejected_leads(tmp
 
     pending = load_pending_leads(profile.name)
     assert set(pending.keys()) == {"lead-ok1", "lead-ok2"}
+
+
+def test_reset_button_clears_an_allocations_already_uploaded_memory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_enhancio_client_id("CID123")
+    save_uploaded_emails("Amazon Business EMEA", "L-22256", {"a@x.com"})
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([{"CID": "120022", "Email": "a@x.com", "First Name": "A"}]).to_csv(leads_csv, index=False)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+    with open(leads_csv, "rb") as f:
+        at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+
+    assert load_uploaded_emails("Amazon Business EMEA", "L-22256") == {"a@x.com"}
+    at.button(key="enhancio_reset_L-22256").click().run()
+    assert not at.exception
+
+    assert load_uploaded_emails("Amazon Business EMEA", "L-22256") == set()
+    assert any("Cleared already-uploaded memory" in t.value for t in at.toast)
 
 
 def test_reuploading_the_same_file_skips_leads_already_uploaded_to_that_allocation(tmp_path, monkeypatch):

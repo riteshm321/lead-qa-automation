@@ -223,6 +223,52 @@ def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existi
     assert status.startswith("Cleared for Upload")
 
 
+def test_write_cleared_leads_uses_accumulated_field_mapping_not_raw_leadfile_mapping(tmp_path, monkeypatch):
+    # Regression test for a real bug found in IBM APAC's own data: Company
+    # (and, by the same mechanism, any of the other 4 roles) silently wrote
+    # blank whenever field_mapping (the RAW LEADFILE's own column names,
+    # e.g. "company" lowercase) differed from accumulated_field_mapping
+    # (what that role is actually called INSIDE the Accumulated Report,
+    # e.g. "Company") -- every DataFrame this page touches comes from the
+    # Accumulated Report, never a raw leadfile, so only the latter mapping
+    # is ever correct here.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    template_path = str(tmp_path / "bob_template.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "Acme Corp", "CID": "118741",
+         "Status": "Sent for Approval - 07-Sep", "Asset Title": "Omdia Universe", "Country": "IN"},
+    ])
+    _make_mirror(mirror_path)
+    _make_lead_template(template_path)
+
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="company", cid="CID")
+    acc_fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="IBM APAC Interactive Avenues Pvt Ltd", accumulated_report_path=acc_path,
+        field_mapping=fm, accumulated_field_mapping=acc_fm,
+        complex_account=ComplexAccountConfig(enabled=True),
+        box_tracker=BoxTrackerConfig(
+            enabled=True, mirror_workbook_path=mirror_path,
+            cid_campaign_map={"118741": "Bob"}, cid_lead_template_path={"118741": template_path},
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    clear_checkbox = next(cb for cb in at.checkbox if cb.key == "clear_lead1@x.com")
+    clear_checkbox.set_value(True).run()
+    write_button = next(b for b in at.button if b.key == "write_lead_template_button")
+    write_button.click().run()
+
+    assert not at.exception
+    template_df = pd.read_excel(template_path, sheet_name="LEAD_TEMPLATE")
+    assert template_df.iloc[0]["Company"] == "Acme Corp"
+
+
 def test_manual_marking_hides_blank_leads_from_step_2_until_marked(tmp_path, monkeypatch):
     # A lead the user approved by hand (added straight to the real
     # Approval Sheet themselves, skipping step 1) starts with a blank
@@ -397,6 +443,33 @@ def test_upload_reconciliation_moves_rejected_to_refund_and_logs_accepted(tmp_pa
     status_by_email = dict(zip(accumulated_df["Email"], accumulated_df["Status"]))
     assert status_by_email["lead1@x.com"].startswith("Accepted - Uploaded")
     assert status_by_email["lead2@x.com"].startswith("Rejected - Refunded")
+
+
+def test_upload_reconciliation_warns_about_response_details_columns_it_cant_fill(tmp_path, monkeypatch):
+    # Regression test: append_mirror_rows had no unmatched-column feedback
+    # at all -- a real mirror workbook column beyond the ~15 keys this
+    # page writes went silently blank forever. Now it must be surfaced.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
+         "Status": "Cleared for Upload - 07-Sep"},
+    ])
+    _make_mirror(mirror_path)
+    # Add a real column this page's Response Details write never populates.
+    wb = openpyxl.load_workbook(mirror_path)
+    ws = wb["Response Details"]
+    ws.cell(row=2, column=ws.max_column + 1, value="Extra Client Tracking Column")
+    wb.save(mirror_path)
+    _save_profile(acc_path, mirror_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    at.button(key="reconcile_upload_button").click().run()
+
+    assert not at.exception
+    assert any("Extra Client Tracking Column" in w.value for w in at.warning)
 
 
 def test_upload_reconciliation_requires_a_reason_for_rejected_leads(tmp_path, monkeypatch):
