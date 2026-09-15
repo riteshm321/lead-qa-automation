@@ -84,3 +84,19 @@ def save_convertr_account_credentials(client_name: str, username: str, password:
     all_creds = updated.setdefault("convertr_account_credentials", {})
     all_creds[client_name] = {"username": username.strip(), "password": password}
     save_app_settings(updated)
+
+
+def get_enhancio_client_id() -> str:
+    # Unlike Convertr's per-client username/password, Enhancio uses ONE
+    # shared org-wide Connected App (Enhancio-managed OAuth2, Client ID
+    # only -- no secret) that every client's leads route through via their
+    # own allocationUid. Still a live API credential, so it belongs in the
+    # plain local app_settings.json only, same reasoning as get_jira_settings.
+    settings = load_app_settings()
+    return settings.get("enhancio_client_id", "")
+
+
+def save_enhancio_client_id(client_id: str) -> None:
+    updated = load_app_settings()
+    updated["enhancio_client_id"] = client_id.strip()
+    save_app_settings(updated)

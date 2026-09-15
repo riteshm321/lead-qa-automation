@@ -5,6 +5,7 @@ import streamlit as st
 from core.app_settings import (
     get_aliases_path, get_clients_dir, get_jira_settings, get_shared_root_dir,
     load_app_settings, save_app_settings, save_jira_settings,
+    get_enhancio_client_id, save_enhancio_client_id,
 )
 from core.activity_tracker import load_all_activity, get_user_stats, format_minutes
 from core.auth import create_user, delete_user, load_users, update_user_role
@@ -101,6 +102,23 @@ with st.expander("🔑 Jira account (private to this machine)", expanded=False):
     )
     if st.button("Save Jira account", key="jira_settings_save"):
         save_jira_settings(jira_base_url, jira_email, jira_api_token)
+        queue_toast_before_rerun("Saved.")
+        st.rerun()
+
+with st.expander("🔑 Enhancio Client ID (private to this machine)", expanded=False):
+    st.caption(
+        "Used by the 🔗 Enhancio page and by Client Setup's \"Fetch allocations\"/\"Test connection\" "
+        "buttons. Unlike Jira/Convertr, this is ONE shared credential for the whole org (Enhancio's "
+        "Enhancio-Managed OAuth2 Connected App Client ID — Settings → Org Settings → API Integrations → "
+        "Connected Apps on pubnet.enhancio.com), not tied to your own login — but it's still a live API "
+        "credential, so it's stored locally on this machine only, never inside the shared clients folder "
+        "above."
+    )
+    enhancio_client_id = st.text_input(
+        "Enhancio Client ID", value=get_enhancio_client_id(), type="password", key="enhancio_client_id_input",
+    )
+    if st.button("Save Enhancio Client ID", key="enhancio_client_id_save"):
+        save_enhancio_client_id(enhancio_client_id)
         queue_toast_before_rerun("Saved.")
         st.rerun()
 

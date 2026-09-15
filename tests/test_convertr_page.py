@@ -49,6 +49,50 @@ def test_warns_when_no_client_has_convertr_enabled(tmp_path, monkeypatch):
     assert any("No client has Convertr enabled" in w.value for w in at.warning)
 
 
+def test_reconcile_works_with_no_qa_field_mapping_using_convertrs_own_leadfile_mapping(tmp_path, monkeypatch):
+    # Regression: a client with no QA configured at all (e.g. Amazon) used
+    # to force a trip through Run Check just to populate field_mapping,
+    # purely so Convertr's CID/email lookups had somewhere to read from.
+    # Convertr's own leadfile_field_mapping (set on Client Setup's Convertr
+    # section, independent of QA) must be enough on its own.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+
+    fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="Amazon Business EMEA", accumulated_report_path=acc_path,
+        field_mapping=None,  # no QA configured for this client at all
+        convertr=ConvertrConfig(
+            enabled=True, enterprise="amazonbusiness", publisher_id="11003",
+            campaigns=[ConvertrCampaignMapping(cid="120022", campaign_id="44709", global_form_id="75")],
+            field_mapping={"Email": "email", "First Name": "firstName"},
+            leadfile_field_mapping=fm,
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+    save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+    save_pending_leads("Amazon Business EMEA", {
+        "101": {"Email": "accepted@x.com", "CID": "120022", "First Name": "A", "Last Name": "One"},
+    })
+
+    with patch("core.convertr_client.login", return_value={"access_token": "tok"}), \
+         patch("core.convertr_client.get_lead_result", return_value={"status": "valid"}):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        next(b for b in at.button if b.label == "Fetch decisions from Convertr").click().run()
+        assert not at.exception
+        next(b for b in at.button if b.label == "Write to Accumulated & Refund").click().run()
+        assert not at.exception
+
+    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
+    assert len(accumulated_df) == 1
+    assert accumulated_df.loc[0, "Email"] == "accepted@x.com"
+    assert str(accumulated_df.loc[0, "CID"]) == "120022"
+
+
 def test_reconcile_writes_accepted_to_accumulated_and_rejected_to_refund_with_cid_and_reason(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")

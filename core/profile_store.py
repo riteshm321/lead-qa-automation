@@ -7,7 +7,7 @@ from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
     TalConfig, ExclusionConfig, SuppressionConfig,
     DuplicateConfig, DedupeListConfig, ReferenceSource, LeadTemplateTab, ComplexAccountConfig,
-    BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
+    BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping, EnhancioConfig, EnhancioAllocationMapping,
 )
 
 
@@ -60,6 +60,13 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         ConvertrCampaignMapping(**{k: v for k, v in c.items() if k != "publisher_id"})
         for c in convertr.get("campaigns", [])
     ]
+    convertr_leadfile_fm = convertr.get("leadfile_field_mapping")
+    convertr["leadfile_field_mapping"] = FieldMapping(**convertr_leadfile_fm) if convertr_leadfile_fm else None
+
+    enhancio = data.get("enhancio") or {}
+    enhancio["allocations"] = [EnhancioAllocationMapping(**a) for a in enhancio.get("allocations", [])]
+    enhancio_leadfile_fm = enhancio.get("leadfile_field_mapping")
+    enhancio["leadfile_field_mapping"] = FieldMapping(**enhancio_leadfile_fm) if enhancio_leadfile_fm else None
 
     return ClientProfile(
         name=data["name"],
@@ -89,6 +96,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         complex_account=ComplexAccountConfig(**(data.get("complex_account") or {})),
         box_tracker=BoxTrackerConfig(**(data.get("box_tracker") or {})),
         convertr=ConvertrConfig(**convertr),
+        enhancio=EnhancioConfig(**enhancio),
     )
 
 

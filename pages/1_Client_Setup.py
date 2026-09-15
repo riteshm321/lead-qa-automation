@@ -10,16 +10,20 @@ from core.excel_io import (
 )
 from core.app_settings import (
     get_clients_dir, get_convertr_account_credentials, save_convertr_account_credentials,
+    get_enhancio_client_id,
 )
 from core.branding import configure_page
 from core import convertr_client
 from core.convertr_client import ConvertrError
+from core import enhancio_client
+from core.enhancio_client import EnhancioError
 from core.file_browser import browse_for_file
 from core.jira_client import extract_ticket_key
 from core.models import (
     ClientProfile, DuplicateConfig, LeadcapConfig, LeadcapSegment,
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
     LeadTemplateTab, ComplexAccountConfig, BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
+    EnhancioConfig, EnhancioAllocationMapping,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 from core.toast import show_pending_toast
@@ -269,6 +273,29 @@ def _render_target_field_mapping(label: str, key_prefix: str, headers: list[str]
     last_name = _col("Last Name column", f"{key_prefix}_map_last")
     company = _col("Company column", f"{key_prefix}_map_company")
     cid = _col("CID column", f"{key_prefix}_map_cid")
+    return FieldMapping(email=email, first_name=first_name, last_name=last_name, company=company, cid=cid)
+
+
+def _render_leadfile_column_mapping(key_prefix: str, existing: FieldMapping | None) -> FieldMapping | None:
+    # Free-text (not a selectbox, unlike _render_target_field_mapping) --
+    # this runs at Client Setup time, before any specific leadfile has been
+    # uploaded, so there are no known headers to pick from. Leaving every
+    # field blank means "fall back to this client's QA field_mapping",
+    # handled by the caller page, not here.
+    st.caption(
+        "Which of the UPLOADED leadfile's own columns hold each field — lets this tool work standalone, "
+        "without needing this client's QA field mapping (Run Check) configured at all. Leave every field "
+        "blank to keep using the QA field mapping instead, if one exists."
+    )
+    existing = existing or FieldMapping(email="", first_name="", last_name="", company="", cid="")
+    _col1, _col2 = st.columns(2)
+    email = _col1.text_input("Email column", value=existing.email, key=f"{key_prefix}_lf_email")
+    first_name = _col1.text_input("First Name column", value=existing.first_name, key=f"{key_prefix}_lf_first")
+    last_name = _col1.text_input("Last Name column", value=existing.last_name, key=f"{key_prefix}_lf_last")
+    company = _col2.text_input("Company column", value=existing.company, key=f"{key_prefix}_lf_company")
+    cid = _col2.text_input("CID column", value=existing.cid, key=f"{key_prefix}_lf_cid")
+    if not any([email, first_name, last_name, company, cid]):
+        return None
     return FieldMapping(email=email, first_name=first_name, last_name=last_name, company=company, cid=cid)
 
 
@@ -767,6 +794,7 @@ with tab_complex:
         convertr_publisher_id = ""
         convertr_campaigns: list[ConvertrCampaignMapping] = []
         convertr_field_mapping: dict[str, str] = {}
+        convertr_leadfile_mapping: FieldMapping | None = None
         convertr_account_username = ""
         convertr_account_password = ""
         if convertr_enabled:
@@ -819,6 +847,9 @@ with tab_complex:
                 _col, _field_name = _line.split(",", 1)
                 convertr_field_mapping[_col.strip()] = _field_name.strip()
 
+            convertr_leadfile_mapping = _render_leadfile_column_mapping(
+                "convertr", profile.convertr.leadfile_field_mapping if profile else None)
+
             st.caption(
                 "Account login — used both to upload leads and to read back accepted/rejected outcomes "
                 "(every Publisher user has API access with these same credentials) — stored locally on "
@@ -859,6 +890,99 @@ with tab_complex:
                             st.error(f"❌ {exc}")
         else:
             st.caption("Convertr upload is disabled for this client.")
+
+        st.divider()
+        st.markdown("**Enhancio Upload (optional)**")
+        st.caption(
+            "Uploads a client-verified leadfile straight to Enhancio's Lead Import API. Unlike Convertr, "
+            "auth is ONE shared org-wide Client ID (set once on the ⚙️ Settings page) — every client just "
+            "needs its own CID → Enhancio allocation mapping. Each CID routes to its own allocation."
+        )
+        enhancio_enabled = st.checkbox(
+            "This client uploads to Enhancio", value=profile.enhancio.enabled if profile else False)
+        enhancio_allocations: list[EnhancioAllocationMapping] = []
+        enhancio_field_mapping: dict[str, str] = {}
+        enhancio_leadfile_mapping: FieldMapping | None = None
+        if enhancio_enabled:
+            st.caption(
+                "CID → Enhancio allocation mapping, one per line, format `CID,allocationUid` — use "
+                "\"Fetch allocations from Enhancio\" below to find the right allocationUid instead of "
+                "hunting for it in the Enhancio portal:"
+            )
+            _existing_allocations_text = "\n".join(
+                f"{a.cid},{a.allocation_uid}" for a in (profile.enhancio.allocations if profile else [])
+            )
+            _allocations_text = st.text_area(
+                "CID to Enhancio allocation mapping", value=_existing_allocations_text,
+                key="enhancio_allocations_input", label_visibility="collapsed", height=120)
+            for _line in _allocations_text.splitlines():
+                _line = _line.strip()
+                if not _line or "," not in _line:
+                    continue
+                _cid, _allocation_uid = (p.strip() for p in _line.split(",", 1))
+                enhancio_allocations.append(EnhancioAllocationMapping(cid=_cid, allocation_uid=_allocation_uid))
+
+            st.caption(
+                "Leadfile column → Enhancio field label mapping, one per line, format `Leadfile "
+                "Column,Enhancio Field Label` (e.g. `Email,Email Address`) — use the field labels the "
+                "Describe Fields API reports for the allocation (Test connection below). Don't include "
+                "CID here, the uploaded row itself is kept and reused when writing Accumulated/Refund "
+                "later, not anything Enhancio echoes back:"
+            )
+            _existing_enhancio_field_map_text = "\n".join(
+                f"{col},{field_name}" for col, field_name in
+                (profile.enhancio.field_mapping.items() if profile else [])
+            )
+            _enhancio_field_map_text = st.text_area(
+                "Enhancio field mapping", value=_existing_enhancio_field_map_text,
+                key="enhancio_field_map_input", label_visibility="collapsed", height=120)
+            for _line in _enhancio_field_map_text.splitlines():
+                _line = _line.strip()
+                if not _line or "," not in _line:
+                    continue
+                _col, _field_name = _line.split(",", 1)
+                enhancio_field_mapping[_col.strip()] = _field_name.strip()
+
+            enhancio_leadfile_mapping = _render_leadfile_column_mapping(
+                "enhancio", profile.enhancio.leadfile_field_mapping if profile else None)
+
+            _enhancio_client_id = get_enhancio_client_id()
+            if not _enhancio_client_id:
+                st.caption("No Enhancio Client ID configured yet — set one on the ⚙️ Settings page to "
+                           "enable the lookup/test buttons below.")
+            else:
+                if st.button("Fetch allocations from Enhancio", key="enhancio_fetch_allocations"):
+                    try:
+                        with st.spinner("Calling Enhancio..."):
+                            _token = enhancio_client.get_access_token(_enhancio_client_id)["access_token"]
+                            _allocations = enhancio_client.list_publisher_allocations(_token)
+                        if not _allocations:
+                            st.warning("Connected, but Enhancio returned no allocations for this account.")
+                        for _allocation in _allocations:
+                            st.success(
+                                f"✅ \"{_allocation.get('campaignName')}\" — allocationUid "
+                                f"{_allocation.get('uniqueId')} ({_allocation.get('allocationStatus')})"
+                            )
+                    except EnhancioError as exc:
+                        st.error(f"❌ {exc}")
+
+                _unique_allocation_uids = sorted({a.allocation_uid for a in enhancio_allocations if a.allocation_uid})
+                for _allocation_uid in _unique_allocation_uids:
+                    if st.button(f"Test connection — allocation {_allocation_uid}",
+                                 key=f"enhancio_test_{_allocation_uid}"):
+                        try:
+                            with st.spinner(f"Calling Enhancio for allocation {_allocation_uid}..."):
+                                _token = enhancio_client.get_access_token(_enhancio_client_id)["access_token"]
+                                _fields = enhancio_client.describe_fields(_token, _allocation_uid)
+                            if not _fields:
+                                st.warning("Connected, but Enhancio returned no fields for this allocation.")
+                            for _field in _fields:
+                                _required = "required" if _field.get("mandatory") == "Y" else "optional"
+                                st.success(f"✅ \"{_field.get('fieldLabel')}\" ({_required})")
+                        except EnhancioError as exc:
+                            st.error(f"❌ {exc}")
+        else:
+            st.caption("Enhancio upload is disabled for this client.")
 
 st.divider()
 
@@ -965,6 +1089,13 @@ if st.button("💾 Save Client Profile", type="primary"):
                 publisher_id=convertr_publisher_id if convertr_enabled else "",
                 campaigns=convertr_campaigns if convertr_enabled else [],
                 field_mapping=convertr_field_mapping if convertr_enabled else {},
+                leadfile_field_mapping=convertr_leadfile_mapping if convertr_enabled else None,
+            ),
+            enhancio=EnhancioConfig(
+                enabled=enhancio_enabled,
+                allocations=enhancio_allocations if enhancio_enabled else [],
+                field_mapping=enhancio_field_mapping if enhancio_enabled else {},
+                leadfile_field_mapping=enhancio_leadfile_mapping if enhancio_enabled else None,
             ),
         )
         saved_path = save_profile(new_profile, get_clients_dir())

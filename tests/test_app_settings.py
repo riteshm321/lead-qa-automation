@@ -4,6 +4,7 @@ from core.app_settings import (
     load_app_settings, save_app_settings, get_clients_dir, get_aliases_path, get_shared_root_dir,
     get_jira_settings, save_jira_settings,
     get_convertr_account_credentials, save_convertr_account_credentials,
+    get_enhancio_client_id, save_enhancio_client_id,
 )
 
 _ROOT = r"C:\Shared\OneDrive\LeadQA"
@@ -121,6 +122,27 @@ def test_convertr_account_credentials_scoped_per_client(tmp_path, monkeypatch):
     save_convertr_account_credentials("Client B", "b@x.com", "pw-b")
     assert get_convertr_account_credentials("Client A")["username"] == "a@x.com"
     assert get_convertr_account_credentials("Client B")["username"] == "b@x.com"
+
+
+def test_get_enhancio_client_id_defaults_to_blank_when_unset(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert get_enhancio_client_id() == ""
+
+
+def test_save_and_load_enhancio_client_id_round_trip(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_enhancio_client_id(" vE2Y4XmLPg74oY8cpIL9KBO8lkKPEg30 ")
+    assert get_enhancio_client_id() == "vE2Y4XmLPg74oY8cpIL9KBO8lkKPEg30"
+
+
+def test_enhancio_client_id_never_derives_from_shared_root(tmp_path, monkeypatch):
+    # Same reasoning as the Jira token: one shared org-wide credential, but
+    # it must stay local, never inside a folder the whole team syncs.
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": _ROOT})
+    save_enhancio_client_id("CID123")
+    assert get_shared_root_dir() == _ROOT
+    assert get_enhancio_client_id() == "CID123"
 
 
 def test_jira_settings_never_derive_from_shared_root(tmp_path, monkeypatch):

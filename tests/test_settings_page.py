@@ -146,6 +146,21 @@ def test_save_jira_account_persists_settings(tmp_path, monkeypatch):
     assert settings["api_token"] == "token123"
 
 
+def test_save_enhancio_client_id_persists_settings(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    at.text_input(key="enhancio_client_id_input").set_value("vE2Y4XmLPg74oY8cpIL9KBO8lkKPEg30").run()
+    save_button = next(b for b in at.button if b.key == "enhancio_client_id_save")
+    save_button.click().run()
+    assert not at.exception
+
+    from core.app_settings import get_enhancio_client_id
+    assert get_enhancio_client_id() == "vE2Y4XmLPg74oY8cpIL9KBO8lkKPEg30"
+
+
 def test_admin_can_add_a_new_user_account(tmp_path, monkeypatch):
     # tests/conftest.py's autouse bypass logs every page test in as an
     # admin, so the "Manage user accounts" panel is always available here.

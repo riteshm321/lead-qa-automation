@@ -32,6 +32,12 @@ client_name = st.selectbox("Client", _profile_names)
 profile = load_profile(client_name, get_clients_dir())
 _convertr = profile.convertr
 _campaign_by_cid = {c.cid: c for c in _convertr.campaigns}
+# Convertr's own mapping (set on Client Setup's Convertr section) takes
+# priority; falls back to the client's QA field_mapping so an
+# already-configured client keeps working unchanged. This is what lets a
+# client with no QA at all (e.g. uploaded straight to Convertr) use this
+# page without ever visiting Run Check first.
+_leadfile_mapping = _convertr.leadfile_field_mapping or profile.field_mapping
 
 st.divider()
 st.subheader("1. Upload leads to Convertr")
@@ -55,7 +61,13 @@ if _upload_file:
         st.error(f"Could not read this file: {exc}")
         st.stop()
 
-    cid_column = profile.field_mapping.cid if profile.field_mapping else None
+    if not _leadfile_mapping:
+        st.error(
+            "This client has no leadfile column mapping for Convertr yet — set one under Client Setup's "
+            "Convertr section (Email/First Name/Last Name/Company/CID columns)."
+        )
+        st.stop()
+    cid_column = _leadfile_mapping.cid
     if not cid_column or cid_column not in leads_df.columns:
         st.error(f"This client's CID column (\"{cid_column}\") isn't in the uploaded file.")
         st.stop()
@@ -77,10 +89,10 @@ if _upload_file:
         _newly_uploaded_emails: set[str] = set()
 
         _already_uploaded = load_uploaded_emails(client_name)
-        _upload_df, _dup_df = filter_already_uploaded(leads_df, profile.field_mapping.email, _already_uploaded)
+        _upload_df, _dup_df = filter_already_uploaded(leads_df, _leadfile_mapping.email, _already_uploaded)
         for _, lead in _dup_df.iterrows():
             results.append({
-                "CID": lead.get(cid_column, ""), "Email": lead.get(profile.field_mapping.email, ""),
+                "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
                 "Result": "⏭️ Skipped (already uploaded previously)",
             })
 
@@ -90,7 +102,7 @@ if _upload_file:
             for _, lead in _skipped_df.iterrows():
                 _cid = str(lead[cid_column])
                 results.append({
-                    "CID": _cid, "Email": lead.get(profile.field_mapping.email, ""),
+                    "CID": _cid, "Email": lead.get(_leadfile_mapping.email, ""),
                     "Result": f"⏭️ Skipped (test mode — campaign {_cid_to_campaign_id[_cid]} "
                               "already tested via another CID)",
                 })
@@ -106,12 +118,12 @@ if _upload_file:
             mapping = _campaign_by_cid.get(cid)
             if mapping is None:
                 for _, lead in group.iterrows():
-                    results.append({"CID": cid, "Email": lead.get(profile.field_mapping.email, ""),
+                    results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
                                      "Result": "❌ No Convertr campaign mapped for this CID"})
                 continue
             if not mapping.global_form_id:
                 for _, lead in group.iterrows():
-                    results.append({"CID": cid, "Email": lead.get(profile.field_mapping.email, ""),
+                    results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
                                      "Result": f"❌ No Form ID saved for campaign {mapping.campaign_id}"})
                 continue
 
@@ -120,7 +132,7 @@ if _upload_file:
                     convertr_field: str(lead.get(leadfile_col, "") or "")
                     for leadfile_col, convertr_field in _convertr.field_mapping.items()
                 }
-                email = lead.get(profile.field_mapping.email, "")
+                email = lead.get(_leadfile_mapping.email, "")
                 try:
                     response = convertr_client.submit_lead_as_publisher(
                         _convertr.enterprise, _token, _convertr.publisher_id, mapping.campaign_id,
@@ -211,6 +223,12 @@ if _accepted_rows or _rejected_rows:
         st.dataframe(pd.DataFrame(_rejected_rows).drop(columns=["_convertr_lead_id"]), hide_index=True)
 
     if st.button("Write to Accumulated & Refund", type="primary"):
+        if not _leadfile_mapping:
+            st.error(
+                "This client has no leadfile column mapping for Convertr yet — set one under Client "
+                "Setup's Convertr section (Email/First Name/Last Name/Company/CID columns)."
+            )
+            st.stop()
         today = datetime.date.today()
         resolved_ids = []
 
@@ -219,7 +237,7 @@ if _accepted_rows or _rejected_rows:
             resolved_ids += list(accepted_df.pop("_convertr_lead_id"))
             append_leads(
                 profile.accumulated_report_path, profile.accumulated_tab_name,
-                accepted_df, profile.field_mapping, today,
+                accepted_df, _leadfile_mapping, today,
             )
 
         if _rejected_rows:
@@ -228,7 +246,7 @@ if _accepted_rows or _rejected_rows:
             reasons = dict(zip(rejected_df.index, rejected_df.pop("_reason")))
             append_leads(
                 profile.accumulated_report_path, profile.refund_tab_name,
-                rejected_df, profile.field_mapping, today, reasons=reasons,
+                rejected_df, _leadfile_mapping, today, reasons=reasons,
             )
 
         remove_pending_leads(client_name, resolved_ids)

@@ -168,6 +168,40 @@ class ConvertrConfig:
     # "form[]" wrapper -- core/convertr_client.py adds that)}, e.g.
     # {"Email": "email", "First Name": "firstName"}.
     field_mapping: dict[str, str] = field(default_factory=dict)
+    # Which of the UPLOADED leadfile's own columns hold email/name/company/
+    # CID -- set here so the Convertr page never depends on the client's QA
+    # field_mapping (ClientProfile.field_mapping) being configured. Falls
+    # back to that QA mapping when left blank, so an already-working client
+    # doesn't need to re-enter it, but a client with no QA at all (e.g.
+    # Amazon, uploaded straight to Convertr) doesn't need to visit Run
+    # Check just to unlock this page.
+    leadfile_field_mapping: Optional[FieldMapping] = None
+
+
+@dataclass
+class EnhancioAllocationMapping:
+    # Each CID's leads upload to its own Enhancio allocation -- see
+    # core/enhancio_client.py for the actual API calls this feeds.
+    cid: str
+    allocation_uid: str
+
+
+@dataclass
+class EnhancioConfig:
+    # Uploads a client-verified leadfile straight to Enhancio's Lead Import
+    # API (https://api-pubnet.enhancio.com/lead-api/v1/import). Unlike
+    # Convertr, auth is ONE shared org-wide Connected App (Client ID only,
+    # Enhancio-managed OAuth2) rather than a per-client login -- see
+    # get_enhancio_client_id in core/app_settings.py -- so this config only
+    # needs to know how to route each CID to its own allocation.
+    enabled: bool = False
+    allocations: list[EnhancioAllocationMapping] = field(default_factory=list)
+    # {leadfile column name: Enhancio field label}, e.g. {"Email": "Email
+    # Address", "First Name": "First Name"} -- keyed by the exact fieldLabel
+    # the Describe Fields API reports for the allocation, not a fixed code.
+    field_mapping: dict[str, str] = field(default_factory=dict)
+    # Same purpose and fallback behavior as ConvertrConfig.leadfile_field_mapping.
+    leadfile_field_mapping: Optional[FieldMapping] = None
 
 
 @dataclass
@@ -205,3 +239,4 @@ class ClientProfile:
     complex_account: ComplexAccountConfig = field(default_factory=ComplexAccountConfig)
     box_tracker: BoxTrackerConfig = field(default_factory=BoxTrackerConfig)
     convertr: ConvertrConfig = field(default_factory=ConvertrConfig)
+    enhancio: EnhancioConfig = field(default_factory=EnhancioConfig)

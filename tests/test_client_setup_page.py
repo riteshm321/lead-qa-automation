@@ -278,6 +278,85 @@ def test_convertr_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
         "username": "me@x.com", "password": "hunter2"}
 
 
+def test_convertr_leadfile_column_mapping_saves_independently_of_qa_field_mapping(tmp_path, monkeypatch):
+    # This is what lets a client with no QA at all (e.g. Amazon) use
+    # Convertr without ever visiting Run Check first -- the leadfile column
+    # mapping lives right here on Convertr's own section.
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Convertr").set_value(True).run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("Amazon Business EMEA").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    next(t for t in at.text_input if "Convertr enterprise subdomain" in t.label).set_value("amazonbusiness").run()
+    next(t for t in at.text_input if "Convertr Publisher ID" in t.label).set_value("11003").run()
+    at.text_input(key="convertr_lf_email").set_value("Email").run()
+    at.text_input(key="convertr_lf_first").set_value("First Name").run()
+    at.text_input(key="convertr_lf_last").set_value("Last Name").run()
+    at.text_input(key="convertr_lf_company").set_value("Company").run()
+    at.text_input(key="convertr_lf_cid").set_value("CID").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Amazon Business EMEA", get_clients_dir())
+    assert loaded.field_mapping is None  # no QA configured
+    assert loaded.convertr.leadfile_field_mapping.email == "Email"
+    assert loaded.convertr.leadfile_field_mapping.cid == "CID"
+
+
+def test_enhancio_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    assert not any(t.key == "enhancio_allocations_input" for t in at.text_area)
+
+    enhancio_checkbox = next(c for c in at.checkbox if c.label == "This client uploads to Enhancio")
+    enhancio_checkbox.set_value(True).run()
+    assert not at.exception
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("Amazon Business EMEA").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_area(key="enhancio_allocations_input").set_value("120022,L-22256\n120028,L-22257").run()
+    at.text_area(key="enhancio_field_map_input").set_value("Email,Email Address\nFirst Name,First Name").run()
+    at.text_input(key="enhancio_lf_email").set_value("Email").run()
+    at.text_input(key="enhancio_lf_cid").set_value("CID").run()
+
+    save_button = next(b for b in at.button if "Save Client Profile" in b.label)
+    save_button.click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Amazon Business EMEA", get_clients_dir())
+    assert loaded.enhancio.enabled is True
+    assert loaded.enhancio.field_mapping == {"Email": "Email Address", "First Name": "First Name"}
+    allocations_by_cid = {a.cid: a for a in loaded.enhancio.allocations}
+    assert allocations_by_cid["120022"].allocation_uid == "L-22256"
+    assert allocations_by_cid["120028"].allocation_uid == "L-22257"
+    assert loaded.enhancio.leadfile_field_mapping.email == "Email"
+    assert loaded.enhancio.leadfile_field_mapping.cid == "CID"
+
+
+def test_enhancio_fetch_allocations_button_shows_client_id_prompt_when_unset(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Enhancio").set_value(True).run()
+
+    assert any("No Enhancio Client ID configured" in c.value for c in at.caption)
+    assert not any("Fetch allocations from Enhancio" in b.label for b in at.button)
+
+
 def test_box_tracker_lead_template_map_and_pacing_skip_fields_save(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 

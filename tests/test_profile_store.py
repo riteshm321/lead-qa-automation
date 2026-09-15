@@ -5,6 +5,7 @@ from core.models import (
     ClientProfile, FieldMapping, LeadcapConfig, LeadcapSegment,
     TalConfig, ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, LeadTemplateTab,
     ComplexAccountConfig, BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
+    EnhancioConfig, EnhancioAllocationMapping,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
@@ -111,6 +112,61 @@ def test_convertr_config_round_trip(tmp_path):
     save_profile(profile, clients_dir=clients_dir)
     loaded = load_profile("Basware", clients_dir=clients_dir)
     assert loaded == profile
+
+
+def test_convertr_leadfile_field_mapping_round_trips_independently_of_qa_field_mapping(tmp_path):
+    # Amazon-style client: no QA field_mapping at all, but Convertr still
+    # needs to know which of the UPLOADED leadfile's own columns are
+    # email/CID/etc -- this is what lets Convertr work without ever routing
+    # through Run Check first.
+    clients_dir = str(tmp_path / "clients")
+    profile = ClientProfile(
+        name="Amazon Business EMEA", accumulated_report_path="sample_data/x.xlsx",
+        convertr=ConvertrConfig(
+            enabled=True, enterprise="amazonbusiness", publisher_id="11003",
+            leadfile_field_mapping=FieldMapping(
+                email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID"),
+        ),
+    )
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Amazon Business EMEA", clients_dir=clients_dir)
+
+    assert loaded.field_mapping is None
+    assert loaded.convertr.leadfile_field_mapping == profile.convertr.leadfile_field_mapping
+
+
+def test_enhancio_config_round_trip(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.enhancio = EnhancioConfig(
+        enabled=True,
+        allocations=[
+            EnhancioAllocationMapping(cid="118741", allocation_uid="L-22256"),
+            EnhancioAllocationMapping(cid="118742", allocation_uid="L-22257"),
+        ],
+        field_mapping={"Email": "Email Address", "First Name": "First Name"},
+        leadfile_field_mapping=FieldMapping(
+            email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID"),
+    )
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+    assert loaded == profile
+
+
+def test_load_profile_defaults_enhancio_disabled_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "OldClient.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "OldClient",
+            "accumulated_report_path": "sample_data/x.xlsx",
+        }, f)
+
+    loaded = load_profile("OldClient", clients_dir=clients_dir)
+    assert loaded.enhancio.enabled is False
+    assert loaded.enhancio.allocations == []
 
 
 def test_load_profile_defaults_convertr_disabled_for_old_schema_json(tmp_path):
