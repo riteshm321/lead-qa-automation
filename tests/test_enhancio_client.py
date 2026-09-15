@@ -41,7 +41,7 @@ def test_describe_fields_posts_allocation_uid_and_returns_result():
         fields = describe_fields("tok123", "L-22256")
 
     args, kwargs = mock_post.call_args
-    assert args[0] == "https://api-pubnet.enhancio.com/lead-api/v1/describe"
+    assert args[0] == "https://api-pubnet.enhancio.com/external/lead-api/v1/describe"
     assert kwargs["headers"]["Authorization"] == "Bearer tok123"
     assert kwargs["json"] == {"allocationUid": "L-22256"}
     assert fields == [{"fieldLabel": "First Name", "mandatory": "Y"}]
@@ -73,7 +73,7 @@ def test_import_leads_posts_lead_list_and_allocation_uid():
         submitted = import_leads("tok123", "L-22256", [{"First Name": "Joe", "Email Address": "j@x.com"}])
 
     args, kwargs = mock_post.call_args
-    assert args[0] == "https://api-pubnet.enhancio.com/lead-api/v1/import"
+    assert args[0] == "https://api-pubnet.enhancio.com/external/lead-api/v1/import"
     assert kwargs["json"] == {
         "leadList": [{"First Name": "Joe", "Email Address": "j@x.com"}], "allocationUid": "L-22256",
     }
@@ -125,7 +125,7 @@ def test_get_lead_status_posts_lead_ids_and_returns_lead_list():
         results = get_lead_status("tok123", ["abc123", "def456"])
 
     args, kwargs = mock_post.call_args
-    assert args[0] == "https://api-pubnet.enhancio.com/lead-api/v1/lead-status"
+    assert args[0] == "https://api-pubnet.enhancio.com/external/lead-api/v1/lead-status"
     assert kwargs["json"] == {"leadIds": ["abc123", "def456"]}
     assert results[1]["rejectionReason"] == "Lead Duplicate"
 

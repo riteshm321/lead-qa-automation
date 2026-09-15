@@ -5,6 +5,18 @@ import requests
 # carries "Authorization: Bearer <access_token>".
 _BASE_URL = "https://api-pubnet.enhancio.com"
 
+# Every lead-api/campaign route actually requires an "/external/" segment
+# right after the host to reach the externally-consumable gateway route --
+# Enhancio's own docs omit it entirely for the lead-api group (only the
+# campaign group's examples happen to show it), and a request without it
+# returns a bare, bodyless 403 as if it were a scope/permission problem.
+# Confirmed by comparing against Madison Logic's own working internal
+# integration (ML Console's lead delivery config), which uses
+# ".../external/lead-api/v1/import" successfully with the SAME OAuth scopes
+# this client requests -- the missing "/external/" was the entire problem,
+# not a missing Campaign scope.
+_LEAD_API_BASE = f"{_BASE_URL}/external/lead-api/v1"
+
 # Enhancio caps both the Lead Import and Lead Status APIs at 1000 items per
 # request -- callers here pass however many leads/lead ids they have, and
 # these two functions chunk internally instead of pushing that limit onto
@@ -68,7 +80,7 @@ def describe_fields(access_token: str, allocation_uid: str) -> list[dict]:
     Describe Fields API, so a caller can discover the exact field labels
     Enhancio expects for a campaign instead of guessing them.
     """
-    url = f"{_BASE_URL}/lead-api/v1/describe"
+    url = f"{_LEAD_API_BASE}/describe"
     body = _post(url, _auth_headers(access_token), {"allocationUid": allocation_uid}, "fetching describe fields")
     return body.get("result") or []
 
@@ -94,7 +106,7 @@ def import_leads(access_token: str, allocation_uid: str, leads: list[dict]) -> l
     submitted: list[dict] = []
     for start in range(0, len(leads), _MAX_BATCH_SIZE):
         chunk = leads[start:start + _MAX_BATCH_SIZE]
-        url = f"{_BASE_URL}/lead-api/v1/import"
+        url = f"{_LEAD_API_BASE}/import"
         body = _post(
             url, _auth_headers(access_token),
             {"leadList": chunk, "allocationUid": allocation_uid}, "importing leads",
@@ -111,7 +123,7 @@ def get_lead_status(access_token: str, lead_ids: list[str]) -> list[dict]:
     resolved: list[dict] = []
     for start in range(0, len(lead_ids), _MAX_BATCH_SIZE):
         chunk = lead_ids[start:start + _MAX_BATCH_SIZE]
-        url = f"{_BASE_URL}/lead-api/v1/lead-status"
+        url = f"{_LEAD_API_BASE}/lead-status"
         body = _post(url, _auth_headers(access_token), {"leadIds": chunk}, "fetching lead status")
         resolved.extend((body.get("result") or {}).get("leadList") or [])
     return resolved
