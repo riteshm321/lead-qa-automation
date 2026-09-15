@@ -844,7 +844,13 @@ with tab_complex:
                 _line = _line.strip()
                 if not _line or "," not in _line:
                     continue
-                _col, _field_name = _line.split(",", 1)
+                # rsplit, not split -- a real leadfile column is often a
+                # verbatim survey/consent question ("I'd like to receive
+                # ..., and I agree to ...") that itself contains commas,
+                # while the short target field name on the right essentially
+                # never does. Splitting on the FIRST comma silently mangled
+                # any such column into a garbled key/value pair.
+                _col, _field_name = _line.rsplit(",", 1)
                 convertr_field_mapping[_col.strip()] = _field_name.strip()
 
             convertr_leadfile_mapping = _render_leadfile_column_mapping(
@@ -941,7 +947,9 @@ with tab_complex:
                 _line = _line.strip()
                 if not _line or "," not in _line:
                     continue
-                _col, _field_name = _line.split(",", 1)
+                # rsplit, not split -- see the identical comment on
+                # Convertr's field mapping above for why.
+                _col, _field_name = _line.rsplit(",", 1)
                 enhancio_field_mapping[_col.strip()] = _field_name.strip()
 
             st.caption(

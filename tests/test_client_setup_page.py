@@ -350,6 +350,55 @@ def test_enhancio_checkbox_reveals_fields_and_saves(tmp_path, monkeypatch):
     assert loaded.enhancio.leadfile_field_mapping.cid == "CID"
 
 
+def test_enhancio_field_mapping_survives_a_leadfile_column_containing_a_comma(tmp_path, monkeypatch):
+    # Regression test: a real leadfile column is often a verbatim
+    # survey/consent question ("I'd like to receive news..., and I agree
+    # to...") that itself contains commas. Splitting the pasted
+    # "Column,Field Label" line on the FIRST comma mangled this into a
+    # garbled key/value pair instead of the intended single mapping.
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Enhancio").set_value(True).run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("Comma Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_area(key="enhancio_field_map_input").set_value(
+        "I'd like to receive news, and I agree to the policy,Opt In").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Comma Client", get_clients_dir())
+    assert loaded.enhancio.field_mapping == {
+        "I'd like to receive news, and I agree to the policy": "Opt In"}
+
+
+def test_convertr_field_mapping_survives_a_leadfile_column_containing_a_comma(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Convertr").set_value(True).run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("Comma Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_area(key="convertr_field_map_input").set_value(
+        "I'd like to receive news, and I agree to the policy,optIn").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Comma Client", get_clients_dir())
+    assert loaded.convertr.field_mapping == {
+        "I'd like to receive news, and I agree to the policy": "optIn"}
+
+
 def test_enhancio_fetch_allocations_button_shows_client_id_prompt_when_unset(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
