@@ -1017,9 +1017,34 @@ with tab_complex:
                                 _fields = enhancio_client.describe_fields(_token, _allocation_uid)
                             if not _fields:
                                 st.warning("Connected, but Enhancio returned no fields for this allocation.")
+                            # Cross-check against the field mapping above --
+                            # a mandatory field Enhancio will reject the
+                            # whole import for if it's missing, so this is
+                            # caught here, before ever uploading a single
+                            # lead, rather than discovered only from a
+                            # failed-import count in the Enhancio portal.
+                            _mapped_targets = set(enhancio_field_mapping.values())
+                            _unmapped_mandatory = [
+                                _field.get("fieldLabel") for _field in _fields
+                                if _field.get("mandatory") == "Y" and _field.get("fieldLabel") not in _mapped_targets
+                            ]
+                            if _unmapped_mandatory:
+                                st.error(
+                                    "❌ These mandatory fields have NO mapping entry pointing to them at all "
+                                    "-- Enhancio will reject every lead sent to this allocation until each has "
+                                    "one: " + "; ".join(f'\"{f}\"' for f in _unmapped_mandatory)
+                                )
                             for _field in _fields:
+                                _label = _field.get("fieldLabel")
                                 _required = "required" if _field.get("mandatory") == "Y" else "optional"
-                                st.success(f"✅ \"{_field.get('fieldLabel')}\" ({_required})")
+                                _mapped_from = next(
+                                    (col for col, target in enhancio_field_mapping.items() if target == _label),
+                                    None)
+                                if _mapped_from is not None:
+                                    st.success(f"✅ \"{_label}\" ({_required}) — mapped from leadfile column "
+                                               f"\"{_mapped_from}\"")
+                                else:
+                                    st.success(f"✅ \"{_label}\" ({_required})")
                         except EnhancioError as exc:
                             st.error(f"❌ {exc}")
         else:

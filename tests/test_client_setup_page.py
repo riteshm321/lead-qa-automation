@@ -464,6 +464,37 @@ def test_enhancio_fetch_allocations_button_shows_client_id_prompt_when_unset(tmp
     assert not any("Fetch allocations from Enhancio" in b.label for b in at.button)
 
 
+def test_enhancio_test_connection_flags_a_mandatory_field_with_no_mapping(tmp_path, monkeypatch):
+    # This is the actual safeguard against the recurring "Missing mandatory
+    # field(s)" failure at upload time: Test connection now cross-checks
+    # Describe Fields' mandatory list against the field mapping above it,
+    # so a gap is caught here -- before ever sending a single lead -- not
+    # discovered later from Enhancio's own rejected-lead count.
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Enhancio").set_value(True).run()
+    at.text_area(key="enhancio_allocations_input").set_value("120022,L-22256").run()
+    at.text_area(key="enhancio_field_map_cols_input").set_value("Email").run()
+    at.text_area(key="enhancio_field_map_targets_input").set_value("Email Address").run()
+
+    from core.app_settings import save_enhancio_client_id
+    save_enhancio_client_id("CID123")
+    at.run()
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.describe_fields", return_value=[
+             {"fieldLabel": "Email Address", "mandatory": "Y"},
+             {"fieldLabel": "First Name", "mandatory": "Y"},
+         ]):
+        next(b for b in at.button if b.label == "Test connection — allocation L-22256").click().run()
+
+    assert not at.exception
+    assert any("First Name" in e.value and "NO mapping entry" in e.value for e in at.error)
+    assert any("mapped from leadfile column \"Email\"" in s.value for s in at.success)
+
+
 def test_box_tracker_lead_template_map_and_pacing_skip_fields_save(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
