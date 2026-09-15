@@ -12,6 +12,7 @@ from core.enhancio_client import EnhancioError
 from core.enhancio_sync import (
     rejection_reason_from_status_entry, load_pending_leads, save_pending_leads, remove_pending_leads,
     load_uploaded_emails, save_uploaded_emails, filter_already_uploaded, select_rows_for_test_mode,
+    format_enhancio_field_value,
 )
 from core.excel_io import read_leadfile, append_leads
 from core import jira_client
@@ -173,7 +174,7 @@ if _upload_file:
             lead_payloads = [
                 {
                     **{
-                        enhancio_field: str(lead.get(leadfile_col, "") or "")
+                        enhancio_field: format_enhancio_field_value(enhancio_field, lead.get(leadfile_col, ""))
                         for leadfile_col, enhancio_field in _enhancio.field_mapping.items()
                     },
                     **_fixed_values,

@@ -276,6 +276,48 @@ def test_upload_applies_fixed_field_values_only_to_the_matching_allocation(tmp_p
     assert "Company Size" not in captured_calls["L-22257"][0]
 
 
+def test_upload_reformats_a_date_field_to_enhancios_required_format(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="Amazon Business EMEA", accumulated_report_path=acc_path, field_mapping=fm,
+        enhancio=EnhancioConfig(
+            enabled=True,
+            allocations=[EnhancioAllocationMapping(cid="120022", allocation_uid="L-22256")],
+            field_mapping={"Email": "Email Address", "Created Timestamp": "Created Timestamp"},
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+    save_enhancio_client_id("CID123")
+
+    leads_csv = tmp_path / "leads.csv"
+    # A CSV has no native date type -- this is the common real case where a
+    # leadfile's date column round-trips as plain text, not a real datetime.
+    pd.DataFrame([{"CID": "120022", "Email": "a@x.com", "Created Timestamp": "2026-03-05 14:30:00"}]).to_csv(
+        leads_csv, index=False)
+
+    captured = {}
+
+    def _fake_import_leads(token, allocation_uid, leads):
+        captured["leads"] = leads
+        return [{"leadId": "lead-1", "status": "Submitted", "email": leads[0]["Email Address"]}]
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+        assert not at.exception
+
+    assert captured["leads"][0]["Created Timestamp"] == "03-05-2026 14:30:00"
+
+
 def test_reconcile_writes_accepted_to_accumulated_and_rejected_to_refund_with_cid_and_reason(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")

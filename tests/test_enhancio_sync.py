@@ -1,11 +1,57 @@
+import datetime
+
 import pandas as pd
 
 from core.app_settings import save_app_settings
 from core.enhancio_sync import (
     rejection_reason_from_status_entry, select_rows_for_test_mode, filter_already_uploaded,
     load_pending_leads, save_pending_leads, remove_pending_leads,
-    load_uploaded_emails, save_uploaded_emails,
+    load_uploaded_emails, save_uploaded_emails, format_enhancio_field_value,
 )
+
+
+def test_format_enhancio_field_value_reformats_a_real_datetime_cell():
+    # A leadfile date column read by pandas comes back as an actual
+    # datetime, not a pre-formatted string -- Enhancio expects MM-DD-YYYY
+    # HH:MM:SS regardless of what format the source file used.
+    value = datetime.datetime(2026, 3, 5, 14, 30, 0)
+    assert format_enhancio_field_value("Created Timestamp", value) == "03-05-2026 14:30:00"
+
+
+def test_format_enhancio_field_value_reformats_a_pandas_timestamp():
+    value = pd.Timestamp("2026-03-05 14:30:00")
+    assert format_enhancio_field_value("Created Timestamp", value) == "03-05-2026 14:30:00"
+
+
+def test_format_enhancio_field_value_parses_a_date_held_as_plain_text():
+    # Some leadfiles hold their date column as plain text (a text-formatted
+    # Excel cell, or any CSV) instead of a real date cell -- still coerced
+    # to the same MM-DD-YYYY HH:MM:SS output, not passed through as-is.
+    assert format_enhancio_field_value("Created Timestamp", "2026-03-05 14:30:00") == "03-05-2026 14:30:00"
+    assert format_enhancio_field_value("Created Timestamp", "3/5/2026") == "03-05-2026 00:00:00"
+
+
+def test_format_enhancio_field_value_matches_date_field_labels_case_insensitively():
+    assert format_enhancio_field_value("created date", "2026-03-05") == "03-05-2026 00:00:00"
+    assert format_enhancio_field_value("Modified_Date", "2026-03-05") == "03-05-2026 00:00:00"
+
+
+def test_format_enhancio_field_value_leaves_non_date_fields_untouched():
+    # A CID/phone/zip that happens to contain digits must never be run
+    # through date parsing just because it looks numeric.
+    assert format_enhancio_field_value("Zip Code", "20261") == "20261"
+    assert format_enhancio_field_value("Work Phone", "12026135000") == "12026135000"
+    assert format_enhancio_field_value("First Name", "Joe") == "Joe"
+
+
+def test_format_enhancio_field_value_falls_back_to_plain_text_when_unparseable():
+    assert format_enhancio_field_value("Created Timestamp", "not a date") == "not a date"
+
+
+def test_format_enhancio_field_value_handles_blank_values():
+    assert format_enhancio_field_value("Created Timestamp", "") == ""
+    assert format_enhancio_field_value("Created Timestamp", None) == ""
+    assert format_enhancio_field_value("First Name", None) == ""
 
 
 def test_rejection_reason_prefers_rejection_reason_field():

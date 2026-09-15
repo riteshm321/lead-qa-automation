@@ -1,10 +1,38 @@
 import json
 import os
+import re
 
 import pandas as pd
 
 from core.app_settings import get_shared_root_dir
 from core.atomic_io import atomic_write_json
+
+# Enhancio expects every date/timestamp value in this exact format -- the
+# SAME format for every client, campaign, and allocation, never
+# configurable per client. Matched by the ENHANCIO field label (e.g.
+# "Created Timestamp"), not the leadfile's own column name (which varies
+# per client) -- this is what lets a genuine date field always get
+# reformatted while a CID/phone/zip that happens to contain digits is
+# never touched.
+_ENHANCIO_DATE_FORMAT = "%m-%d-%Y %H:%M:%S"
+_DATE_FIELD_LABEL_PATTERN = re.compile(r"date|timestamp", re.IGNORECASE)
+
+
+def format_enhancio_field_value(enhancio_field: str, value) -> str:
+    """Formats one lead field's value for Enhancio's Import Lead payload.
+
+    A date/timestamp field is coerced to MM-DD-YYYY HH:MM:SS regardless of
+    how the leadfile itself held it -- a real Excel date cell (read back as
+    a datetime by pandas) or a plain text string in some other format --
+    since Enhancio expects this one format everywhere, not whatever the
+    source file happened to use. Every other field is passed through as
+    plain text, unparsed.
+    """
+    if _DATE_FIELD_LABEL_PATTERN.search(enhancio_field):
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.notna(parsed):
+            return parsed.strftime(_ENHANCIO_DATE_FORMAT)
+    return str(value or "")
 
 
 def rejection_reason_from_status_entry(entry: dict) -> str:
