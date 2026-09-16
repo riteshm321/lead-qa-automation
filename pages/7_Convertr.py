@@ -15,6 +15,7 @@ from core.convertr_sync import (
 from core.excel_io import read_leadfile, append_leads, dataframe_to_excel_bytes
 from core import jira_client
 from core.jira_client import JiraError
+from core.models import resolve_field_mapping
 from core.profile_store import list_profile_names, load_profile
 from core.toast import queue_toast_before_rerun, show_pending_toast
 
@@ -39,7 +40,7 @@ _campaign_by_cid = {c.cid: c for c in _convertr.campaigns}
 # already-configured client keeps working unchanged. This is what lets a
 # client with no QA at all (e.g. uploaded straight to Convertr) use this
 # page without ever visiting Run Check first.
-_leadfile_mapping = _convertr.leadfile_field_mapping or profile.field_mapping
+_leadfile_mapping = resolve_field_mapping(_convertr.leadfile_field_mapping, profile.field_mapping)
 
 st.divider()
 st.subheader("1. Upload leads to Convertr")

@@ -1,7 +1,7 @@
 from core.models import (
     FieldMapping, LeadcapSegment, LeadcapConfig, TalConfig,
     ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, DuplicateConfig,
-    ClientProfile,
+    ClientProfile, resolve_field_mapping,
 )
 from core.check_result import CheckOutcome
 
@@ -21,6 +21,28 @@ def test_client_profile_defaults():
     assert profile.suppression.sources == []
     assert profile.dedupe_list.sources == []
     assert profile.field_mapping.email == "emailaddress"
+
+
+def test_field_mapping_is_blank():
+    assert FieldMapping(email="", first_name="", last_name="", company="", cid="").is_blank() is True
+    assert FieldMapping(email="Email", first_name="", last_name="", company="", cid="").is_blank() is False
+
+
+def test_resolve_field_mapping_falls_back_when_preferred_is_none_or_blank():
+    fallback = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+    blank = FieldMapping(email="", first_name="", last_name="", company="", cid="")
+    real = FieldMapping(email="Work Email", first_name="F", last_name="L", company="Co", cid="CID2")
+
+    # Regression test for a real bug: Client Setup's "optional" column-
+    # mapping sections used to save FieldMapping(all blank) instead of
+    # None when every dropdown was left unset -- a plain `preferred or
+    # fallback` treats that blank-but-non-None object as truthy and wins
+    # over the fallback, silently blanking every field it's used for
+    # (confirmed in IBM APAC's real profile: Company/CID came out blank
+    # everywhere accumulated_field_mapping was consulted).
+    assert resolve_field_mapping(None, fallback) is fallback
+    assert resolve_field_mapping(blank, fallback) is fallback
+    assert resolve_field_mapping(real, fallback) is real
 
 
 def test_leadcap_segment_equality():

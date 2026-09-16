@@ -54,6 +54,26 @@ def test_format_enhancio_field_value_handles_blank_values():
     assert format_enhancio_field_value("First Name", None) == ""
 
 
+def test_format_enhancio_field_value_parses_a_bare_excel_serial_number():
+    # Regression test for a real rejected batch: a date-valued cell with
+    # no actual date NUMBER FORMAT applied in the source file reads back
+    # from Excel as a bare float (e.g. 46268.155...), not a real datetime.
+    # pd.to_datetime on a bare number assumes Unix-epoch NANOSECONDS,
+    # silently producing a bogus ~1970 date instead of the real one --
+    # Enhancio correctly rejected that bogus value as invalid.
+    assert format_enhancio_field_value("Created Timestamp", 46268.15568287037) == "09-03-2026 03:44:10"
+
+
+def test_format_enhancio_field_value_uses_iso_format_for_user_transaction_date():
+    # IBM APAC's own Enhancio field ("user_transaction_date", matching
+    # their Lead Template's own placeholder) needs YYYY-MM-DD HH:MM:SS
+    # specifically, confirmed against a real rejected batch -- every other
+    # date/timestamp field keeps the standard MM-DD-YYYY HH:MM:SS.
+    assert format_enhancio_field_value("user_transaction_date", "09/02/2026 03:31:45 AM") == "2026-09-02 03:31:45"
+    assert format_enhancio_field_value("user_transaction_date", 46268.15568287037) == "2026-09-03 03:44:10"
+    assert format_enhancio_field_value("Created Timestamp", "09/02/2026 03:31:45 AM") == "09-02-2026 03:31:45"
+
+
 def test_rejection_reason_prefers_comments_field():
     # comments carries the actual detail (e.g. "Lead validation failed:
     # Duplicate lead within the campaign allocation"); rejectionReason is

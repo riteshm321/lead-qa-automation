@@ -22,6 +22,7 @@ from core.excel_io import (
 )
 from core import jira_client
 from core.jira_client import JiraError
+from core.models import resolve_field_mapping
 from core.profile_store import list_profile_names, load_profile
 from core.toast import queue_toast_before_rerun, show_pending_toast
 
@@ -87,7 +88,7 @@ if _from_accumulated:
     # can differ from field_mapping, the raw leadfile's own convention;
     # see the identical fix in pages/5_Box_Tracker.py for why this
     # distinction matters).
-    _leadfile_mapping = profile.accumulated_field_mapping or profile.field_mapping
+    _leadfile_mapping = resolve_field_mapping(profile.accumulated_field_mapping, profile.field_mapping)
     if not profile.accumulated_report_path:
         st.error("This client has no Accumulated Report configured on Client Setup — set one first.")
         st.stop()
@@ -118,7 +119,7 @@ else:
     # already-configured client keeps working unchanged. This is what lets
     # a client with no QA at all (e.g. uploaded straight to Enhancio) use
     # this page without ever visiting Run Check first.
-    _leadfile_mapping = _enhancio.leadfile_field_mapping or profile.field_mapping
+    _leadfile_mapping = resolve_field_mapping(_enhancio.leadfile_field_mapping, profile.field_mapping)
     _upload_file = st.file_uploader("Verified leadfile", type=["xlsx", "csv"], key="enhancio_upload_file")
     if _upload_file:
         try:

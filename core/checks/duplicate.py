@@ -2,7 +2,7 @@ import pandas as pd
 
 from core.check_result import CheckOutcome, ReviewDetail
 from core.matching import extract_domain, normalize_company_name
-from core.models import FieldMapping
+from core.models import FieldMapping, resolve_field_mapping
 
 
 def _norm(value) -> str:
@@ -40,7 +40,7 @@ def check_duplicates(
     # accumulated_field_mapping is for. Reading accumulated rows with the
     # New Leads mapping silently returns "" for every field when the
     # headers differ, so the duplicate check would never match anything.
-    acc_fm = accumulated_field_mapping or field_mapping
+    acc_fm = resolve_field_mapping(accumulated_field_mapping, field_mapping)
 
     acc_emails: set[str] = set()
     # Each candidate carries the FieldMapping it was read with alongside the

@@ -10,6 +10,30 @@ class FieldMapping:
     company: str
     cid: str
 
+    def is_blank(self) -> bool:
+        """True if every field is empty -- a saved-but-never-filled-in
+        mapping, distinct from None (never configured at all). A plain
+        `some_field_mapping or fallback` treats ANY FieldMapping instance
+        as truthy regardless of its field values, so a blank one (which a
+        Client Setup form used to be able to save, since "optional"
+        column-mapping sections returned FieldMapping(...) unconditionally
+        instead of None when every dropdown was left as "No mapping")
+        silently wins over the fallback instead of being treated as
+        equivalent to unset. Use resolve_field_mapping() instead of `or`
+        wherever a FieldMapping might come from one of those sections.
+        """
+        return not any([self.email, self.first_name, self.last_name, self.company, self.cid])
+
+
+def resolve_field_mapping(preferred: "FieldMapping | None", fallback: "FieldMapping") -> "FieldMapping":
+    """preferred if it's configured (not None and not blank), else
+    fallback -- the correct replacement for `preferred or fallback`
+    wherever preferred is an Optional[FieldMapping] that a Client Setup
+    form can save as an all-blank (but non-None) FieldMapping instead of
+    None. See FieldMapping.is_blank for why the plain `or` is unsafe.
+    """
+    return fallback if preferred is None or preferred.is_blank() else preferred
+
 
 @dataclass
 class LeadcapSegment:

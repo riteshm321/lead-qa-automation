@@ -16,23 +16,50 @@ from core.atomic_io import atomic_write_json
 # reformatted while a CID/phone/zip that happens to contain digits is
 # never touched.
 _ENHANCIO_DATE_FORMAT = "%m-%d-%Y %H:%M:%S"
+# IBM APAC's own Enhancio field is literally named "user_transaction_date"
+# (matching their Lead Template's own placeholder convention) and,
+# confirmed against a real rejected batch, needs YYYY-MM-DD HH:MM:SS
+# specifically -- not the MM-DD-YYYY format every other client's
+# date/timestamp field uses. Matched on the exact field name, not a
+# per-client setting, since this is a fixed Enhancio schema fact for
+# whichever allocations happen to use this exact field name.
+_USER_TRANSACTION_DATE_FIELD = "user_transaction_date"
+_USER_TRANSACTION_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 _DATE_FIELD_LABEL_PATTERN = re.compile(r"date|timestamp", re.IGNORECASE)
+# Excel's date epoch, as pandas/most libraries interpret Excel serial
+# numbers (day 0 = 1899-12-30) -- reproduces Excel's own 1900-leap-year
+# quirk, which is what makes this the correct origin to match Excel's
+# actual serial values, not a plain "day 1 = 1900-01-01" scheme.
+_EXCEL_DATE_ORIGIN = "1899-12-30"
 
 
 def format_enhancio_field_value(enhancio_field: str, value) -> str:
     """Formats one lead field's value for Enhancio's Import Lead payload.
 
-    A date/timestamp field is coerced to MM-DD-YYYY HH:MM:SS regardless of
-    how the leadfile itself held it -- a real Excel date cell (read back as
-    a datetime by pandas) or a plain text string in some other format --
-    since Enhancio expects this one format everywhere, not whatever the
+    A date/timestamp field is coerced to MM-DD-YYYY HH:MM:SS (or, for
+    "user_transaction_date" specifically, YYYY-MM-DD HH:MM:SS) regardless
+    of how the leadfile itself held it -- a real Excel date cell (read
+    back as a datetime by pandas), a plain text string in some other
+    format, or a bare Excel serial NUMBER (confirmed in a real leadfile --
+    a date-valued cell with no actual date number format applied reads
+    back as a plain int/float instead of a datetime; pd.to_datetime on a
+    bare number otherwise assumes Unix-epoch nanoseconds and silently
+    produces a bogus ~1970 date instead of the real one) -- since Enhancio
+    expects one of these two fixed formats everywhere, not whatever the
     source file happened to use. Every other field is passed through as
     plain text, unparsed.
     """
     if _DATE_FIELD_LABEL_PATTERN.search(enhancio_field):
-        parsed = pd.to_datetime(value, errors="coerce")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and pd.notna(value):
+            parsed = pd.to_datetime(value, unit="D", origin=_EXCEL_DATE_ORIGIN, errors="coerce")
+        else:
+            parsed = pd.to_datetime(value, errors="coerce")
         if pd.notna(parsed):
-            return parsed.strftime(_ENHANCIO_DATE_FORMAT)
+            date_format = (
+                _USER_TRANSACTION_DATE_FORMAT if enhancio_field.strip().lower() == _USER_TRANSACTION_DATE_FIELD
+                else _ENHANCIO_DATE_FORMAT
+            )
+            return parsed.strftime(date_format)
     return str(value or "")
 
 

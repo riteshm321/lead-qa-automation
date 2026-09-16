@@ -273,6 +273,12 @@ def _render_target_field_mapping(label: str, key_prefix: str, headers: list[str]
     last_name = _col("Last Name column", f"{key_prefix}_map_last")
     company = _col("Company column", f"{key_prefix}_map_company")
     cid = _col("CID column", f"{key_prefix}_map_cid")
+    if not any([email, first_name, last_name, company, cid]):
+        # Every dropdown left at "No mapping" -- this whole section is
+        # optional, so treat that the same as never having opened it
+        # (None), not as an explicit "map every field to blank" that
+        # then wins over the fallback this profile is supposed to use.
+        return None
     return FieldMapping(email=email, first_name=first_name, last_name=last_name, company=company, cid=cid)
 
 
@@ -1040,11 +1046,18 @@ with tab_complex:
                                 _mapped_from = next(
                                     (col for col, target in enhancio_field_mapping.items() if target == _label),
                                     None)
+                                _line = f"✅ \"{_label}\" ({_required})"
                                 if _mapped_from is not None:
-                                    st.success(f"✅ \"{_label}\" ({_required}) — mapped from leadfile column "
-                                               f"\"{_mapped_from}\"")
-                                else:
-                                    st.success(f"✅ \"{_label}\" ({_required})")
+                                    _line += f" — mapped from leadfile column \"{_mapped_from}\""
+                                st.success(_line)
+                                # A field constrained to a fixed picklist
+                                # (Enhancio rejects anything outside it as
+                                # "Invalid field value") -- surfaced so a
+                                # rejected-batch mismatch can be diagnosed
+                                # here instead of guessing at allowed values.
+                                _allowed_values = _field.get("fieldValues")
+                                if _allowed_values:
+                                    st.caption(f"　　Allowed values: {', '.join(str(v) for v in _allowed_values)}")
                         except EnhancioError as exc:
                             st.error(f"❌ {exc}")
         else:

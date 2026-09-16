@@ -15,6 +15,7 @@ from core.box_tracker import (
 )
 from core.branding import configure_page
 from core.excel_io import read_sheet_as_dataframe, append_leads, find_header_row, set_status_by_row_index
+from core.models import resolve_field_mapping
 from core.profile_store import list_profile_names, load_profile
 
 _current_user = configure_page("Box Tracker")
@@ -60,7 +61,7 @@ _pacing_skipped = set(profile.box_tracker.pacing_skipped_campaigns)
 # using the accumulated one (falling back to field_mapping only if it was
 # never set) everywhere below fixes that and prevents the same class of
 # bug for any other role that drifts between the two in the future.
-_acc_fm = profile.accumulated_field_mapping or profile.field_mapping
+_acc_fm = resolve_field_mapping(profile.accumulated_field_mapping, profile.field_mapping)
 
 st.caption(
     f"**{_IBM_APAC_CLIENT_NAME}**'s Box-hosted lead-approval tracker has no API access, so every write "

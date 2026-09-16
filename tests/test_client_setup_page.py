@@ -93,6 +93,46 @@ def test_lead_template_mapping_reads_from_first_tabs_own_file_when_shared_path_i
     assert "Email_Address" in email_select.options
 
 
+def test_accumulated_field_mapping_saves_as_none_when_every_dropdown_left_unset(tmp_path, monkeypatch):
+    # Regression test for a real bug: this section is documented as
+    # "(optional)" -- leaving every dropdown at "No mapping" (the default)
+    # used to still save a FieldMapping with every field blank instead of
+    # None. Since `saved_mapping or fallback`-style code elsewhere treats
+    # any FieldMapping object as valid regardless of its field values,
+    # that blank-but-present mapping silently won over the fallback it
+    # was supposed to defer to -- confirmed in a real client's profile
+    # (Company/CID came out blank everywhere it was consulted).
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "CID"])
+    wb.save(acc_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("Blank Mapping Test Client").run()
+    at.text_input(key="accumulated_path_input").set_value(acc_path).run()
+
+    # Explicitly set every dropdown to "no mapping" -- some header names
+    # here are auto-guessable (a seeded UI default, not a user choice), so
+    # this is the only way to reliably simulate "the user left this whole
+    # optional section unmapped" regardless of what got guessed.
+    _no_mapping = "(none — this file has no such column)"
+    for key in ("acc_map_email", "acc_map_first", "acc_map_last", "acc_map_company", "acc_map_cid"):
+        at.selectbox(key=key).set_value(_no_mapping).run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Blank Mapping Test Client", get_clients_dir())
+    assert loaded.accumulated_field_mapping is None
+
+
 def test_exclusion_source_accepts_a_csv_file_and_reads_its_columns_and_saves(tmp_path, monkeypatch):
     # Reference sources (Exclusion, TAL, Suppression, Dedupe) were Excel-only
     # -- picking a .csv here used to either error or leave the sheet/column
@@ -493,6 +533,35 @@ def test_enhancio_test_connection_flags_a_mandatory_field_with_no_mapping(tmp_pa
     assert not at.exception
     assert any("First Name" in e.value and "NO mapping entry" in e.value for e in at.error)
     assert any("mapped from leadfile column \"Email\"" in s.value for s in at.success)
+
+
+def test_enhancio_test_connection_shows_a_picklist_fields_allowed_values(tmp_path, monkeypatch):
+    # A field constrained to a fixed picklist rejects anything outside it
+    # as "Invalid field value" at upload time, with no indication of what
+    # IS valid -- Test connection surfaces Describe Fields' own allowed
+    # values list so a rejected-batch mismatch can be diagnosed here.
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Enhancio").set_value(True).run()
+    at.text_area(key="enhancio_allocations_input").set_value("120022,L-22256").run()
+    at.text_area(key="enhancio_field_map_cols_input").set_value("Email").run()
+    at.text_area(key="enhancio_field_map_targets_input").set_value("Email Address").run()
+
+    from core.app_settings import save_enhancio_client_id
+    save_enhancio_client_id("CID123")
+    at.run()
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.describe_fields", return_value=[
+             {"fieldLabel": "Email Address", "mandatory": "Y"},
+             {"fieldLabel": "Industry", "mandatory": "Y", "fieldValues": ["All"]},
+         ]):
+        next(b for b in at.button if b.label == "Test connection — allocation L-22256").click().run()
+
+    assert not at.exception
+    assert any("Allowed values: All" in c.value for c in at.caption)
 
 
 def test_box_tracker_lead_template_map_and_pacing_skip_fields_save(tmp_path, monkeypatch):
