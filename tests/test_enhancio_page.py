@@ -88,6 +88,58 @@ def test_upload_fills_micro_audience_for_a_cid_covered_by_the_box_tracker_rule(t
     assert captured_leads["leads"][0]["Micro Audience"] == "Platform_SWE"
 
 
+def test_upload_fills_asset_title_by_campaign_type_for_covered_cids(tmp_path, monkeypatch):
+    # CID 118741 ("Bob") is 2T -> asset_title should come from Second
+    # Asset; CID 120129 ("AU CXO") is 1T -> asset_title should come from
+    # Asset (there's no second touch for a 1T CID at all).
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="IBM APAC Interactive Avenues Pvt Ltd", accumulated_report_path=acc_path, field_mapping=fm,
+        enhancio=EnhancioConfig(
+            enabled=True,
+            allocations=[
+                EnhancioAllocationMapping(cid="118741", allocation_uid="L-22SD7"),
+                EnhancioAllocationMapping(cid="120129", allocation_uid="L-22UMP"),
+            ],
+            field_mapping={"Email": "Email Address", "asset_title": "asset_title"},
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+    save_enhancio_client_id("CID123")
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([
+        {"CID": "118741", "Email": "a@x.com", "Asset": "Normal Asset", "Second Asset": "Touch 2 Asset"},
+        {"CID": "120129", "Email": "b@x.com", "Asset": "Normal Only", "Second Asset": "Should Not Be Used"},
+    ]).to_csv(leads_csv, index=False)
+
+    captured_leads = {}
+
+    def _fake_import_leads(token, allocation_uid, leads):
+        captured_leads.setdefault(allocation_uid, []).extend(leads)
+        return {"submitted": [
+            {"leadId": f"lead-{allocation_uid}-{i}", "status": "Submitted", "email": lead["Email Address"]}
+            for i, lead in enumerate(leads)
+        ], "errors": []}
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value(
+            "IBM APAC Interactive Avenues Pvt Ltd").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+        assert not at.exception
+
+    assert captured_leads["L-22SD7"][0]["asset_title"] == "Touch 2 Asset"
+    assert captured_leads["L-22UMP"][0]["asset_title"] == "Normal Only"
+
+
 def _make_accumulated_with_status(path: str, rows: list[dict]) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active

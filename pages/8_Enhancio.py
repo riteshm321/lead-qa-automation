@@ -6,7 +6,9 @@ import pandas as pd
 import streamlit as st
 
 from core.app_settings import get_clients_dir, get_enhancio_client_id, get_jira_settings
-from core.box_tracker import has_micro_audience_override, micro_audience_for_lead
+from core.box_tracker import (
+    has_micro_audience_override, micro_audience_for_lead, has_asset_title_override, asset_title_for_lead,
+)
 from core.branding import configure_page
 from core import enhancio_client
 from core.enhancio_client import EnhancioError
@@ -148,10 +150,25 @@ if leads_df is not None:
     leads_df = leads_df.copy()
     _micro_audience_mask = leads_df[cid_column].astype(str).map(has_micro_audience_override)
     if _micro_audience_mask.any():
-        if "micro_audience" not in leads_df.columns:
-            leads_df["micro_audience"] = ""
+        # A leadfile/Accumulated Report column that's blank for every
+        # covered row infers a strict numeric/string dtype that a plain
+        # Python string can't be assigned into -- widen to plain object
+        # first, same reasoning as core.box_tracker.add_lead_template_columns.
+        leads_df["micro_audience"] = (
+            leads_df["micro_audience"].astype(object) if "micro_audience" in leads_df.columns else ""
+        )
         leads_df.loc[_micro_audience_mask, "micro_audience"] = leads_df.loc[_micro_audience_mask].apply(
             lambda row: micro_audience_for_lead(row[cid_column], row), axis=1)
+
+    # Same reasoning, for the touch-specific asset_title rule -- see
+    # core.box_tracker.asset_title_for_lead.
+    _asset_title_mask = leads_df[cid_column].astype(str).map(has_asset_title_override)
+    if _asset_title_mask.any():
+        leads_df["asset_title"] = (
+            leads_df["asset_title"].astype(object) if "asset_title" in leads_df.columns else ""
+        )
+        leads_df.loc[_asset_title_mask, "asset_title"] = leads_df.loc[_asset_title_mask].apply(
+            lambda row: asset_title_for_lead(row[cid_column], row), axis=1)
 
     # Every allocation this file's CIDs actually route to -- computed once
     # and reused below for the duplicate preview, test mode's per-allocation

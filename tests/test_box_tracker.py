@@ -8,7 +8,8 @@ from core.box_tracker import (
     append_mirror_rows, set_pacing_delivered, add_lead_template_columns,
     cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
     read_lead_template_constants, parse_amal_id, project_code_for_cid, campaign_type_for_cid,
-    uploaded_to_approval_sheet_label,
+    uploaded_to_approval_sheet_label, has_asset_title_override, asset_title_for_lead,
+    micro_audience_for_lead,
 )
 
 
@@ -381,8 +382,11 @@ def test_add_lead_template_columns_blank_for_unmapped_cid():
 
 
 def test_add_lead_template_columns_injects_template_constants_and_passthroughs():
+    # CID "999999" is deliberately not one of the CIDs with a known
+    # Campaign Type (1T/2T) -- those get asset_title from asset_title_for_lead
+    # instead of this plain passthrough (see the dedicated tests below).
     leads_df = pd.DataFrame([
-        {"CID": "118741", "LOB": "Software", "Asset Title": "Omdia Universe", "Country": "IN",
+        {"CID": "999999", "LOB": "Software", "Asset Title": "Omdia Universe", "Country": "IN",
          "Company Size": "1000-5000"},
     ])
     template_constants = {
@@ -441,14 +445,73 @@ def test_add_lead_template_columns_falls_back_to_now_when_timestamp_missing_or_u
 def test_add_lead_template_columns_without_template_constants_adds_nothing_extra():
     # Backward-compatible default -- callers that don't pass
     # template_constants (or asset_title/country columns aren't present)
-    # still just get micro_audience/Industry, same as before.
-    leads_df = pd.DataFrame([{"CID": "118741"}])
+    # still just get micro_audience/Industry, same as before. CID
+    # "999999" has no known Campaign Type, so asset_title_for_lead's
+    # override (which applies regardless of template_constants -- see
+    # the dedicated tests below) doesn't apply here either.
+    leads_df = pd.DataFrame([{"CID": "999999"}])
 
     result = add_lead_template_columns(leads_df, "CID")
 
     assert "AID" not in result.columns
     assert "asset_title" not in result.columns
     assert "user_transaction_date" not in result.columns
+
+
+def test_has_asset_title_override_is_true_only_for_cids_with_a_known_campaign_type():
+    assert has_asset_title_override("118741") is True   # Bob, 2T
+    assert has_asset_title_override("120129") is True   # AU CXO, 1T
+    assert has_asset_title_override("999999") is False  # not a known CID at all
+
+
+def test_asset_title_for_lead_uses_second_asset_for_2t_and_asset_for_1t():
+    assert asset_title_for_lead("118741", {"Asset": "Normal", "Second Asset": "Touch 2"}) == "Touch 2"  # Bob, 2T
+    assert asset_title_for_lead("120129", {"Asset": "Normal", "Second Asset": "Touch 2"}) == "Normal"  # AU CXO, 1T
+
+
+def test_asset_title_for_lead_treats_a_present_but_nan_column_as_blank():
+    # Regression test for a real crash: a column read back from Excel can
+    # EXIST but hold NaN for a genuinely blank cell -- row.get(col, "")
+    # returns that NaN as-is (the default only covers a missing key), not
+    # "". Assigning that raw NaN into a lead template column later crashed
+    # with a pandas dtype error instead of just being blank.
+    row = pd.Series({"Asset": float("nan"), "Second Asset": float("nan")})
+    assert asset_title_for_lead("118741", row) == ""  # Bob, 2T
+    assert asset_title_for_lead("120129", row) == ""  # AU CXO, 1T
+
+
+def test_micro_audience_for_lead_treats_a_present_but_nan_column_as_blank():
+    row = pd.Series({"LOB": float("nan"), "micro_audience": float("nan")})
+    assert micro_audience_for_lead("119750", row) == ""  # IN LOB
+    assert micro_audience_for_lead("120131", row) == ""  # IN DigiSov
+
+
+def test_add_lead_template_columns_fills_asset_title_by_campaign_type_regardless_of_template_constants():
+    # Regression test: for a CID with a known Campaign Type, asset_title
+    # must come from the touch-specific column (see asset_title_for_lead)
+    # -- overriding the plain "Asset Title" passthrough above -- and must
+    # apply even when template_constants isn't given at all.
+    leads_df = pd.DataFrame([
+        {"CID": "118741", "Asset": "Normal", "Second Asset": "Touch 2", "Asset Title": "Wrong"},  # Bob, 2T
+        {"CID": "120129", "Asset": "Normal", "Second Asset": "Touch 2", "Asset Title": "Wrong"},  # AU CXO, 1T
+    ])
+
+    result = add_lead_template_columns(leads_df, "CID")
+
+    assert result.loc[0, "asset_title"] == "Touch 2"
+    assert result.loc[1, "asset_title"] == "Normal"
+
+
+def test_add_lead_template_columns_asset_title_override_survives_an_all_blank_column(tmp_path):
+    # Regression test for a real crash: when every row's Asset Title (or
+    # asset_title, once template_constants has already copied it over) is
+    # blank, pandas infers a float64 column -- assigning the override's
+    # string value into that must not raise.
+    leads_df = pd.DataFrame([{"CID": "118741", "Asset Title": None}])  # Bob, 2T
+
+    result = add_lead_template_columns(leads_df, "CID", template_constants={"AID": "L-1"})
+
+    assert result.loc[0, "asset_title"] == ""
 
 
 def test_read_lead_template_constants_reads_the_first_row_with_a_non_blank_aid(tmp_path):

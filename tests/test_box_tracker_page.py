@@ -22,12 +22,12 @@ def _make_accumulated(path: str, rows: list[dict]) -> None:
     ws = wb.active
     ws.title = "Accumulated"
     ws.append(["Email", "First", "Last", "Company", "CID", "Status", "LOB", "Asset Title", "Country",
-               "Project Code", "AMAL ID", "Segment", "2nd Asset OV Code"])
+               "Project Code", "AMAL ID", "Segment", "2nd Asset OV Code", "Asset", "Second Asset"])
     for row in rows:
         ws.append([row["Email"], row["First"], row["Last"], row["Company"], row["CID"],
                     row.get("Status", ""), row.get("LOB", ""), row.get("Asset Title", ""), row.get("Country", ""),
                     row.get("Project Code", ""), row.get("AMAL ID", ""), row.get("Segment", ""),
-                    row.get("2nd Asset OV Code", "")])
+                    row.get("2nd Asset OV Code", ""), row.get("Asset", ""), row.get("Second Asset", "")])
     wb.create_sheet("Refund").append(["Email", "First", "Last", "Company", "CID", "Status", "Refund Reason"])
     wb.save(path)
 
@@ -182,7 +182,8 @@ def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existi
     template_path = str(tmp_path / "bob_template.xlsx")
     _make_accumulated(acc_path, [
         {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Sent for Approval - 07-Sep", "Asset Title": "Omdia Universe", "Country": "IN"},
+         "Status": "Sent for Approval - 07-Sep", "Asset Title": "Omdia Universe", "Country": "IN",
+         "Asset": "Normal Asset", "Second Asset": "Touch 2 Asset"},
     ])
     _make_mirror(mirror_path)
     # An existing lead from a previous cycle -- carries the AID/NC_*/
@@ -214,7 +215,7 @@ def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existi
     assert row["NC_EMAIL_DETAIL"] == "UC"
     assert row["NC_TELE_DETAIL"] == "UC"
     assert row["campaign_code"] == "PVLAP"
-    assert row["asset_title"] == "Omdia Universe"  # from Accumulated's own Asset Title
+    assert row["asset_title"] == "Touch 2 Asset"  # CID 118741 = Bob = 2T -> Second Asset, not Asset Title
     assert row["country"] == "IN"
     assert str(row["user_transaction_date"]).count(":") == 2  # HH:MM:SS present
 

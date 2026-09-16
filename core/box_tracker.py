@@ -407,6 +407,18 @@ def has_micro_audience_override(cid) -> bool:
     return cid in _MICRO_AUDIENCE_BY_CID or cid in _MICRO_AUDIENCE_FROM_LOB_CIDS or cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS
 
 
+def _blank_safe_get(row, column: str, default: str = "") -> object:
+    """row.get(column, default), except a column that EXISTS but holds a
+    genuinely blank cell (read back from Excel as NaN, not as a missing
+    key -- confirmed repeatedly in real data) also becomes `default`.
+    .get()'s own default only ever covers a missing key, not a NaN value,
+    so callers that skip this get "nan"-as-text or a dtype crash instead
+    of an actually-blank result.
+    """
+    value = row.get(column, default)
+    return default if pd.isna(value) else value
+
+
 def micro_audience_for_lead(cid: str, row, lob_column: str = "LOB") -> object:
     """One lead's micro_audience value: the leadfile's own LOB value for
     _MICRO_AUDIENCE_FROM_LOB_CIDS, the leadfile's own micro_audience value
@@ -420,10 +432,34 @@ def micro_audience_for_lead(cid: str, row, lob_column: str = "LOB") -> object:
     """
     cid = str(cid).strip()
     if cid in _MICRO_AUDIENCE_FROM_LOB_CIDS:
-        return row.get(lob_column, "")
+        return _blank_safe_get(row, lob_column)
     if cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS:
-        return row.get("micro_audience", "")
+        return _blank_safe_get(row, "micro_audience")
     return _MICRO_AUDIENCE_BY_CID.get(cid, "")
+
+
+_ASSET_TITLE_2T_COLUMN = "Second Asset"
+_ASSET_TITLE_1T_COLUMN = "Asset"
+
+
+def has_asset_title_override(cid) -> bool:
+    """True if this CID has a known Campaign Type (1T/2T) and therefore a
+    fixed asset_title source column -- see asset_title_for_lead."""
+    return campaign_type_for_cid(str(cid).strip()) != ""
+
+
+def asset_title_for_lead(cid: str, row) -> object:
+    """One lead's asset_title value, by Campaign Type: a 2T (two-touch)
+    CID's asset_title is its 2nd touch asset ("Second Asset"); a 1T
+    (one-touch) CID never has a second touch at all, so its asset_title
+    is just the only asset it has ("Asset"). `row` is anything supporting
+    .get(column, default) -- a pandas Series or a plain dict. Shared by
+    the Lead Template's add_lead_template_columns and the Enhancio
+    upload page, same reasoning as micro_audience_for_lead above.
+    """
+    if campaign_type_for_cid(str(cid).strip()) == "2T":
+        return _blank_safe_get(row, _ASSET_TITLE_2T_COLUMN)
+    return _blank_safe_get(row, _ASSET_TITLE_1T_COLUMN)
 
 
 def add_lead_template_columns(
@@ -443,10 +479,13 @@ def add_lead_template_columns(
     - template_constants (if given): AID/NC_EMAIL_DETAIL/NC_TELE_DETAIL/
       campaign_code (see read_lead_template_constants), set the same on
       every row.
-    - asset_title/country/Q_COMPS (if template_constants was given and the
-      leadfile has these columns): passed through from the leadfile's own
-      Asset Title/Country/Company Size columns under the Lead Template's
-      own header names.
+    - asset_title: for a CID with a known Campaign Type (1T/2T), the
+      touch-specific asset (see asset_title_for_lead) -- takes priority
+      over the plain passthrough below for the CIDs it covers.
+    - country/Q_COMPS, and asset_title itself for any OTHER CID (if
+      template_constants was given and the leadfile has these columns):
+      passed through from the leadfile's own Asset Title/Country/Company
+      Size columns under the Lead Template's own header names.
     - user_transaction_date (if template_constants was given): parsed
       per-row from the leadfile's own Timestamp column -- which arrives as
       plain text in whatever format the source system wrote it in -- and
@@ -478,5 +517,17 @@ def add_lead_template_columns(
             df["user_transaction_date"] = formatted.fillna(fallback)
         else:
             df["user_transaction_date"] = fallback
+
+    # Applied last so it wins over the generic Asset Title passthrough
+    # above for the CIDs it covers.
+    asset_title_mask = df[cid_column].astype(str).map(has_asset_title_override)
+    if asset_title_mask.any():
+        # A leadfile where every row's Asset Title is blank infers a
+        # float64 column (all-NaN) even after the passthrough above --
+        # assigning a string into that below raises TypeError, same
+        # reasoning as Customer Comments in core/complex_account.py.
+        df["asset_title"] = df["asset_title"].astype(object) if "asset_title" in df.columns else ""
+        df.loc[asset_title_mask, "asset_title"] = df.loc[asset_title_mask].apply(
+            lambda row: asset_title_for_lead(row[cid_column], row), axis=1)
 
     return df
