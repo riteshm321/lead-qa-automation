@@ -339,14 +339,18 @@ def test_manual_marking_handles_two_leads_with_a_blank_email_without_crashing(tm
     assert statuses.str.startswith("Uploaded to Approval Sheet").sum() == 1
 
 
-def test_write_cleared_leads_copies_lob_for_wxo_cids(tmp_path, monkeypatch):
+def test_write_cleared_leads_uses_fixed_micro_audience_for_in_lob_cid(tmp_path, monkeypatch):
+    # 119750 (IN LOB) is a fixed "LOB" value, same pattern as every other
+    # known CID -- not read from a leadfile column at all (confirmed
+    # against a real rejected batch: no such "LOB" column exists in
+    # practice, which used to silently blank micro_audience for this CID).
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
     mirror_path = str(tmp_path / "mirror.xlsx")
     template_path = str(tmp_path / "wxo_template.xlsx")
     _make_accumulated(acc_path, [
         {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "119750",
-         "Status": "Sent for Approval - 07-Sep", "LOB": "Cloud Infra"},
+         "Status": "Sent for Approval - 07-Sep"},
     ])
     _make_mirror(mirror_path)
     _make_lead_template(template_path, existing_rows=[
@@ -362,7 +366,7 @@ def test_write_cleared_leads_copies_lob_for_wxo_cids(tmp_path, monkeypatch):
 
     assert not at.exception
     template_df = pd.read_excel(template_path, sheet_name="LEAD_TEMPLATE")
-    assert template_df.loc[0, "micro_audience"] == "Cloud Infra"
+    assert template_df.loc[0, "micro_audience"] == "LOB"
     assert template_df.loc[0, "campaign_code"] == "PAIAP"  # carried over from the template's own row
 
 
@@ -376,9 +380,9 @@ def test_write_cleared_leads_combines_multiple_cids_sharing_one_template(tmp_pat
     template_path = str(tmp_path / "wxo_template.xlsx")
     _make_accumulated(acc_path, [
         {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118743",
-         "Status": "Sent for Approval - 07-Sep", "LOB": "Ops"},
+         "Status": "Sent for Approval - 07-Sep"},
         {"Email": "lead2@x.com", "First": "F", "Last": "L", "Company": "Y", "CID": "119750",
-         "Status": "Sent for Approval - 07-Sep", "LOB": "Cloud Infra"},
+         "Status": "Sent for Approval - 07-Sep"},
     ])
     _make_mirror(mirror_path)
     _make_lead_template(template_path, existing_rows=[
@@ -402,7 +406,7 @@ def test_write_cleared_leads_combines_multiple_cids_sharing_one_template(tmp_pat
     assert emails == {"lead1@x.com", "lead2@x.com"}
     micro_audience_by_email = dict(zip(template_df["Email"], template_df["micro_audience"]))
     assert micro_audience_by_email["lead1@x.com"] == "AI Leaders"  # fixed value for 118743
-    assert micro_audience_by_email["lead2@x.com"] == "Cloud Infra"  # LOB passthrough for 119750
+    assert micro_audience_by_email["lead2@x.com"] == "LOB"  # fixed value for 119750
 
 
 def test_write_cleared_leads_warns_when_no_template_path_configured(tmp_path, monkeypatch):

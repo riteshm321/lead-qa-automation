@@ -88,6 +88,55 @@ def test_upload_fills_micro_audience_for_a_cid_covered_by_the_box_tracker_rule(t
     assert captured_leads["leads"][0]["Micro Audience"] == "Platform_SWE"
 
 
+def test_upload_fills_micro_audience_with_fixed_value_for_wxo_au_even_with_a_stale_lob_column(tmp_path, monkeypatch):
+    # Regression test for a real production incident: 119751 ("WXO AU")
+    # was believed to source micro_audience from the leadfile's own "LOB"
+    # column, but the correct behavior (confirmed by the user) is that
+    # "LOB" IS the fixed value for this CID, not a column name -- no real
+    # leadfile has ever carried an actual "LOB" column, which silently
+    # blanked micro_audience for this CID (and 119750) every time.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="IBM APAC Interactive Avenues Pvt Ltd", accumulated_report_path=acc_path, field_mapping=fm,
+        enhancio=EnhancioConfig(
+            enabled=True,
+            allocations=[EnhancioAllocationMapping(cid="119751", allocation_uid="L-22SD9")],
+            field_mapping={"Email": "Email Address", "micro_audience": "Micro Audience"},
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+    save_enhancio_client_id("CID123")
+
+    leads_csv = tmp_path / "leads.csv"
+    # No "LOB" column at all -- matches every real leadfile seen in
+    # practice.
+    pd.DataFrame([{"CID": "119751", "Email": "a@x.com", "First Name": "A"}]).to_csv(leads_csv, index=False)
+
+    captured_leads = {}
+
+    def _fake_import_leads(token, allocation_uid, leads):
+        captured_leads["leads"] = leads
+        return {"submitted": [
+            {"leadId": "lead-1", "status": "Submitted", "email": leads[0]["Email Address"]},
+        ], "errors": []}
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value(
+            "IBM APAC Interactive Avenues Pvt Ltd").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+        assert not at.exception
+
+    assert captured_leads["leads"][0]["Micro Audience"] == "LOB"
+
+
 def test_upload_fills_asset_title_by_campaign_type_for_covered_cids(tmp_path, monkeypatch):
     # CID 118741 ("Bob") is 2T -> asset_title should come from Second
     # Asset; CID 120129 ("AU CXO") is 1T -> asset_title should come from

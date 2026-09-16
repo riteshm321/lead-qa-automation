@@ -341,18 +341,22 @@ def project_code_for_cid(cid: str, leadfile_value: str) -> str:
 # Fixed per-CID business rule for IBM APAC's Lead Template "micro_audience"
 # column -- not derived from the leadfile at all for these CIDs, same
 # pattern as Dell's AGREED_CONTACTED_BY_CID in core/complex_account.py.
+# 119750/119751 were originally thought to source this from the
+# leadfile's own "LOB" column, but confirmed otherwise: "LOB" is itself
+# the fixed value for both, same as every other CID here, not a column
+# name -- no leadfile in practice has ever carried a real "LOB" column,
+# which silently blanked micro_audience for these two.
 _MICRO_AUDIENCE_BY_CID = {
     "118741": "Platform_SWE",  # Bob
     "120129": "All",           # AU CXO
     "118743": "AI Leaders",    # IN WXO
     "118745": "AI Leaders",    # AU WXO
     "120130": "All_CXO",       # IN CXO
+    "119750": "LOB",           # IN LOB
+    "119751": "LOB",           # AU LOB
 }
-# These CIDs instead copy the leadfile's own LOB column value through as
-# micro_audience, rather than a fixed string.
-_MICRO_AUDIENCE_FROM_LOB_CIDS = {"119750", "119751"}  # IN LOB, AU LOB
 # IN DigiSov's leadfile carries its own micro_audience column directly
-# (not derived from LOB or a fixed value) -- passed through as-is.
+# (not a fixed value) -- passed through as-is.
 _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS = {"120131"}  # IN DigiSov
 _LEAD_TEMPLATE_INDUSTRY_VALUE = "All"
 
@@ -398,13 +402,13 @@ def read_lead_template_constants(template_path: str, sheet_name: str) -> dict[st
 
 def has_micro_audience_override(cid) -> bool:
     """True if this CID is covered by micro_audience_for_lead's rule at
-    all (fixed value, LOB passthrough, or own-column passthrough) --
-    lets a caller apply that rule only to the leads it actually covers,
-    instead of blanking every other CID's own micro_audience value (if it
-    has one) with the rule's default "no override" answer.
+    all (fixed value or own-column passthrough) -- lets a caller apply
+    that rule only to the leads it actually covers, instead of blanking
+    every other CID's own micro_audience value (if it has one) with the
+    rule's default "no override" answer.
     """
     cid = str(cid).strip()
-    return cid in _MICRO_AUDIENCE_BY_CID or cid in _MICRO_AUDIENCE_FROM_LOB_CIDS or cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS
+    return cid in _MICRO_AUDIENCE_BY_CID or cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS
 
 
 def _blank_safe_get(row, column: str, default: str = "") -> object:
@@ -419,20 +423,17 @@ def _blank_safe_get(row, column: str, default: str = "") -> object:
     return default if pd.isna(value) else value
 
 
-def micro_audience_for_lead(cid: str, row, lob_column: str = "LOB") -> object:
-    """One lead's micro_audience value: the leadfile's own LOB value for
-    _MICRO_AUDIENCE_FROM_LOB_CIDS, the leadfile's own micro_audience value
-    for _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS, else the fixed value from
-    _MICRO_AUDIENCE_BY_CID (blank for any other, unmapped CID). `row` is
-    anything supporting .get(column, default) -- a pandas Series (one row
-    of a DataFrame) or a plain dict. Shared by the Lead Template's
+def micro_audience_for_lead(cid: str, row) -> object:
+    """One lead's micro_audience value: the leadfile's own micro_audience
+    value for _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS, else the fixed value
+    from _MICRO_AUDIENCE_BY_CID (blank for any other, unmapped CID). `row`
+    is anything supporting .get(column, default) -- a pandas Series (one
+    row of a DataFrame) or a plain dict. Shared by the Lead Template's
     add_lead_template_columns and the Enhancio upload page, which both
     need this exact same per-CID rule applied to whichever leads they're
     each sending.
     """
     cid = str(cid).strip()
-    if cid in _MICRO_AUDIENCE_FROM_LOB_CIDS:
-        return _blank_safe_get(row, lob_column)
     if cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS:
         return _blank_safe_get(row, "micro_audience")
     return _MICRO_AUDIENCE_BY_CID.get(cid, "")
@@ -463,7 +464,7 @@ def asset_title_for_lead(cid: str, row) -> object:
 
 
 def add_lead_template_columns(
-    leads_df: pd.DataFrame, cid_column: str, lob_column: str = "LOB",
+    leads_df: pd.DataFrame, cid_column: str,
     template_constants: dict[str, object] | None = None,
     asset_title_column: str = "Asset Title", country_column: str = "Country",
     company_size_column: str = "Company Size",
@@ -471,10 +472,9 @@ def add_lead_template_columns(
 ) -> pd.DataFrame:
     """Adds/fills every Lead Template-only column on a copy of leads_df:
 
-    - micro_audience: the leadfile's own LOB value for
-      _MICRO_AUDIENCE_FROM_LOB_CIDS, the leadfile's own micro_audience
-      value for _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS, else the fixed value
-      from _MICRO_AUDIENCE_BY_CID (blank for any other, unmapped CID).
+    - micro_audience: the leadfile's own micro_audience value for
+      _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS, else the fixed value from
+      _MICRO_AUDIENCE_BY_CID (blank for any other, unmapped CID).
     - Industry: always _LEAD_TEMPLATE_INDUSTRY_VALUE ("All"), for every CID.
     - template_constants (if given): AID/NC_EMAIL_DETAIL/NC_TELE_DETAIL/
       campaign_code (see read_lead_template_constants), set the same on
@@ -496,7 +496,7 @@ def add_lead_template_columns(
     """
     df = leads_df.copy()
     df["micro_audience"] = [
-        micro_audience_for_lead(row.get(cid_column, ""), row, lob_column) for _, row in df.iterrows()
+        micro_audience_for_lead(row.get(cid_column, ""), row) for _, row in df.iterrows()
     ]
     df["Industry"] = _LEAD_TEMPLATE_INDUSTRY_VALUE
 

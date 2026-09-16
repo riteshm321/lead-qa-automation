@@ -335,34 +335,26 @@ def test_set_pacing_delivered_disambiguates_same_campaign_name_by_country(tmp_pa
 
 def test_add_lead_template_columns_uses_the_fixed_cid_map():
     leads_df = pd.DataFrame([
-        {"CID": "118741", "LOB": "Software"},   # Bob
-        {"CID": "120129", "LOB": "Finance"},    # AU CXO
-        {"CID": "118743", "LOB": "Ops"},        # IN WXO
-        {"CID": "118745", "LOB": "Ops"},        # AU WXO
-        {"CID": "120130", "LOB": "Finance"},    # IN CXO
+        {"CID": "118741"},   # Bob
+        {"CID": "120129"},   # AU CXO
+        {"CID": "118743"},   # IN WXO
+        {"CID": "118745"},   # AU WXO
+        {"CID": "120130"},   # IN CXO
+        {"CID": "119750"},   # IN LOB
+        {"CID": "119751"},   # AU LOB
     ])
 
     result = add_lead_template_columns(leads_df, "CID")
 
-    assert list(result["micro_audience"]) == ["Platform_SWE", "All", "AI Leaders", "AI Leaders", "All_CXO"]
-    assert list(result["Industry"]) == ["All", "All", "All", "All", "All"]
-
-
-def test_add_lead_template_columns_copies_lob_for_lob_sourced_cids():
-    leads_df = pd.DataFrame([
-        {"CID": "119750", "LOB": "Cloud Infra"},  # IN LOB (shares IN WXO template)
-        {"CID": "119751", "LOB": "Data & AI"},    # AU LOB (shares AU WXO template)
-    ])
-
-    result = add_lead_template_columns(leads_df, "CID")
-
-    assert list(result["micro_audience"]) == ["Cloud Infra", "Data & AI"]
-    assert list(result["Industry"]) == ["All", "All"]
+    assert list(result["micro_audience"]) == [
+        "Platform_SWE", "All", "AI Leaders", "AI Leaders", "All_CXO", "LOB", "LOB",
+    ]
+    assert list(result["Industry"]) == ["All"] * 7
 
 
 def test_add_lead_template_columns_copies_the_leadfiles_own_micro_audience_for_digisov():
-    # IN DigiSov (120131) is neither a fixed value nor sourced from LOB --
-    # the leadfile carries its own micro_audience column directly, which
+    # IN DigiSov (120131) is the only CID that isn't a fixed value -- the
+    # leadfile carries its own micro_audience column directly, which
     # passes straight through under the same header name.
     leads_df = pd.DataFrame([{"CID": "120131", "micro_audience": "Security Leaders"}])
 
@@ -373,7 +365,7 @@ def test_add_lead_template_columns_copies_the_leadfiles_own_micro_audience_for_d
 
 
 def test_add_lead_template_columns_blank_for_unmapped_cid():
-    leads_df = pd.DataFrame([{"CID": "999999", "LOB": "Anything"}])
+    leads_df = pd.DataFrame([{"CID": "999999"}])
 
     result = add_lead_template_columns(leads_df, "CID")
 
@@ -386,7 +378,7 @@ def test_add_lead_template_columns_injects_template_constants_and_passthroughs()
     # Campaign Type (1T/2T) -- those get asset_title from asset_title_for_lead
     # instead of this plain passthrough (see the dedicated tests below).
     leads_df = pd.DataFrame([
-        {"CID": "999999", "LOB": "Software", "Asset Title": "Omdia Universe", "Country": "IN",
+        {"CID": "999999", "Asset Title": "Omdia Universe", "Country": "IN",
          "Company Size": "1000-5000"},
     ])
     template_constants = {
@@ -481,9 +473,12 @@ def test_asset_title_for_lead_treats_a_present_but_nan_column_as_blank():
 
 
 def test_micro_audience_for_lead_treats_a_present_but_nan_column_as_blank():
-    row = pd.Series({"LOB": float("nan"), "micro_audience": float("nan")})
-    assert micro_audience_for_lead("119750", row) == ""  # IN LOB
+    # Only DigiSov (120131) actually reads a leadfile column -- every
+    # other known CID (119750/119751 included) is a fixed value, immune
+    # to whatever the leadfile's own columns hold.
+    row = pd.Series({"micro_audience": float("nan")})
     assert micro_audience_for_lead("120131", row) == ""  # IN DigiSov
+    assert micro_audience_for_lead("119750", row) == "LOB"  # IN LOB -- fixed value, not leadfile-derived
 
 
 def test_add_lead_template_columns_fills_asset_title_by_campaign_type_regardless_of_template_constants():
