@@ -8,6 +8,7 @@ import streamlit as st
 from core.app_settings import get_clients_dir, get_enhancio_client_id, get_jira_settings
 from core.box_tracker import (
     has_micro_audience_override, micro_audience_for_lead, has_asset_title_override, asset_title_for_lead,
+    has_industry_override, industry_for_lead,
 )
 from core.branding import configure_page
 from core import enhancio_client
@@ -170,6 +171,19 @@ if leads_df is not None:
         )
         leads_df.loc[_asset_title_mask, "asset_title"] = leads_df.loc[_asset_title_mask].apply(
             lambda row: asset_title_for_lead(row[cid_column], row), axis=1)
+
+    # Every known IBM APAC CID needs Industry forced to a fixed value on
+    # Enhancio upload too -- the leadfile's own real Industry values (e.g.
+    # "Professional Services") are rejected as "Invalid field value(s)"
+    # since Enhancio only accepts its own registered picklist, not free
+    # text. See core.box_tracker.has_industry_override.
+    _industry_mask = leads_df[cid_column].astype(str).map(has_industry_override)
+    if _industry_mask.any():
+        leads_df["Industry"] = (
+            leads_df["Industry"].astype(object) if "Industry" in leads_df.columns else ""
+        )
+        leads_df.loc[_industry_mask, "Industry"] = leads_df.loc[_industry_mask, cid_column].apply(
+            industry_for_lead)
 
     # Every allocation this file's CIDs actually route to -- computed once
     # and reused below for the duplicate preview, test mode's per-allocation

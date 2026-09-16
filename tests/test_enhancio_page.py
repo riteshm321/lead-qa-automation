@@ -189,6 +189,53 @@ def test_upload_fills_asset_title_by_campaign_type_for_covered_cids(tmp_path, mo
     assert captured_leads["L-22UMP"][0]["asset_title"] == "Normal Only"
 
 
+def test_upload_forces_industry_to_the_fixed_value_for_covered_cids(tmp_path, monkeypatch):
+    # Regression test: Enhancio rejected the leadfile's own real Industry
+    # values (e.g. "Professional Services") as "Invalid field value(s)" --
+    # Enhancio only accepts its own registered picklist. Confirmed by the
+    # user that Industry should always be "All" for every CID/AUID.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="IBM APAC Interactive Avenues Pvt Ltd", accumulated_report_path=acc_path, field_mapping=fm,
+        enhancio=EnhancioConfig(
+            enabled=True,
+            allocations=[EnhancioAllocationMapping(cid="118741", allocation_uid="L-22SD7")],
+            field_mapping={"Email": "Email Address", "Industry": "Industry"},
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+    save_enhancio_client_id("CID123")
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([
+        {"CID": "118741", "Email": "a@x.com", "Industry": "Professional Services"},
+    ]).to_csv(leads_csv, index=False)
+
+    captured_leads = {}
+
+    def _fake_import_leads(token, allocation_uid, leads):
+        captured_leads["leads"] = leads
+        return {"submitted": [
+            {"leadId": "lead-1", "status": "Submitted", "email": leads[0]["Email Address"]},
+        ], "errors": []}
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value(
+            "IBM APAC Interactive Avenues Pvt Ltd").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+        assert not at.exception
+
+    assert captured_leads["leads"][0]["Industry"] == "All"
+
+
 def _make_accumulated_with_status(path: str, rows: list[dict]) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active

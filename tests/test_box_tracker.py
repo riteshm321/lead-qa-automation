@@ -9,7 +9,7 @@ from core.box_tracker import (
     cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
     read_lead_template_constants, parse_amal_id, project_code_for_cid, campaign_type_for_cid,
     uploaded_to_approval_sheet_label, has_asset_title_override, asset_title_for_lead,
-    micro_audience_for_lead,
+    micro_audience_for_lead, has_industry_override, industry_for_lead,
 )
 
 
@@ -453,12 +453,14 @@ def test_add_lead_template_columns_without_template_constants_adds_nothing_extra
 def test_has_asset_title_override_is_true_only_for_cids_with_a_known_campaign_type():
     assert has_asset_title_override("118741") is True   # Bob, 2T
     assert has_asset_title_override("120129") is True   # AU CXO, 1T
+    assert has_asset_title_override("119751") is True   # AU LOB, 2T -- confirmed by the user
     assert has_asset_title_override("999999") is False  # not a known CID at all
 
 
 def test_asset_title_for_lead_uses_second_asset_for_2t_and_asset_for_1t():
     assert asset_title_for_lead("118741", {"Asset": "Normal", "Second Asset": "Touch 2"}) == "Touch 2"  # Bob, 2T
     assert asset_title_for_lead("120129", {"Asset": "Normal", "Second Asset": "Touch 2"}) == "Normal"  # AU CXO, 1T
+    assert asset_title_for_lead("119751", {"Asset": "Normal", "Second Asset": "Touch 2"}) == "Touch 2"  # AU LOB, 2T
 
 
 def test_asset_title_for_lead_treats_a_present_but_nan_column_as_blank():
@@ -470,6 +472,21 @@ def test_asset_title_for_lead_treats_a_present_but_nan_column_as_blank():
     row = pd.Series({"Asset": float("nan"), "Second Asset": float("nan")})
     assert asset_title_for_lead("118741", row) == ""  # Bob, 2T
     assert asset_title_for_lead("120129", row) == ""  # AU CXO, 1T
+
+
+def test_has_industry_override_is_true_only_for_cids_with_a_known_campaign_type():
+    # Every known IBM APAC CID needs Industry forced to a fixed value on
+    # Enhancio upload (confirmed by the user) -- same "known CID" test as
+    # has_asset_title_override.
+    assert has_industry_override("118741") is True   # Bob, 2T
+    assert has_industry_override("120129") is True   # AU CXO, 1T
+    assert has_industry_override("999999") is False  # not a known CID at all
+
+
+def test_industry_for_lead_is_always_the_fixed_value_for_a_known_cid():
+    assert industry_for_lead("118741") == "All"
+    assert industry_for_lead("120131") == "All"
+    assert industry_for_lead("999999") == ""  # not a known CID at all
 
 
 def test_micro_audience_for_lead_treats_a_present_but_nan_column_as_blank():

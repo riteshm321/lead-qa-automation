@@ -306,6 +306,8 @@ _CAMPAIGN_TYPE_BY_CID = {
     "118741": "2T",  # Bob
     "118743": "2T",  # IN WXO
     "118745": "2T",  # AU WXO
+    "119750": "2T",  # IN LOB
+    "119751": "2T",  # AU LOB
     "120129": "1T",  # AU CXO
     "120130": "1T",  # IN CXO
     "120131": "1T",  # IN DigiSov
@@ -358,7 +360,7 @@ _MICRO_AUDIENCE_BY_CID = {
 # IN DigiSov's leadfile carries its own micro_audience column directly
 # (not a fixed value) -- passed through as-is.
 _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS = {"120131"}  # IN DigiSov
-_LEAD_TEMPLATE_INDUSTRY_VALUE = "All"
+_INDUSTRY_OVERRIDE_VALUE = "All"
 
 
 # Every Lead Template row also carries four identifier columns that are
@@ -463,6 +465,24 @@ def asset_title_for_lead(cid: str, row) -> object:
     return _blank_safe_get(row, _ASSET_TITLE_1T_COLUMN)
 
 
+def has_industry_override(cid) -> bool:
+    """True if this CID is one of IBM APAC's known live CIDs -- same
+    "known CID" test as has_asset_title_override (every live CID has a
+    Campaign Type). All of them need Enhancio's Industry field forced to
+    the fixed _INDUSTRY_OVERRIDE_VALUE instead of a leadfile passthrough:
+    confirmed by the user after real leadfile Industry values ("Professional
+    Services" etc.) were rejected by Enhancio as "Invalid field value".
+    """
+    return campaign_type_for_cid(str(cid).strip()) != ""
+
+
+def industry_for_lead(cid: str) -> str:
+    """One lead's Industry value for Enhancio upload: the fixed
+    _INDUSTRY_OVERRIDE_VALUE for any CID covered by has_industry_override,
+    else blank (a leadfile passthrough, unaffected by this rule)."""
+    return _INDUSTRY_OVERRIDE_VALUE if has_industry_override(cid) else ""
+
+
 def add_lead_template_columns(
     leads_df: pd.DataFrame, cid_column: str,
     template_constants: dict[str, object] | None = None,
@@ -475,7 +495,7 @@ def add_lead_template_columns(
     - micro_audience: the leadfile's own micro_audience value for
       _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS, else the fixed value from
       _MICRO_AUDIENCE_BY_CID (blank for any other, unmapped CID).
-    - Industry: always _LEAD_TEMPLATE_INDUSTRY_VALUE ("All"), for every CID.
+    - Industry: always _INDUSTRY_OVERRIDE_VALUE ("All"), for every CID.
     - template_constants (if given): AID/NC_EMAIL_DETAIL/NC_TELE_DETAIL/
       campaign_code (see read_lead_template_constants), set the same on
       every row.
@@ -498,7 +518,7 @@ def add_lead_template_columns(
     df["micro_audience"] = [
         micro_audience_for_lead(row.get(cid_column, ""), row) for _, row in df.iterrows()
     ]
-    df["Industry"] = _LEAD_TEMPLATE_INDUSTRY_VALUE
+    df["Industry"] = _INDUSTRY_OVERRIDE_VALUE
 
     if template_constants:
         for name, value in template_constants.items():
