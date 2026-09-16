@@ -15,7 +15,9 @@ from core.enhancio_sync import (
     load_uploaded_emails, save_uploaded_emails, clear_uploaded_emails, filter_already_uploaded,
     select_rows_for_test_mode, format_enhancio_field_value,
 )
-from core.excel_io import read_leadfile, append_leads, read_sheet_as_dataframe, set_status_for_emails
+from core.excel_io import (
+    read_leadfile, append_leads, read_sheet_as_dataframe, set_status_for_emails, dataframe_to_excel_bytes,
+)
 from core import jira_client
 from core.jira_client import JiraError
 from core.profile_store import list_profile_names, load_profile
@@ -201,6 +203,94 @@ if leads_df is not None:
                 queue_toast_before_rerun(f"Cleared already-uploaded memory for allocation {_uid}.")
                 st.rerun()
 
+    def _plan_sends(source_df: pd.DataFrame) -> tuple[dict[str, pd.DataFrame], list[dict]]:
+        """Exactly which leads would be sent to which allocation, applying
+        test mode and per-allocation dedup -- the single source of truth
+        both the preview below and the actual "Upload to Enhancio" button
+        use, so they can never disagree about what's about to go out.
+        Returns ({allocation_uid: send_df}, [skip/error result dicts]).
+        """
+        skip_results: list[dict] = []
+        upload_df = source_df
+
+        if _test_mode:
+            send_df, skipped_df = select_rows_for_test_mode(
+                upload_df, cid_column, _allocation_by_cid,
+                email_column=_leadfile_mapping.email,
+                already_uploaded_by_allocation=_already_uploaded_by_allocation,
+            )
+            for _, lead in skipped_df.iterrows():
+                _cid = str(lead[cid_column])
+                skip_results.append({
+                    "CID": _cid, "Email": lead.get(_leadfile_mapping.email, ""),
+                    "Result": f"⏭️ Skipped (test mode — allocation {_allocation_by_cid[_cid]} "
+                              "already tested via another CID)",
+                })
+            # A CID with no allocation mapping at all is excluded from both
+            # send_df/skipped_df above (test mode has nothing to do with
+            # that) -- keep those rows in play so they still get the
+            # correct "No Enhancio allocation mapped" error below, not
+            # silently vanish.
+            unmapped_df = upload_df[~upload_df[cid_column].astype(str).isin(_allocation_by_cid)]
+            upload_df = pd.concat([send_df, unmapped_df])
+
+        # Rows to actually send, grouped by allocation_uid rather than CID --
+        # several CIDs commonly share one allocation, the Lead Import API
+        # takes a whole batch of leads per allocation in one call rather
+        # than one HTTP request per lead, and "already uploaded" is checked
+        # per allocation too (see load_uploaded_emails).
+        df_by_allocation: dict[str, list] = defaultdict(list)
+        for cid, group in upload_df.groupby(upload_df[cid_column].astype(str)):
+            allocation_uid = _allocation_by_cid.get(cid)
+            if allocation_uid is None:
+                for _, lead in group.iterrows():
+                    skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
+                                     "Result": "❌ No Enhancio allocation mapped for this CID"})
+                continue
+            df_by_allocation[allocation_uid].append(group)
+
+        send_by_allocation: dict[str, pd.DataFrame] = {}
+        for allocation_uid, groups in df_by_allocation.items():
+            allocation_df = pd.concat(groups)
+            already_uploaded = _already_uploaded_by_allocation[allocation_uid]
+            send_df, dup_df = filter_already_uploaded(allocation_df, _leadfile_mapping.email, already_uploaded)
+            if _reupload_duplicates:
+                send_df = pd.concat([send_df, dup_df])
+                dup_df = dup_df.iloc[0:0]
+            for _, lead in dup_df.iterrows():
+                skip_results.append({
+                    "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
+                    "Result": "⏭️ Skipped (already uploaded to this allocation previously)",
+                })
+            if not send_df.empty:
+                send_by_allocation[allocation_uid] = send_df
+
+        return send_by_allocation, skip_results
+
+    _preview_send_by_allocation, _preview_skip_results = _plan_sends(leads_df)
+    with st.expander(
+        f"📋 Preview leads to send ({sum(len(df) for df in _preview_send_by_allocation.values())} lead(s) "
+        f"across {len(_preview_send_by_allocation)} allocation(s))",
+    ):
+        st.caption(
+            "The exact rows that will be sent if you click \"Upload to Enhancio\" below right now — "
+            "already reflects Test mode and any duplicate-skipping above. Nothing here has been sent yet."
+        )
+        if not _preview_send_by_allocation:
+            st.caption("Nothing would be sent — every lead is either already uploaded or unmapped.")
+        else:
+            for _uid, _df in _preview_send_by_allocation.items():
+                st.write(f"**Allocation {_uid}** — {len(_df)} lead(s)")
+            _preview_combined = pd.concat([
+                _df.assign(**{"Enhancio Allocation": _uid}) for _uid, _df in _preview_send_by_allocation.items()
+            ])
+            st.download_button(
+                "⬇️ Download these leads (.xlsx)",
+                dataframe_to_excel_bytes(_preview_combined, sheet_name="Leads to send"),
+                file_name=f"enhancio_preview_{client_name}.xlsx",
+                key="enhancio_preview_download",
+            )
+
     if st.button("Upload to Enhancio", type="primary"):
         _token = _get_token()
 
@@ -208,59 +298,10 @@ if leads_df is not None:
         _newly_pending: dict[str, dict] = {}
         _newly_uploaded_emails_by_allocation: dict[str, set[str]] = defaultdict(set)
 
-        _upload_df = leads_df
+        _send_by_allocation, _skip_results = _plan_sends(leads_df)
+        results.extend(_skip_results)
 
-        if _test_mode:
-            _send_df, _skipped_df = select_rows_for_test_mode(
-                _upload_df, cid_column, _allocation_by_cid,
-                email_column=_leadfile_mapping.email,
-                already_uploaded_by_allocation=_already_uploaded_by_allocation,
-            )
-            for _, lead in _skipped_df.iterrows():
-                _cid = str(lead[cid_column])
-                results.append({
-                    "CID": _cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                    "Result": f"⏭️ Skipped (test mode — allocation {_allocation_by_cid[_cid]} "
-                              "already tested via another CID)",
-                })
-            # A CID with no allocation mapping at all is excluded from both
-            # _send_df/_skipped_df above (test mode has nothing to do with
-            # that) -- keep those rows in play so they still get the
-            # correct "No Enhancio allocation mapped" error below, not
-            # silently vanish.
-            _unmapped_df = _upload_df[~_upload_df[cid_column].astype(str).isin(_allocation_by_cid)]
-            _upload_df = pd.concat([_send_df, _unmapped_df])
-
-        # Rows to actually send, grouped by allocation_uid rather than CID --
-        # several CIDs commonly share one allocation, the Lead Import API
-        # takes a whole batch of leads per allocation in one call rather
-        # than one HTTP request per lead, and "already uploaded" is checked
-        # per allocation too (see load_uploaded_emails).
-        _df_by_allocation: dict[str, list] = defaultdict(list)
-        for cid, group in _upload_df.groupby(_upload_df[cid_column].astype(str)):
-            allocation_uid = _allocation_by_cid.get(cid)
-            if allocation_uid is None:
-                for _, lead in group.iterrows():
-                    results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                                     "Result": "❌ No Enhancio allocation mapped for this CID"})
-                continue
-            _df_by_allocation[allocation_uid].append(group)
-
-        for allocation_uid, groups in _df_by_allocation.items():
-            allocation_df = pd.concat(groups)
-            _already_uploaded = _already_uploaded_by_allocation[allocation_uid]
-            _send_df, _dup_df = filter_already_uploaded(allocation_df, _leadfile_mapping.email, _already_uploaded)
-            if _reupload_duplicates:
-                _send_df = pd.concat([_send_df, _dup_df])
-                _dup_df = _dup_df.iloc[0:0]
-            for _, lead in _dup_df.iterrows():
-                results.append({
-                    "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
-                    "Result": "⏭️ Skipped (already uploaded to this allocation previously)",
-                })
-            if _send_df.empty:
-                continue
-
+        for allocation_uid, _send_df in _send_by_allocation.items():
             # Fixed values (confirmed once on Client Setup, per allocation --
             # a field like Company Size that's the same for every lead sent
             # to this allocation rather than read from the leadfile) applied

@@ -12,7 +12,7 @@ from core.convertr_sync import (
     rejection_reason_from_result, load_pending_leads, save_pending_leads, remove_pending_leads,
     load_uploaded_emails, save_uploaded_emails, filter_already_uploaded, select_rows_for_test_mode,
 )
-from core.excel_io import read_leadfile, append_leads
+from core.excel_io import read_leadfile, append_leads, dataframe_to_excel_bytes
 from core import jira_client
 from core.jira_client import JiraError
 from core.profile_store import list_profile_names, load_profile
@@ -89,6 +89,87 @@ if _upload_file:
             help="Leave unchecked to skip them as usual (recommended, avoids duplicate submissions to Convertr).",
         )
 
+    def _plan_sends(source_df: pd.DataFrame) -> tuple[dict[str, pd.DataFrame], list[dict]]:
+        """Exactly which leads would be sent for which CID, applying
+        per-client dedup and test mode -- the single source of truth both
+        the preview below and the actual "Upload to Convertr" button use,
+        so they can never disagree about what's about to go out. Grouped
+        by CID (not campaign_id), matching the leadfile's own routing key
+        -- a campaign can be shared by more than one CID.
+        Returns ({cid: send_df}, [skip/error result dicts]).
+        """
+        skip_results: list[dict] = []
+
+        already_uploaded = load_uploaded_emails(client_name)
+        upload_df, dup_df = filter_already_uploaded(source_df, _leadfile_mapping.email, already_uploaded)
+        if _reupload_duplicates:
+            upload_df = pd.concat([upload_df, dup_df])
+            dup_df = dup_df.iloc[0:0]
+        for _, lead in dup_df.iterrows():
+            skip_results.append({
+                "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
+                "Result": "⏭️ Skipped (already uploaded previously)",
+            })
+
+        if _test_mode:
+            cid_to_campaign_id = {cid: m.campaign_id for cid, m in _campaign_by_cid.items()}
+            send_df, skipped_df = select_rows_for_test_mode(upload_df, cid_column, cid_to_campaign_id)
+            for _, lead in skipped_df.iterrows():
+                _cid = str(lead[cid_column])
+                skip_results.append({
+                    "CID": _cid, "Email": lead.get(_leadfile_mapping.email, ""),
+                    "Result": f"⏭️ Skipped (test mode — campaign {cid_to_campaign_id[_cid]} "
+                              "already tested via another CID)",
+                })
+            # A CID with no campaign mapping at all is excluded from both
+            # send_df/skipped_df above (test mode has nothing to do with
+            # that) -- keep those rows in play so they still get the
+            # correct "No Convertr campaign mapped" error below, not
+            # silently vanish.
+            unmapped_df = upload_df[~upload_df[cid_column].astype(str).isin(cid_to_campaign_id)]
+            upload_df = pd.concat([send_df, unmapped_df])
+
+        send_by_cid: dict[str, pd.DataFrame] = {}
+        for cid, group in upload_df.groupby(upload_df[cid_column].astype(str)):
+            mapping = _campaign_by_cid.get(cid)
+            if mapping is None:
+                for _, lead in group.iterrows():
+                    skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
+                                     "Result": "❌ No Convertr campaign mapped for this CID"})
+                continue
+            if not mapping.global_form_id:
+                for _, lead in group.iterrows():
+                    skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
+                                     "Result": f"❌ No Form ID saved for campaign {mapping.campaign_id}"})
+                continue
+            send_by_cid[cid] = group
+
+        return send_by_cid, skip_results
+
+    _preview_send_by_cid, _preview_skip_results = _plan_sends(leads_df)
+    with st.expander(
+        f"📋 Preview leads to send ({sum(len(df) for df in _preview_send_by_cid.values())} lead(s) "
+        f"across {len(_preview_send_by_cid)} CID(s))",
+    ):
+        st.caption(
+            "The exact rows that will be sent if you click \"Upload to Convertr\" below right now — "
+            "already reflects Test mode and any duplicate-skipping above. Nothing here has been sent yet."
+        )
+        if not _preview_send_by_cid:
+            st.caption(
+                "Nothing would be sent — every lead is either already uploaded, unmapped, or missing a Form ID.")
+        else:
+            for _cid, _df in _preview_send_by_cid.items():
+                _mapping = _campaign_by_cid[_cid]
+                st.write(f"**CID {_cid}** (campaign {_mapping.campaign_id}) — {len(_df)} lead(s)")
+            _preview_combined = pd.concat(list(_preview_send_by_cid.values()))
+            st.download_button(
+                "⬇️ Download these leads (.xlsx)",
+                dataframe_to_excel_bytes(_preview_combined, sheet_name="Leads to send"),
+                file_name=f"convertr_preview_{client_name}.xlsx",
+                key="convertr_preview_download",
+            )
+
     if st.button("Upload to Convertr", type="primary"):
         _creds = get_convertr_account_credentials(client_name)
         if not _creds["username"] or not _creds["password"]:
@@ -105,48 +186,11 @@ if _upload_file:
         _newly_pending: dict[str, dict] = {}
         _newly_uploaded_emails: set[str] = set()
 
-        _already_uploaded = load_uploaded_emails(client_name)
-        _upload_df, _dup_df = filter_already_uploaded(leads_df, _leadfile_mapping.email, _already_uploaded)
-        if _reupload_duplicates:
-            _upload_df = pd.concat([_upload_df, _dup_df])
-            _dup_df = _dup_df.iloc[0:0]
-        for _, lead in _dup_df.iterrows():
-            results.append({
-                "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
-                "Result": "⏭️ Skipped (already uploaded previously)",
-            })
+        _send_by_cid, _skip_results = _plan_sends(leads_df)
+        results.extend(_skip_results)
 
-        if _test_mode:
-            _cid_to_campaign_id = {cid: m.campaign_id for cid, m in _campaign_by_cid.items()}
-            _send_df, _skipped_df = select_rows_for_test_mode(_upload_df, cid_column, _cid_to_campaign_id)
-            for _, lead in _skipped_df.iterrows():
-                _cid = str(lead[cid_column])
-                results.append({
-                    "CID": _cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                    "Result": f"⏭️ Skipped (test mode — campaign {_cid_to_campaign_id[_cid]} "
-                              "already tested via another CID)",
-                })
-            # A CID with no campaign mapping at all is excluded from both
-            # _send_df/_skipped_df above (test mode has nothing to do with
-            # that) -- keep those rows in play so they still get the
-            # correct "No Convertr campaign mapped" error below, not
-            # silently vanish.
-            _unmapped_df = _upload_df[~_upload_df[cid_column].astype(str).isin(_cid_to_campaign_id)]
-            _upload_df = pd.concat([_send_df, _unmapped_df])
-
-        for cid, group in _upload_df.groupby(_upload_df[cid_column].astype(str)):
-            mapping = _campaign_by_cid.get(cid)
-            if mapping is None:
-                for _, lead in group.iterrows():
-                    results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                                     "Result": "❌ No Convertr campaign mapped for this CID"})
-                continue
-            if not mapping.global_form_id:
-                for _, lead in group.iterrows():
-                    results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                                     "Result": f"❌ No Form ID saved for campaign {mapping.campaign_id}"})
-                continue
-
+        for cid, group in _send_by_cid.items():
+            mapping = _campaign_by_cid[cid]
             for _, lead in group.iterrows():
                 form_data = {
                     convertr_field: str(lead.get(leadfile_col, "") or "")

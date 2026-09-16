@@ -192,6 +192,40 @@ def test_upload_batches_leads_by_allocation_and_reports_results(tmp_path, monkey
     assert any("lead-L-22257" in r for r in results_df["Result"])
 
 
+def test_preview_shows_leads_to_send_without_calling_the_api(tmp_path, monkeypatch):
+    # The user must be able to see exactly what would be sent, and
+    # download it, before ever clicking "Upload to Enhancio" -- this
+    # must never call import_leads.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_enhancio_client_id("CID123")
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([
+        {"CID": "120022", "Email": "a@x.com", "First Name": "A", "Last Name": "One", "Company": "Acme"},
+        {"CID": "120028", "Email": "b@x.com", "First Name": "B", "Last Name": "Two", "Company": "Acme"},
+    ]).to_csv(leads_csv, index=False)
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.import_leads") as mock_import_leads:
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+
+        assert not at.exception
+        mock_import_leads.assert_not_called()
+
+    preview_expander = next(e for e in at.expander if e.label.startswith("📋 Preview leads to send"))
+    assert "2 lead(s)" in preview_expander.label
+    assert "2 allocation(s)" in preview_expander.label
+    assert any(dl.key == "enhancio_preview_download" for dl in at.download_button)
+
+
 def test_upload_keeps_and_saves_successes_when_batch_also_has_rejected_leads(tmp_path, monkeypatch):
     # Regression test for a real production incident: Enhancio accepted 29
     # of 160 leads in one batch and rejected 131 as duplicates, all in the
