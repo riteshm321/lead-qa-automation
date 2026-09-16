@@ -396,6 +396,36 @@ def read_lead_template_constants(template_path: str, sheet_name: str) -> dict[st
         wb.close()
 
 
+def has_micro_audience_override(cid) -> bool:
+    """True if this CID is covered by micro_audience_for_lead's rule at
+    all (fixed value, LOB passthrough, or own-column passthrough) --
+    lets a caller apply that rule only to the leads it actually covers,
+    instead of blanking every other CID's own micro_audience value (if it
+    has one) with the rule's default "no override" answer.
+    """
+    cid = str(cid).strip()
+    return cid in _MICRO_AUDIENCE_BY_CID or cid in _MICRO_AUDIENCE_FROM_LOB_CIDS or cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS
+
+
+def micro_audience_for_lead(cid: str, row, lob_column: str = "LOB") -> object:
+    """One lead's micro_audience value: the leadfile's own LOB value for
+    _MICRO_AUDIENCE_FROM_LOB_CIDS, the leadfile's own micro_audience value
+    for _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS, else the fixed value from
+    _MICRO_AUDIENCE_BY_CID (blank for any other, unmapped CID). `row` is
+    anything supporting .get(column, default) -- a pandas Series (one row
+    of a DataFrame) or a plain dict. Shared by the Lead Template's
+    add_lead_template_columns and the Enhancio upload page, which both
+    need this exact same per-CID rule applied to whichever leads they're
+    each sending.
+    """
+    cid = str(cid).strip()
+    if cid in _MICRO_AUDIENCE_FROM_LOB_CIDS:
+        return row.get(lob_column, "")
+    if cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS:
+        return row.get("micro_audience", "")
+    return _MICRO_AUDIENCE_BY_CID.get(cid, "")
+
+
 def add_lead_template_columns(
     leads_df: pd.DataFrame, cid_column: str, lob_column: str = "LOB",
     template_constants: dict[str, object] | None = None,
@@ -426,16 +456,9 @@ def add_lead_template_columns(
       blank, or unparseable.
     """
     df = leads_df.copy()
-    micro_audience = []
-    for _, row in df.iterrows():
-        cid = str(row.get(cid_column, "")).strip()
-        if cid in _MICRO_AUDIENCE_FROM_LOB_CIDS:
-            micro_audience.append(row.get(lob_column, ""))
-        elif cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS:
-            micro_audience.append(row.get("micro_audience", ""))
-        else:
-            micro_audience.append(_MICRO_AUDIENCE_BY_CID.get(cid, ""))
-    df["micro_audience"] = micro_audience
+    df["micro_audience"] = [
+        micro_audience_for_lead(row.get(cid_column, ""), row, lob_column) for _, row in df.iterrows()
+    ]
     df["Industry"] = _LEAD_TEMPLATE_INDUSTRY_VALUE
 
     if template_constants:

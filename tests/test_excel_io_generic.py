@@ -315,6 +315,35 @@ def test_append_leads_matches_headers_via_known_synonym_group(tmp_path):
     assert unmatched == []
 
 
+def test_append_leads_does_not_match_a_short_leadfile_column_into_a_longer_target(tmp_path):
+    # Regression test for a real bug: the leadfile has "Asset" but no
+    # "Second Asset" column at all, yet "Second Asset" was silently
+    # getting filled with "Asset"'s value -- normalized "asset" is a
+    # substring of normalized "secondasset", and the containment tier
+    # used to match in EITHER direction. "Second Asset" is a genuinely
+    # distinct field from "Asset", not "Asset" with noise appended, so
+    # this direction must stay unmatched (and does NOT regress the
+    # opposite, intended direction -- see the Referential test above).
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "Asset", "Second Asset"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([{"Email_Address": "bob@x.com", "First_Name": "Bob",
+                               "Last_Name": "Lee", "Company_Name": "Beta", "Asset": "Whitepaper A"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    unmatched = append_leads(path, "Accumulated", leads_df, field_mapping, run_date="2026-08-13")
+
+    ws = openpyxl.load_workbook(path)["Accumulated"]
+    assert ws.cell(row=2, column=5).value == "Whitepaper A"  # Asset -> Asset, exact match
+    assert ws.cell(row=2, column=6).value is None  # Second Asset left blank, not "Whitepaper A"
+    assert unmatched == ["Second Asset"]
+
+
 def test_append_leads_leaves_ambiguous_containment_matches_unmatched(tmp_path):
     # Two leadfile columns both contain "region" — auto-picking either one
     # risks silently wiring the wrong data into a client's real report, so

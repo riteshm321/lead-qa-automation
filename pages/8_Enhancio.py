@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from core.app_settings import get_clients_dir, get_enhancio_client_id, get_jira_settings
+from core.box_tracker import has_micro_audience_override, micro_audience_for_lead
 from core.branding import configure_page
 from core import enhancio_client
 from core.enhancio_client import EnhancioError
@@ -133,6 +134,22 @@ if leads_df is not None:
     if not cid_column or cid_column not in leads_df.columns:
         st.error(f"This client's CID column (\"{cid_column}\") isn't in the uploaded file.")
         st.stop()
+
+    # A few CIDs need micro_audience computed per a fixed business rule
+    # (or derived from LOB/the leadfile's own micro_audience column)
+    # instead of a plain leadfile passthrough -- the exact same rule the
+    # Box Tracker Lead Template already applies for these same CIDs (see
+    # core.box_tracker.micro_audience_for_lead). Only rows whose CID is
+    # actually covered by that rule are touched, so a different client's
+    # own "micro_audience" column (if it happens to have one) is never
+    # blanked out by this running for an unrelated CID.
+    leads_df = leads_df.copy()
+    _micro_audience_mask = leads_df[cid_column].astype(str).map(has_micro_audience_override)
+    if _micro_audience_mask.any():
+        if "micro_audience" not in leads_df.columns:
+            leads_df["micro_audience"] = ""
+        leads_df.loc[_micro_audience_mask, "micro_audience"] = leads_df.loc[_micro_audience_mask].apply(
+            lambda row: micro_audience_for_lead(row[cid_column], row), axis=1)
 
     # Every allocation this file's CIDs actually route to -- computed once
     # and reused below for the duplicate preview, test mode's per-allocation

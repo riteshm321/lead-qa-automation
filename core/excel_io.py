@@ -557,10 +557,16 @@ def _find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str,
     2. Known synonym group (handles genuinely different wording for the same
        field, like "Company Size" vs "Employee Size" — see
        _PASSTHROUGH_SYNONYM_GROUPS above).
-    3. Containment: one normalized string is fully contained in the other
-       (handles suffix/prefix noise like "Referential") — guarded by a
-       minimum length so short strings ("cid") don't swallow unrelated
-       columns.
+    3. Containment: the target header is fully contained inside a leadfile
+       column's own (longer) text (handles suffix/prefix noise like
+       "Referential") — guarded by a minimum length so short strings
+       ("cid") don't swallow unrelated columns. Deliberately one-directional
+       (leadfile column contains target, never the reverse) -- confirmed in
+       a real client's data that the reverse direction wrongly matches a
+       genuinely different, shorter leadfile column into a longer target
+       that merely happens to contain it as a substring (e.g. leadfile
+       "Asset" auto-matching into target "Second Asset", which is a
+       distinct field, not "Asset" with noise appended).
     4. Fuzzy similarity (rapidfuzz) above a high threshold, for typos and
        reordered words.
 
@@ -583,7 +589,7 @@ def _find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str,
     if len(header_norm) >= _CONTAINMENT_MIN_LEN:
         candidates = [
             orig for norm, orig in lead_headers_norm.items()
-            if len(norm) >= _CONTAINMENT_MIN_LEN and (norm in header_norm or header_norm in norm)
+            if len(norm) >= _CONTAINMENT_MIN_LEN and header_norm in norm
         ]
         if len(candidates) == 1:
             return candidates[0]

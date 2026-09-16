@@ -42,6 +42,52 @@ def _save_profile(acc_path: str, jira_ticket_key: str = "", accumulated_report_l
     return profile
 
 
+def test_upload_fills_micro_audience_for_a_cid_covered_by_the_box_tracker_rule(tmp_path, monkeypatch):
+    # CID 118741 ("Bob") is one of IBM APAC's fixed micro_audience CIDs
+    # (core.box_tracker._MICRO_AUDIENCE_BY_CID -> "Platform_SWE") -- the
+    # same rule the Box Tracker Lead Template already applies must also
+    # fill it in here, purely from the CID, with no LOB/micro_audience
+    # column in the leadfile at all.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="IBM APAC Interactive Avenues Pvt Ltd", accumulated_report_path=acc_path, field_mapping=fm,
+        enhancio=EnhancioConfig(
+            enabled=True,
+            allocations=[EnhancioAllocationMapping(cid="118741", allocation_uid="L-22SD7")],
+            field_mapping={"Email": "Email Address", "micro_audience": "Micro Audience"},
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+    save_enhancio_client_id("CID123")
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([{"CID": "118741", "Email": "a@x.com", "First Name": "A"}]).to_csv(leads_csv, index=False)
+
+    captured_leads = {}
+
+    def _fake_import_leads(token, allocation_uid, leads):
+        captured_leads["leads"] = leads
+        return {"submitted": [
+            {"leadId": "lead-1", "status": "Submitted", "email": leads[0]["Email Address"]},
+        ], "errors": []}
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value(
+            "IBM APAC Interactive Avenues Pvt Ltd").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+        assert not at.exception
+
+    assert captured_leads["leads"][0]["Micro Audience"] == "Platform_SWE"
+
+
 def _make_accumulated_with_status(path: str, rows: list[dict]) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
