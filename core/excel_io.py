@@ -605,6 +605,17 @@ def _find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str,
     return None
 
 
+# "/" inside an Excel number format code isn't a literal slash -- it's a
+# placeholder for "the date separator configured in Windows' Regional
+# Settings", so an unescaped "mm/dd/yyyy" silently renders as "mm-dd-yyyy"
+# (or any other separator) on a machine whose date separator is set to
+# "-", regardless of what this code writes. Escaping with a backslash
+# forces a literal "/" no matter the reader's locale -- confirmed root
+# cause of Dell EMEA's Capture Date still showing dashes after the format
+# was already correctly set to "mm/dd/yyyy".
+_DATE_NUMBER_FORMAT = "mm\\/dd\\/yyyy"
+
+
 def append_leads(
     accumulated_path: str,
     tab_name: str,
@@ -738,7 +749,7 @@ def append_leads(
                 # can't group it — give it an explicit date format so it shows
                 # and filters like a real date instead.
                 if was_general_format and isinstance(cell.value, (datetime.date, datetime.datetime)):
-                    cell.number_format = "mm/dd/yyyy"
+                    cell.number_format = _DATE_NUMBER_FORMAT
                 # "Capture Date" specifically must always render mm/dd/yyyy,
                 # even when style_template_row's own cell already carried
                 # some OTHER inherited format (e.g. left over from however
@@ -746,7 +757,7 @@ def append_leads(
                 # format is what column_styles copied above, so the
                 # was_general_format check alone isn't enough here.
                 elif header_norm == "capturedate" and isinstance(cell.value, (datetime.date, datetime.datetime)):
-                    cell.number_format = "mm/dd/yyyy"
+                    cell.number_format = _DATE_NUMBER_FORMAT
 
     if highlight_fill and not leads_df.empty:
         # Only ever one batch highlighted at a time — strip ANY fill color

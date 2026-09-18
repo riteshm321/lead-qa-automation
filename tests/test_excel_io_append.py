@@ -342,7 +342,10 @@ def test_append_leads_writes_a_real_date_value_with_date_number_format(tmp_path)
     cell = ws.cell(row=2, column=6)
     # openpyxl reads a whole-day Excel date back as a datetime, not a date.
     assert cell.value == datetime.datetime(2026, 8, 17)
-    assert cell.number_format == "mm/dd/yyyy"
+    # Escaped slashes -- an unescaped "mm/dd/yyyy" renders with whatever
+    # date separator the opening machine's Windows locale uses instead of
+    # a literal "/" (e.g. "mm-dd-yyyy" on a "-" locale).
+    assert cell.number_format == "mm\\/dd\\/yyyy"
 
 
 def test_append_leads_forces_mmddyyyy_for_capture_date_even_with_a_different_inherited_format(tmp_path):
@@ -372,7 +375,7 @@ def test_append_leads_forces_mmddyyyy_for_capture_date_even_with_a_different_inh
     ws = openpyxl.load_workbook(path)["Report"]
     cell = ws.cell(row=3, column=6)
     assert cell.value == datetime.datetime(2026, 8, 17)
-    assert cell.number_format == "mm/dd/yyyy"
+    assert cell.number_format == "mm\\/dd\\/yyyy"
 
 
 def test_append_leads_highlight_fill_clears_previous_run_highlight(tmp_path):
