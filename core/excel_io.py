@@ -19,12 +19,12 @@ from openpyxl.utils.cell import range_boundaries
 from core.models import FieldMapping, LeadTemplateTab
 
 
-def _read_external_link_parts(path: str) -> dict[str, bytes]:
+def read_external_link_parts(path: str) -> dict[str, bytes]:
     with zipfile.ZipFile(path, "r") as zin:
         return {n: zin.read(n) for n in zin.namelist() if n.startswith("xl/externalLinks/")}
 
 
-def _restore_external_link_parts(path: str, original_parts: dict[str, bytes]) -> None:
+def restore_external_link_parts(path: str, original_parts: dict[str, bytes]) -> None:
     # openpyxl loses/corrupts the cached values in xl/externalLinks/*.xml when
     # it round-trips a workbook that references another (possibly closed)
     # workbook — e.g. a data-validation picklist backed by an external file.
@@ -78,7 +78,7 @@ def _worksheet_xml_path_for_sheet(path: str, sheet_name: str) -> str | None:
     return None
 
 
-def _read_worksheet_ext_list(path: str, sheet_name: str) -> bytes | None:
+def read_worksheet_ext_list(path: str, sheet_name: str) -> bytes | None:
     """Raw <extLst>...</extLst> bytes from one worksheet's XML, if present.
 
     This is where Excel 2010+ extended features live -- x14 conditional
@@ -128,7 +128,7 @@ def _read_worksheet_ext_list(path: str, sheet_name: str) -> bytes | None:
     return ext_list.encode("utf-8")
 
 
-def _restore_worksheet_ext_list(path: str, sheet_name: str, ext_list_xml: bytes) -> None:
+def restore_worksheet_ext_list(path: str, sheet_name: str, ext_list_xml: bytes) -> None:
     # <extLst> is always the last child of the <worksheet> root element per
     # the OOXML schema, so splicing it back in right before the closing tag
     # reproduces exactly where openpyxl would have written its own (had it
@@ -189,6 +189,8 @@ def set_status_for_emails(
     (Box Tracker's approval/clearance/reconciliation labels, Enhancio's
     own upload label) without rewriting the whole row.
     """
+    original_external_links = read_external_link_parts(path)
+    original_ext_list = read_worksheet_ext_list(path, tab_name)
     wb = openpyxl.load_workbook(path)
     try:
         ws = wb[tab_name]
@@ -201,6 +203,10 @@ def set_status_for_emails(
         wb.save(path)
     finally:
         wb.close()
+    if original_external_links:
+        restore_external_link_parts(path, original_external_links)
+    if original_ext_list:
+        restore_worksheet_ext_list(path, tab_name, original_ext_list)
 
 
 def set_status_by_row_index(path: str, tab_name: str, status_column: str, index_to_label: dict[int, str]) -> None:
@@ -212,6 +218,8 @@ def set_status_by_row_index(path: str, tab_name: str, status_column: str, index_
     the same email, or (a real, confirmed case) both have a blank one:
     every blank-email row would match every other blank-email row.
     """
+    original_external_links = read_external_link_parts(path)
+    original_ext_list = read_worksheet_ext_list(path, tab_name)
     wb = openpyxl.load_workbook(path)
     try:
         ws = wb[tab_name]
@@ -222,6 +230,10 @@ def set_status_by_row_index(path: str, tab_name: str, status_column: str, index_
         wb.save(path)
     finally:
         wb.close()
+    if original_external_links:
+        restore_external_link_parts(path, original_external_links)
+    if original_ext_list:
+        restore_worksheet_ext_list(path, tab_name, original_ext_list)
 
 
 def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
@@ -538,6 +550,17 @@ _PASSTHROUGH_SYNONYM_GROUPS: list[set[str]] = [
         "headcount", "company headcount", "employee size range", "company size range",
         "no of employees",
     )},
+    # IBM APAC's Accumulated Report header is the compound "tactic/project
+    # code" (Madison Logic's own dual-name convention for this field, also
+    # seen as the literal Enhancio field_mapping key), but a real leadfile
+    # sometimes only carries the plain "tactic" half -- too short and
+    # differently-shaped for containment (tier 3 is one-directional, target
+    # contained in leadfile, never the reverse) or fuzzy similarity
+    # (~52%, far under the threshold) to ever catch. Confirmed live: this
+    # silently left the column blank instead of matching.
+    {_normalize_header_text(s) for s in (
+        "tactic", "project code", "tactic/project code", "tactic / project code",
+    )},
 ]
 _PASSTHROUGH_SYNONYM_GROUP_BY_HEADER: dict[str, int] = {
     header: group_idx for group_idx, group in enumerate(_PASSTHROUGH_SYNONYM_GROUPS) for header in group
@@ -628,8 +651,8 @@ def append_leads(
     clear_existing: bool = False,
     highlight_fill: str | None = None,
 ) -> list[str]:
-    _original_external_links = _read_external_link_parts(accumulated_path)
-    _original_ext_list = _read_worksheet_ext_list(accumulated_path, tab_name)
+    _original_external_links = read_external_link_parts(accumulated_path)
+    _original_ext_list = read_worksheet_ext_list(accumulated_path, tab_name)
 
     wb = openpyxl.load_workbook(accumulated_path)
     ws = wb[tab_name]
@@ -791,9 +814,9 @@ def append_leads(
     wb.close()
 
     if _original_external_links:
-        _restore_external_link_parts(accumulated_path, _original_external_links)
+        restore_external_link_parts(accumulated_path, _original_external_links)
     if _original_ext_list:
-        _restore_worksheet_ext_list(accumulated_path, tab_name, _original_ext_list)
+        restore_worksheet_ext_list(accumulated_path, tab_name, _original_ext_list)
 
     return unmatched_passthrough_headers
 

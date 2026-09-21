@@ -315,6 +315,34 @@ def test_append_leads_matches_headers_via_known_synonym_group(tmp_path):
     assert unmatched == []
 
 
+def test_append_leads_matches_tactic_into_tactic_project_code_synonym_group(tmp_path):
+    # Regression test for a real production incident (IBM APAC): the
+    # Accumulated Report header is the compound "tactic/project code", but
+    # the leadfile only carried the plain "tactic" half -- too short and
+    # differently-shaped for the one-directional containment tier (target
+    # would have to be contained in the leadfile column, not the reverse)
+    # and far under the fuzzy threshold (~52%), so this silently left the
+    # column blank instead of matching.
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "tactic/project code"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([{"Email_Address": "bob@x.com", "First_Name": "Bob",
+                               "Last_Name": "Lee", "Company_Name": "Beta",
+                               "tactic": "2 Touch + TeleVerified"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    unmatched = append_leads(path, "Accumulated", leads_df, field_mapping, run_date="2026-08-13")
+
+    ws = openpyxl.load_workbook(path)["Accumulated"]
+    assert ws.cell(row=2, column=5).value == "2 Touch + TeleVerified"
+    assert unmatched == []
+
+
 def test_append_leads_does_not_match_a_short_leadfile_column_into_a_longer_target(tmp_path):
     # Regression test for a real bug: the leadfile has "Asset" but no
     # "Second Asset" column at all, yet "Second Asset" was silently
