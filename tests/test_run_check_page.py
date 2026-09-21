@@ -10,7 +10,7 @@ from core.app_settings import get_clients_dir, save_jira_settings
 from core.check_result import ReviewDetail
 from core.jira_client import JiraError
 from core.models import ClientProfile, FieldMapping, DuplicateConfig, LeadTemplateTab, ComplexAccountConfig
-from core.models import EnhancioConfig, EnhancioAllocationMapping
+from core.models import EnhancioConfig, EnhancioAllocationMapping, BoxTrackerConfig
 from core.pipeline import PipelineResult, run_pipeline
 from core.profile_store import save_profile
 
@@ -503,6 +503,62 @@ def test_complex_account_finalize_skips_accumulated_and_downloads_when_enhancio_
 
     assert any("Valid leads ready for Enhancio" in s.value for s in at.subheader)
     assert any(d.label == "Download valid leads" for d in at.download_button)
+
+
+def test_complex_account_finalize_writes_to_accumulated_for_a_box_tracker_client(tmp_path, monkeypatch):
+    # Regression test: IBM APAC (Complex Account + Enhancio enabled, same
+    # setup as the test above) reported Confirm & Write leaving Accumulated
+    # empty -- by design at the time, since ANY Enhancio-enabled client held
+    # valid leads back for Enhancio's own Upload + Reconcile. But IBM APAC's
+    # real approval pipeline is Finalize -> Accumulated -> Box Tracker
+    # (client approval) -> Enhancio, pulled later from Accumulated by date
+    # range -- it never feeds Enhancio from Finalize's diverted output at
+    # all, so diverting it away here just meant it silently never reached
+    # Accumulated. A Box Tracker client (identified by box_tracker.enabled)
+    # must write straight to Accumulated on Confirm & Write regardless of
+    # Enhancio being enabled.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email", "First", "Last", "Company", "CID"])
+    wb.create_sheet("Refund").append(["Email", "First", "Last", "Company", "CID"])
+    wb.save(acc_path)
+
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        complex_account=ComplexAccountConfig(enabled=True),
+        enhancio=EnhancioConfig(enabled=True, allocations=[EnhancioAllocationMapping(cid="1", allocation_uid="L-1")]),
+        box_tracker=BoxTrackerConfig(enabled=True),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email": "a@wipro.com", "First": "A", "Last": "One", "Company": "Wipro", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    assert not at.exception
+
+    next(b for b in at.button if b.label == "Finalize (fill columns)").click().run()
+    assert not at.exception
+
+    confirm_button = next(b for b in at.button if b.label == "Confirm & Write")
+    confirm_button.click().run()
+    assert not at.exception
+
+    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
+    assert "a@wipro.com" in accumulated_df["Email"].values  # written immediately, not held back
+    assert not any(d.label == "Download valid leads" for d in at.download_button)
 
 
 def test_select_all_as_valid_approves_every_refund_lead(tmp_path, monkeypatch):

@@ -632,7 +632,16 @@ if "run_result" in st.session_state:
     # complex account or not. "Any upload tool enabled" gates that below,
     # and this label names whichever one(s) actually are, for the messages
     # shown once the leads are queued for download instead.
-    _upload_tools_enabled = [
+    #
+    # EXCEPT a Box Tracker client (IBM APAC, the only one today): its real
+    # approval pipeline is Finalize -> Accumulated -> Box Tracker (client
+    # approval) -> Enhancio, pulled later from Accumulated by date range
+    # (see pages/8_Enhancio.py's "Pull from Accumulated Report by date
+    # range") -- never fed from Finalize's own diverted valid-leads output
+    # at all. Diverting it away here just meant it silently never reached
+    # Accumulated. Confirmed by the user: IBM APAC needs Finalize to write
+    # straight to Accumulated like any plain client, Enhancio enabled or not.
+    _upload_tools_enabled = [] if profile.box_tracker.enabled else [
         name for name, on in [("Convertr", profile.convertr.enabled), ("Enhancio", profile.enhancio.enabled)] if on
     ]
     _upload_tools_label = " / ".join(_upload_tools_enabled) or "the upload tool"
