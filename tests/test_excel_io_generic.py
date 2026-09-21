@@ -343,6 +343,32 @@ def test_append_leads_matches_tactic_into_tactic_project_code_synonym_group(tmp_
     assert unmatched == []
 
 
+def test_append_leads_matches_zip_code_into_zip_postal_code_synonym_group(tmp_path):
+    # Regression test for a real production incident (Schneider): the
+    # configured header is "Zip Code" but a real leadfile export sometimes
+    # calls it "Zip / Postal Code" -- an extra whole word ("postal"), so
+    # neither containment nor fuzzy similarity (~70%, under the threshold)
+    # ever catches it.
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "Zip Code"])
+    wb.save(path)
+
+    leads_df = pd.DataFrame([{"Email_Address": "bob@x.com", "First_Name": "Bob",
+                               "Last_Name": "Lee", "Company_Name": "Beta",
+                               "Zip / Postal Code": "75001"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    unmatched = append_leads(path, "Accumulated", leads_df, field_mapping, run_date="2026-08-13")
+
+    ws = openpyxl.load_workbook(path)["Accumulated"]
+    assert ws.cell(row=2, column=5).value == "75001"
+    assert unmatched == []
+
+
 def test_append_leads_does_not_match_a_short_leadfile_column_into_a_longer_target(tmp_path):
     # Regression test for a real bug: the leadfile has "Asset" but no
     # "Second Asset" column at all, yet "Second Asset" was silently

@@ -20,6 +20,7 @@ from core.enhancio_sync import (
 )
 from core.excel_io import (
     read_leadfile, append_leads, read_sheet_as_dataframe, set_status_for_emails, dataframe_to_excel_bytes,
+    normalize_header_text, find_passthrough_lead_column,
 )
 from core import jira_client
 from core.jira_client import JiraError
@@ -340,10 +341,29 @@ if leads_df is not None:
             # after the per-row mapping, so they always win if a field
             # somehow appears in both.
             _fixed_values = _enhancio.fixed_field_values.get(allocation_uid, {})
+            # field_mapping's leadfile-column side is configured once on
+            # Client Setup, but a later export of the "same" leadfile can
+            # cosmetically differ (a trailing "Job Title:" colon, "I AM A"
+            # vs "I am a", "Zip Code" vs "Zip / Postal Code") -- an exact
+            # key miss here silently sent Enhancio an empty string, which
+            # it then rejected as a missing mandatory field even though the
+            # leadfile actually had the data. Resolved once per allocation
+            # (not per row -- column names don't vary row to row), same
+            # normalized/synonym/fuzzy matching append_leads' passthrough
+            # columns already get.
+            _leadfile_headers_norm = {normalize_header_text(c): c for c in _send_df.columns}
+            _resolved_source_col = {
+                leadfile_col: leadfile_col if leadfile_col in _send_df.columns else (
+                    find_passthrough_lead_column(normalize_header_text(leadfile_col), _leadfile_headers_norm)
+                    or leadfile_col
+                )
+                for leadfile_col in _enhancio.field_mapping
+            }
             lead_payloads = [
                 {
                     **{
-                        enhancio_field: format_enhancio_field_value(enhancio_field, lead.get(leadfile_col, ""))
+                        enhancio_field: format_enhancio_field_value(
+                            enhancio_field, lead.get(_resolved_source_col[leadfile_col], ""))
                         for leadfile_col, enhancio_field in _enhancio.field_mapping.items()
                     },
                     **_fixed_values,

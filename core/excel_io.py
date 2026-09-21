@@ -360,7 +360,7 @@ _FIELD_SYNONYMS = {
 }
 
 
-def _normalize_header_text(value) -> str:
+def normalize_header_text(value) -> str:
     # Strips ALL non-alphanumeric characters (not just collapsing them to a
     # single space), so "Job Function", "Job_Function" and the fully
     # concatenated "jobfunction" all normalize to the same "jobfunction" —
@@ -371,7 +371,7 @@ def _normalize_header_text(value) -> str:
 
 
 _NORMALIZED_FIELD_SYNONYMS = {
-    attr: {_normalize_header_text(s) for s in synonyms} for attr, synonyms in _FIELD_SYNONYMS.items()
+    attr: {normalize_header_text(s) for s in synonyms} for attr, synonyms in _FIELD_SYNONYMS.items()
 }
 
 
@@ -393,15 +393,15 @@ def guess_target_field_mapping(headers: list) -> dict[str, str]:
     for header in headers:
         if header is None:
             continue
-        attr = _resolve_field_attr(_normalize_header_text(header))
+        attr = _resolve_field_attr(normalize_header_text(header))
         if attr and attr not in result:
             result[attr] = header
     return result
 
 
-_REASON_HEADER_NAMES = {_normalize_header_text(s) for s in ("reason", "refund reason")}
+_REASON_HEADER_NAMES = {normalize_header_text(s) for s in ("reason", "refund reason")}
 
-_ALL_KNOWN_HEADER_MARKERS = {_normalize_header_text(syn) for syns in _FIELD_SYNONYMS.values() for syn in syns}
+_ALL_KNOWN_HEADER_MARKERS = {normalize_header_text(syn) for syns in _FIELD_SYNONYMS.values() for syn in syns}
 
 
 _MIN_STRUCTURAL_HEADER_CELLS = 3
@@ -414,7 +414,7 @@ def _detect_header_row_from_rows(rows: list, markers: set[str]) -> int:
     """
     for row in rows:
         for cell in row:
-            if isinstance(cell.value, str) and _normalize_header_text(cell.value) in markers:
+            if isinstance(cell.value, str) and normalize_header_text(cell.value) in markers:
                 return cell.row
 
     best_offset, best_count = None, 0
@@ -453,7 +453,7 @@ def find_header_row(path: str, sheet_name: str, expected_headers: list | None = 
     Falls back to row 1 if neither tier finds anything, preserving the
     previous fixed-row-1 assumption.
     """
-    markers = ({_normalize_header_text(h) for h in expected_headers if h}
+    markers = ({normalize_header_text(h) for h in expected_headers if h}
                if expected_headers else set(_ALL_KNOWN_HEADER_MARKERS))
 
     wb = openpyxl.load_workbook(path, read_only=True)
@@ -545,7 +545,7 @@ _FUZZY_MATCH_THRESHOLD = 88
 # inner set is normalized synonyms for one field; add more groups here as
 # further real-world mismatches turn up.
 _PASSTHROUGH_SYNONYM_GROUPS: list[set[str]] = [
-    {_normalize_header_text(s) for s in (
+    {normalize_header_text(s) for s in (
         "company size", "employee size", "employee count", "number of employees",
         "headcount", "company headcount", "employee size range", "company size range",
         "no of employees",
@@ -558,8 +558,18 @@ _PASSTHROUGH_SYNONYM_GROUPS: list[set[str]] = [
     # contained in leadfile, never the reverse) or fuzzy similarity
     # (~52%, far under the threshold) to ever catch. Confirmed live: this
     # silently left the column blank instead of matching.
-    {_normalize_header_text(s) for s in (
+    {normalize_header_text(s) for s in (
         "tactic", "project code", "tactic/project code", "tactic / project code",
+    )},
+    # Schneider's Enhancio field_mapping is configured against "Zip Code",
+    # but a real leadfile export sometimes calls the same column "Zip /
+    # Postal Code" instead -- genuinely different wording (an extra whole
+    # word, "postal"), not just noise, so neither containment nor fuzzy
+    # similarity (~70%, under the threshold) ever catches it. Confirmed
+    # live: Enhancio rejected every lead in the batch as missing this
+    # mandatory field even though the leadfile actually had the data.
+    {normalize_header_text(s) for s in (
+        "zip code", "zip / postal code", "zip postal code", "postal code", "zip",
     )},
 ]
 _PASSTHROUGH_SYNONYM_GROUP_BY_HEADER: dict[str, int] = {
@@ -567,7 +577,7 @@ _PASSTHROUGH_SYNONYM_GROUP_BY_HEADER: dict[str, int] = {
 }
 
 
-def _find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str, str]) -> str | None:
+def find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str, str]) -> str | None:
     """Best-effort match of a target header to a leadfile column, for the
     "everything else" passthrough columns (beyond the 5 explicitly-mapped
     roles). Real leadfiles vary in ways an exact match can't anticipate —
@@ -658,17 +668,17 @@ def append_leads(
     ws = wb[tab_name]
 
     headers = [cell.value for cell in ws[header_row]]
-    lead_headers_norm = {_normalize_header_text(h): h for h in leads_df.columns}
+    lead_headers_norm = {normalize_header_text(h): h for h in leads_df.columns}
 
     target_role_by_header: dict[str, str] = {}
     if target_field_mapping is not None:
         for attr in ("email", "first_name", "last_name", "company", "cid"):
             target_header = getattr(target_field_mapping, attr, "")
             if target_header:
-                target_role_by_header[_normalize_header_text(target_header)] = attr
+                target_role_by_header[normalize_header_text(target_header)] = attr
 
     has_reason_column = any(
-        h is not None and _normalize_header_text(h) in _REASON_HEADER_NAMES for h in headers
+        h is not None and normalize_header_text(h) in _REASON_HEADER_NAMES for h in headers
     )
     if reasons and not has_reason_column:
         reason_col_idx = len(headers) + 1
@@ -717,7 +727,7 @@ def append_leads(
     for col_idx, header in enumerate(headers, start=1):
         if header is None:
             continue
-        header_norm = _normalize_header_text(header)
+        header_norm = normalize_header_text(header)
         if header_norm in ("date", "comment", "status") or header in formula_template or header_norm in _REASON_HEADER_NAMES:
             continue
         if header_norm in target_role_by_header:
@@ -727,7 +737,7 @@ def append_leads(
         if attr:
             column_source[col_idx] = getattr(field_mapping, attr)
             continue
-        source_col = _find_passthrough_lead_column(header_norm, lead_headers_norm)
+        source_col = find_passthrough_lead_column(header_norm, lead_headers_norm)
         column_source[col_idx] = source_col
         if source_col is None:
             unmatched_passthrough_headers.append(header)
@@ -738,7 +748,7 @@ def append_leads(
         for col_idx, header in enumerate(headers, start=1):
             if header is None:
                 continue
-            header_norm = _normalize_header_text(header)
+            header_norm = normalize_header_text(header)
             cell = ws.cell(row=excel_row, column=col_idx)
             if col_idx in column_styles:
                 font, fill, border, alignment, number_format = column_styles[col_idx]
@@ -886,7 +896,7 @@ def _format_pacing_header(value) -> str:
 def _format_pacing_value(header: str, value):
     if value is None:
         return ""
-    if _normalize_header_text(header) == "pacing" and isinstance(value, (int, float)):
+    if normalize_header_text(header) == "pacing" and isinstance(value, (int, float)):
         return f"{value * 100:.0f}%"
     return value
 
