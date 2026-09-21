@@ -177,6 +177,25 @@ def read_sheet_as_dataframe(path: str, sheet_name: str) -> pd.DataFrame:
     return pd.read_excel(path, sheet_name=sheet_name)
 
 
+def _read_csv_rows(path: str) -> tuple[list[str], str, list[list[str]]]:
+    """Reads a CSV file's header row, delimiter, and data rows -- see
+    _decode_csv_bytes for the encoding/delimiter handling. Shared by every
+    CSV round-trip in this module (append_leads, set_status_for_emails,
+    set_status_by_row_index) so they all parse identically.
+    """
+    with open(path, "rb") as f:
+        text, delimiter = _decode_csv_bytes(f.read())
+    rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))
+    if not rows:
+        raise ValueError(f"{path!r} has no header row")
+    return rows[0], delimiter, rows[1:]
+
+
+def _write_csv_rows(path: str, delimiter: str, rows: list[list[str]]) -> None:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        csv.writer(f, delimiter=delimiter).writerows(rows)
+
+
 def set_status_for_emails(
     path: str, tab_name: str, status_column: str, email_column: str, emails: set[str], label: str,
 ) -> None:
@@ -189,6 +208,15 @@ def set_status_for_emails(
     (Box Tracker's approval/clearance/reconciliation labels, Enhancio's
     own upload label) without rewriting the whole row.
     """
+    if path.lower().endswith(".csv"):
+        headers, delimiter, data_rows = _read_csv_rows(path)
+        status_idx, email_idx = headers.index(status_column), headers.index(email_column)
+        for row in data_rows:
+            if row[email_idx] in emails:
+                row[status_idx] = label
+        _write_csv_rows(path, delimiter, [headers] + data_rows)
+        return
+
     original_external_links = read_external_link_parts(path)
     original_ext_list = read_worksheet_ext_list(path, tab_name)
     wb = openpyxl.load_workbook(path)
@@ -218,6 +246,14 @@ def set_status_by_row_index(path: str, tab_name: str, status_column: str, index_
     the same email, or (a real, confirmed case) both have a blank one:
     every blank-email row would match every other blank-email row.
     """
+    if path.lower().endswith(".csv"):
+        headers, delimiter, data_rows = _read_csv_rows(path)
+        status_idx = headers.index(status_column)
+        for idx, label in index_to_label.items():
+            data_rows[idx][status_idx] = label
+        _write_csv_rows(path, delimiter, [headers] + data_rows)
+        return
+
     original_external_links = read_external_link_parts(path)
     original_ext_list = read_worksheet_ext_list(path, tab_name)
     wb = openpyxl.load_workbook(path)
@@ -249,17 +285,18 @@ def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> by
 _CSV_ENCODINGS = ("utf-8-sig", "cp1252", "latin1")
 
 
-def read_csv_bytes_robust(raw: bytes) -> pd.DataFrame:
-    """Parse raw CSV bytes handling real-world export quirks: a UTF-8
-    byte-order mark from Excel's own CSV export, Windows-1252 encoding
-    from older export tools, and semicolon (or tab/pipe) delimiters from
-    European-locale exports. Decoding bytes ourselves first, then sniffing
-    the delimiter from the clean decoded text, avoids a pandas quirk where
-    handing raw bytes + encoding= to read_csv(sep=None) can silently
-    corrupt non-ASCII characters during delimiter detection even though
-    the encoding itself is correct. Shared by every CSV entry point in
-    this app (New Leads, reference/exclusion/TAL/suppression/dedupe
-    sources, the Purchased Lead Report) so they all get the same handling.
+def _decode_csv_bytes(raw: bytes) -> tuple[str, str]:
+    """Decodes raw CSV bytes and sniffs its delimiter, handling real-world
+    export quirks: a UTF-8 byte-order mark from Excel's own CSV export,
+    Windows-1252 encoding from older export tools, and semicolon (or
+    tab/pipe) delimiters from European-locale exports. Decoding bytes
+    ourselves first, then sniffing the delimiter from the clean decoded
+    text, avoids a pandas quirk where handing raw bytes + encoding= to
+    read_csv(sep=None) can silently corrupt non-ASCII characters during
+    delimiter detection even though the encoding itself is correct.
+    Shared by read_csv_bytes_robust (a fresh CSV upload) and append_leads'
+    CSV branch (round-tripping an existing CSV Lead Template/Accumulated
+    Report), so both get identical, already-proven decoding.
     """
     text = None
     last_error: Exception | None = None
@@ -276,7 +313,16 @@ def read_csv_bytes_robust(raw: bytes) -> pd.DataFrame:
         delimiter = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|").delimiter
     except csv.Error:
         delimiter = ","
+    return text, delimiter
 
+
+def read_csv_bytes_robust(raw: bytes) -> pd.DataFrame:
+    """Parse raw CSV bytes into a DataFrame -- see _decode_csv_bytes for
+    the encoding/delimiter handling. Shared by every CSV entry point in
+    this app (New Leads, reference/exclusion/TAL/suppression/dedupe
+    sources, the Purchased Lead Report) so they all get the same handling.
+    """
+    text, delimiter = _decode_csv_bytes(raw)
     return pd.read_csv(io.StringIO(text), sep=delimiter)
 
 
@@ -452,7 +498,16 @@ def find_header_row(path: str, sheet_name: str, expected_headers: list | None = 
 
     Falls back to row 1 if neither tier finds anything, preserving the
     previous fixed-row-1 assumption.
+
+    A CSV has no title/instruction rows above its header the way an .xlsx
+    Lead Template sometimes does -- every real CSV export in practice
+    already puts headers on row 1, matching how read_leadfile/
+    read_sheet_as_dataframe already treat CSV -- so this always returns 1
+    for one without scanning it at all.
     """
+    if path.lower().endswith(".csv"):
+        return 1
+
     markers = ({normalize_header_text(h) for h in expected_headers if h}
                if expected_headers else set(_ALL_KNOWN_HEADER_MARKERS))
 
@@ -466,6 +521,12 @@ def find_header_row(path: str, sheet_name: str, expected_headers: list | None = 
 
 
 def read_sheet_headers(path: str, sheet_name: str, header_row: int = 1) -> list:
+    if path.lower().endswith(".csv"):
+        with open(path, "rb") as f:
+            text, delimiter = _decode_csv_bytes(f.read())
+        rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))
+        return rows[header_row - 1] if len(rows) >= header_row else []
+
     wb = openpyxl.load_workbook(path, read_only=True)
     try:
         ws = wb[sheet_name]
@@ -649,6 +710,118 @@ def find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str, 
 _DATE_NUMBER_FORMAT = "mm\\/dd\\/yyyy"
 
 
+def _resolve_passthrough_columns(
+    headers: list, leads_df: pd.DataFrame, field_mapping: FieldMapping,
+    target_field_mapping: FieldMapping | None, skip_normalized: set[str],
+) -> tuple[dict[int, str | None], list[str]]:
+    """Resolves which leadfile column (if any) feeds each target header:
+    the target role (email/first name/... via target_field_mapping) ->
+    field_mapping, a known field synonym, or a best-effort passthrough
+    match (find_passthrough_lead_column) -- in that order of confidence.
+    Shared by append_leads' xlsx and CSV branches, since which leadfile
+    column a header maps to never depends on the target file's format.
+
+    skip_normalized excludes headers a caller handles as its own special
+    case (Date/Comment/Status/Refund Reason always; a formula column,
+    xlsx only) from passthrough resolution and the unmatched-headers
+    report -- those headers' values never come from column_source at all.
+
+    Returns (column_source keyed by 1-based column position, matching
+    enumerate(headers, start=1); unmatched_passthrough_headers).
+    """
+    lead_headers_norm = {normalize_header_text(h): h for h in leads_df.columns}
+    target_role_by_header: dict[str, str] = {}
+    if target_field_mapping is not None:
+        for attr in ("email", "first_name", "last_name", "company", "cid"):
+            target_header = getattr(target_field_mapping, attr, "")
+            if target_header:
+                target_role_by_header[normalize_header_text(target_header)] = attr
+
+    column_source: dict[int, str | None] = {}
+    unmatched_passthrough_headers: list[str] = []
+    for col_idx, header in enumerate(headers, start=1):
+        if header is None:
+            continue
+        header_norm = normalize_header_text(header)
+        if header_norm in skip_normalized:
+            continue
+        if header_norm in target_role_by_header:
+            column_source[col_idx] = getattr(field_mapping, target_role_by_header[header_norm])
+            continue
+        attr = _resolve_field_attr(header_norm)
+        if attr:
+            column_source[col_idx] = getattr(field_mapping, attr)
+            continue
+        source_col = find_passthrough_lead_column(header_norm, lead_headers_norm)
+        column_source[col_idx] = source_col
+        if source_col is None:
+            unmatched_passthrough_headers.append(header)
+    return column_source, unmatched_passthrough_headers
+
+
+# Text equivalents of append_leads' xlsx number formats -- CSV has no
+# separate cell format layer, so a date VALUE has to be written as its
+# own display text instead. Same reasoning/columns as _DATE_NUMBER_FORMAT
+# ("mm/dd/yyyy") and the "Date" column's "dd-mmm-yy".
+_CSV_DATE_STRFTIME = "%m/%d/%Y"
+_CSV_RUN_DATE_STRFTIME = "%d-%b-%y"
+
+
+def _append_leads_csv(
+    path: str,
+    leads_df: pd.DataFrame,
+    field_mapping: FieldMapping,
+    run_date,
+    reasons: dict[int, str] | None,
+    target_field_mapping: FieldMapping | None,
+    clear_existing: bool,
+) -> list[str]:
+    """CSV counterpart of append_leads' xlsx branch below -- same column
+    resolution (_resolve_passthrough_columns), but none of the cell
+    styling, formulas, table ranges, or external links a real .xlsx
+    workbook can carry apply to a plain-text format. Existing rows are
+    read/written with Python's own csv module (never pandas' dtype
+    inference) so a round-trip never reshapes an untouched cell's text
+    (e.g. a leading-zero postal code, or "12345.0" for what was "12345").
+    """
+    headers, delimiter, existing_data_rows = _read_csv_rows(path)
+    if clear_existing:
+        existing_data_rows = []
+
+    has_reason_column = any(normalize_header_text(h) in _REASON_HEADER_NAMES for h in headers)
+    if reasons and not has_reason_column:
+        headers = headers + ["Refund Reason"]
+        existing_data_rows = [row + [""] for row in existing_data_rows]
+
+    skip_normalized = {"date", "comment", "status"} | _REASON_HEADER_NAMES
+    column_source, unmatched_passthrough_headers = _resolve_passthrough_columns(
+        headers, leads_df, field_mapping, target_field_mapping, skip_normalized)
+
+    new_rows = []
+    for idx, lead_row in leads_df.iterrows():
+        new_row = []
+        for col_idx, header in enumerate(headers, start=1):
+            header_norm = normalize_header_text(header)
+            if header_norm == "date":
+                value = run_date
+            elif header_norm in ("comment", "status"):
+                value = ""
+            elif header_norm in _REASON_HEADER_NAMES:
+                value = (reasons or {}).get(idx, "")
+            else:
+                source_col = column_source.get(col_idx)
+                value = lead_row.get(source_col, "") if source_col is not None else ""
+            if isinstance(value, (datetime.date, datetime.datetime)):
+                value = value.strftime(_CSV_RUN_DATE_STRFTIME if header_norm == "date" else _CSV_DATE_STRFTIME)
+            elif value is None or pd.isna(value):
+                value = ""
+            new_row.append(str(value))
+        new_rows.append(new_row)
+
+    _write_csv_rows(path, delimiter, [headers] + existing_data_rows + new_rows)
+    return unmatched_passthrough_headers
+
+
 def append_leads(
     accumulated_path: str,
     tab_name: str,
@@ -661,6 +834,20 @@ def append_leads(
     clear_existing: bool = False,
     highlight_fill: str | None = None,
 ) -> list[str]:
+    # A Lead Template or Accumulated Report can be a plain .csv (no cell
+    # styling, formulas, tables, or external links to worry about at all)
+    # just as easily as a real .xlsx workbook -- confirmed live for IBM
+    # Intel APAC, whose Lead Template is a CSV export. header_row/
+    # highlight_fill don't apply to a flat text format (a CSV Lead
+    # Template's header is always its own first row; there's no concept
+    # of a cell fill color), so they're silently ignored here rather than
+    # threaded through -- CSV's only equivalent to a `wb.save` failure
+    # would be an actual header mismatch, which unmatched_headers already
+    # surfaces to the caller same as the xlsx path.
+    if accumulated_path.lower().endswith(".csv"):
+        return _append_leads_csv(
+            accumulated_path, leads_df, field_mapping, run_date, reasons, target_field_mapping, clear_existing)
+
     _original_external_links = read_external_link_parts(accumulated_path)
     _original_ext_list = read_worksheet_ext_list(accumulated_path, tab_name)
 
@@ -668,14 +855,6 @@ def append_leads(
     ws = wb[tab_name]
 
     headers = [cell.value for cell in ws[header_row]]
-    lead_headers_norm = {normalize_header_text(h): h for h in leads_df.columns}
-
-    target_role_by_header: dict[str, str] = {}
-    if target_field_mapping is not None:
-        for attr in ("email", "first_name", "last_name", "company", "cid"):
-            target_header = getattr(target_field_mapping, attr, "")
-            if target_header:
-                target_role_by_header[normalize_header_text(target_header)] = attr
 
     has_reason_column = any(
         h is not None and normalize_header_text(h) in _REASON_HEADER_NAMES for h in headers
@@ -722,25 +901,12 @@ def append_leads(
     # Which lead column (if any) feeds each header only depends on the
     # header/column identity, never on a specific row — resolve it once
     # per column rather than once per (row, column) pair.
-    column_source: dict[int, str | None] = {}
-    unmatched_passthrough_headers: list[str] = []
-    for col_idx, header in enumerate(headers, start=1):
-        if header is None:
-            continue
-        header_norm = normalize_header_text(header)
-        if header_norm in ("date", "comment", "status") or header in formula_template or header_norm in _REASON_HEADER_NAMES:
-            continue
-        if header_norm in target_role_by_header:
-            column_source[col_idx] = getattr(field_mapping, target_role_by_header[header_norm])
-            continue
-        attr = _resolve_field_attr(header_norm)
-        if attr:
-            column_source[col_idx] = getattr(field_mapping, attr)
-            continue
-        source_col = find_passthrough_lead_column(header_norm, lead_headers_norm)
-        column_source[col_idx] = source_col
-        if source_col is None:
-            unmatched_passthrough_headers.append(header)
+    skip_normalized = (
+        {"date", "comment", "status"} | _REASON_HEADER_NAMES
+        | {normalize_header_text(h) for h in formula_template}
+    )
+    column_source, unmatched_passthrough_headers = _resolve_passthrough_columns(
+        headers, leads_df, field_mapping, target_field_mapping, skip_normalized)
 
     next_row = first_data_row if not has_existing_leads else last_data_row + 1
     for row_offset, (idx, lead_row) in enumerate(leads_df.iterrows()):

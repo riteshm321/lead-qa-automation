@@ -943,3 +943,121 @@ def test_set_status_by_row_index_preserves_external_link_parts_byte_for_byte(tmp
 
     with zipfile.ZipFile(path, "r") as zf:
         assert zf.read("xl/externalLinks/externalLink1.xml") == fake_external_link
+
+
+def test_append_leads_writes_to_a_csv_lead_template(tmp_path):
+    # Regression test for a real production incident (Intel APAC): a Lead
+    # Template can be a plain .csv, not just .xlsx -- openpyxl.load_workbook
+    # raised "does not support .csv file format" with no CSV branch at all,
+    # crashing Confirm & Write right after the (unaffected, .xlsx)
+    # Accumulated Report had already been backed up and updated.
+    path = str(tmp_path / "template.csv")
+    (tmp_path / "template.csv").write_text(
+        "Email_Address,First_Name,Last_Name,Company_Name\nold@x.com,Old,Lead,X\n", encoding="utf-8")
+
+    leads_df = pd.DataFrame([{"Email_Address": "new@y.com", "First_Name": "New",
+                               "Last_Name": "Lead", "Company_Name": "Y"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    unmatched = append_leads(path, "(CSV file)", leads_df, field_mapping, run_date="2026-08-13")
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert list(result["Email_Address"]) == ["old@x.com", "new@y.com"]
+    assert unmatched == []
+
+
+def test_append_leads_csv_clear_existing_drops_old_rows(tmp_path):
+    path = tmp_path / "template.csv"
+    path.write_text("Email_Address,First_Name,Last_Name,Company_Name\nold@x.com,Old,Lead,X\n", encoding="utf-8")
+
+    leads_df = pd.DataFrame([{"Email_Address": "new@y.com", "First_Name": "New",
+                               "Last_Name": "Lead", "Company_Name": "Y"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="First_Name",
+                                  last_name="Last_Name", company="Company_Name", cid="")
+
+    append_leads(str(path), "(CSV file)", leads_df, field_mapping, run_date="2026-08-13", clear_existing=True)
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert list(result["Email_Address"]) == ["new@y.com"]
+
+
+def test_append_leads_csv_formats_date_and_capture_date_columns_as_text(tmp_path):
+    # Same visual intent as the xlsx path's "dd-mmm-yy" (Date) and
+    # "mm/dd/yyyy" (Capture Date/any other date passthrough) number
+    # formats -- CSV has no separate format layer, so the VALUE itself
+    # must already be that text.
+    path = tmp_path / "template.csv"
+    path.write_text("Email_Address,Date,Capture Date\n", encoding="utf-8")
+
+    leads_df = pd.DataFrame([{"Email_Address": "a@x.com", "Capture Date": datetime.date(2026, 8, 17)}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="", last_name="", company="", cid="")
+
+    append_leads(str(path), "(CSV file)", leads_df, field_mapping, run_date=datetime.date(2026, 9, 1))
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert result.loc[0, "Date"] == "01-Sep-26"
+    assert result.loc[0, "Capture Date"] == "08/17/2026"
+
+
+def test_append_leads_csv_adds_refund_reason_column_when_missing(tmp_path):
+    path = tmp_path / "accumulated.csv"
+    path.write_text("Email,Status\nold@x.com,\n", encoding="utf-8")
+
+    leads_df = pd.DataFrame([{"Email": "new@y.com"}])
+    field_mapping = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+
+    append_leads(str(path), "(CSV file)", leads_df, field_mapping, run_date="2026-08-13",
+                 reasons={0: "Duplicate"})
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert list(result.columns) == ["Email", "Status", "Refund Reason"]
+    assert result.loc[0, "Refund Reason"] == ""  # existing row untouched
+    assert result.loc[1, "Refund Reason"] == "Duplicate"
+
+
+def test_append_leads_csv_reports_unmatched_passthrough_headers(tmp_path):
+    path = tmp_path / "template.csv"
+    path.write_text("Email_Address,Region\n", encoding="utf-8")
+
+    leads_df = pd.DataFrame([{"Email_Address": "a@x.com"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="", last_name="", company="", cid="")
+
+    unmatched = append_leads(str(path), "(CSV file)", leads_df, field_mapping, run_date="2026-08-13")
+
+    assert unmatched == ["Region"]
+
+
+def test_find_header_row_returns_one_for_csv_without_scanning(tmp_path):
+    path = tmp_path / "template.csv"
+    path.write_text("Email_Address,First_Name\na@x.com,A\n", encoding="utf-8")
+
+    assert find_header_row(str(path), "(CSV file)") == 1
+
+
+def test_read_sheet_headers_reads_the_first_row_for_csv(tmp_path):
+    path = tmp_path / "template.csv"
+    path.write_text("Email_Address,First_Name\na@x.com,A\n", encoding="utf-8")
+
+    assert read_sheet_headers(str(path), "(CSV file)") == ["Email_Address", "First_Name"]
+
+
+def test_set_status_for_emails_matches_by_email_for_csv(tmp_path):
+    path = tmp_path / "accumulated.csv"
+    path.write_text("Email,Status\na@x.com,\nb@x.com,\nc@x.com,Untouched\n", encoding="utf-8")
+
+    set_status_for_emails(str(path), "Accumulated", "Status", "Email", {"a@x.com", "b@x.com"},
+                           "Uploaded to Enhancio")
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert list(result["Status"]) == ["Uploaded to Enhancio", "Uploaded to Enhancio", "Untouched"]
+
+
+def test_set_status_by_row_index_for_csv(tmp_path):
+    path = tmp_path / "accumulated.csv"
+    path.write_text("Email,Status\na@x.com,\nb@x.com,\n", encoding="utf-8")
+
+    set_status_by_row_index(str(path), "Accumulated", "Status", {0: "Uploaded to Enhancio"})
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert list(result["Status"]) == ["Uploaded to Enhancio", ""]

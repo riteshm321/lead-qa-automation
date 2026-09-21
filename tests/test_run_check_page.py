@@ -929,6 +929,50 @@ def test_jira_summary_includes_lead_report_link_for_lead_qa_mode_with_template(t
     assert any(c.key == "jira_link_Lead Report" for c in at.checkbox)
 
 
+def test_finalize_writes_to_a_csv_lead_template(tmp_path, monkeypatch):
+    # Regression test for a real production incident (Intel APAC, a plain
+    # "Lead QA" client): Confirm & Write crashed with "openpyxl does not
+    # support .csv file format" right after the (unaffected, .xlsx)
+    # Accumulated Report had already been backed up and updated -- the
+    # Lead Template write has no CSV branch at all. Confirmed live.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    template_path = str(tmp_path / "template.csv")
+    (tmp_path / "template.csv").write_text(
+        "Email_Address,First_Name,Last_Name,Company_Name,CID\n", encoding="utf-8")
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client",
+        accumulated_report_path=acc_path,
+        field_mapping=fm,
+        client_mode="Lead QA",
+        lead_template_path=template_path,
+        lead_template_sheet_name="(CSV file)",
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    result_df = pd.read_csv(template_path, dtype=str, keep_default_na=False)
+    assert "bob@new.com" in result_df["Email_Address"].values
+
+
 def test_jira_summary_omits_lead_report_link_for_lead_qa_and_upload_mode(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
