@@ -13,6 +13,11 @@ import datetime
 import openpyxl
 import pandas as pd
 
+from core.excel_io import (
+    read_external_link_parts, restore_external_link_parts,
+    read_worksheet_ext_list, restore_worksheet_ext_list,
+)
+
 _PACING_SUMMARY_LABEL_ROW_OFFSET = {"Pending": 1, "Delivered": 2, "Diff": 3}
 
 
@@ -159,6 +164,13 @@ def append_mirror_rows(mirror_path: str, tab_name: str, rows: list[dict], header
     this exactly like append_leads' own unmatched-header return value, so
     a real column going permanently blank is never silent.
     """
+    # mirror_workbook_path is the real Box-synced file since 2026-09-16 --
+    # openpyxl silently drops/corrupts external-link cached values and
+    # Excel-2010+ extensions (x14 data validation/conditional formatting)
+    # on every round-trip, which Excel then flags as needing repair on
+    # next open (confirmed live). Same protection as core.excel_io.append_leads.
+    original_external_links = read_external_link_parts(mirror_path)
+    original_ext_list = read_worksheet_ext_list(mirror_path, tab_name)
     wb = openpyxl.load_workbook(mirror_path)
     try:
         ws = wb[tab_name]
@@ -183,6 +195,10 @@ def append_mirror_rows(mirror_path: str, tab_name: str, rows: list[dict], header
         return unmatched_headers
     finally:
         wb.close()
+        if original_external_links:
+            restore_external_link_parts(mirror_path, original_external_links)
+        if original_ext_list:
+            restore_worksheet_ext_list(mirror_path, tab_name, original_ext_list)
 
 
 _PACING_COUNTRY_SUFFIXES = ("IN", "AU")
@@ -241,6 +257,9 @@ def set_pacing_delivered(
     if week_label is None:
         week_label = current_week_label(datetime.date.today())
 
+    # Same real-Box-file protection as append_mirror_rows above.
+    original_external_links = read_external_link_parts(mirror_path)
+    original_ext_list = read_worksheet_ext_list(mirror_path, pacing_tab)
     wb = openpyxl.load_workbook(mirror_path)
     try:
         ws = wb[pacing_tab]
@@ -287,6 +306,10 @@ def set_pacing_delivered(
         wb.save(mirror_path)
     finally:
         wb.close()
+        if original_external_links:
+            restore_external_link_parts(mirror_path, original_external_links)
+        if original_ext_list:
+            restore_worksheet_ext_list(mirror_path, pacing_tab, original_ext_list)
 
 
 # Newly live segments' fixed Project Code, same pattern as

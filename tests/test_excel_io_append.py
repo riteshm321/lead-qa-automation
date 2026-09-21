@@ -8,7 +8,7 @@ from openpyxl.worksheet.table import Table
 
 from core.excel_io import (
     append_leads, guess_target_field_mapping, find_header_row, read_sheet_headers, route_leads_by_cid,
-    set_status_for_emails,
+    set_status_for_emails, set_status_by_row_index,
 )
 from core.models import FieldMapping, LeadTemplateTab
 
@@ -896,3 +896,50 @@ def test_set_status_for_emails_matches_by_email_not_row_position(tmp_path):
     assert ws2.cell(row=2, column=2).value == "Uploaded to Enhancio"
     assert ws2.cell(row=3, column=2).value == "Uploaded to Enhancio"
     assert ws2.cell(row=4, column=2).value == "Untouched"
+
+
+def test_set_status_for_emails_preserves_external_link_parts_byte_for_byte(tmp_path):
+    # Regression test for a real production incident: Box Tracker's "Send
+    # leads for approval" (which stamps the Accumulated Report's Status
+    # column via this function) corrupted the file -- Excel offered to
+    # "recover as much as we can" and reported repaired external-formula-
+    # reference records on next open. Unlike append_leads, this function
+    # had no external-link-parts preservation at all.
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email", "Status"])
+    ws.append(["a@x.com", ""])
+    wb.save(path)
+
+    fake_external_link = b"<not real xml, just needs to round-trip untouched>"
+    with zipfile.ZipFile(path, "a", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("xl/externalLinks/externalLink1.xml", fake_external_link)
+
+    set_status_for_emails(path, "Accumulated", "Status", "Email", {"a@x.com"}, "Uploaded to Enhancio")
+
+    with zipfile.ZipFile(path, "r") as zf:
+        assert zf.read("xl/externalLinks/externalLink1.xml") == fake_external_link
+
+
+def test_set_status_by_row_index_preserves_external_link_parts_byte_for_byte(tmp_path):
+    # Same real incident as above -- Box Tracker's checkbox-driven status
+    # updates (manual marking, Lead Template clearing, reconciliation) all
+    # go through this function instead, with the identical gap.
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Email", "Status"])
+    ws.append(["a@x.com", ""])
+    wb.save(path)
+
+    fake_external_link = b"<not real xml, just needs to round-trip untouched>"
+    with zipfile.ZipFile(path, "a", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("xl/externalLinks/externalLink1.xml", fake_external_link)
+
+    set_status_by_row_index(path, "Accumulated", "Status", {0: "Uploaded to Enhancio"})
+
+    with zipfile.ZipFile(path, "r") as zf:
+        assert zf.read("xl/externalLinks/externalLink1.xml") == fake_external_link

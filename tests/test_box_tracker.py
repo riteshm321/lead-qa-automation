@@ -1,4 +1,5 @@
 import datetime
+import zipfile
 
 import openpyxl
 import pandas as pd
@@ -256,6 +257,30 @@ def test_append_mirror_rows_reports_nothing_unmatched_when_every_header_is_cover
     assert unmatched == []
 
 
+def test_append_mirror_rows_preserves_external_link_parts_byte_for_byte(tmp_path):
+    # Regression test for a real production incident: Box Tracker's "Send
+    # leads for approval" writes here (the real Box-synced Approval Sheet
+    # since 2026-09-16, not a disposable local mirror) -- Excel offered to
+    # "recover as much as we can" on next open and reported repaired
+    # external-formula-reference records. This function had no
+    # external-link-parts preservation at all, unlike append_leads.
+    path = str(tmp_path / "mirror.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Approval Sheet"
+    ws.append(["Company Name", "Market"])
+    wb.save(path)
+
+    fake_external_link = b"<not real xml, just needs to round-trip untouched>"
+    with zipfile.ZipFile(path, "a", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("xl/externalLinks/externalLink1.xml", fake_external_link)
+
+    append_mirror_rows(path, "Approval Sheet", [{"Company Name": "New Co", "Market": "AU"}])
+
+    with zipfile.ZipFile(path, "r") as zf:
+        assert zf.read("xl/externalLinks/externalLink1.xml") == fake_external_link
+
+
 def test_set_pacing_delivered_writes_the_current_weeks_column(tmp_path):
     path = str(tmp_path / "mirror.xlsx")
     wb = openpyxl.Workbook()
@@ -271,6 +296,28 @@ def test_set_pacing_delivered_writes_the_current_weeks_column(tmp_path):
     wb2 = openpyxl.load_workbook(path)
     ws2 = wb2["Pacing"]
     assert ws2.cell(row=3, column=7).value == 18  # the "D" sub-column under "Week of 7"
+
+
+def test_set_pacing_delivered_preserves_external_link_parts_byte_for_byte(tmp_path):
+    # Same real incident as append_mirror_rows above -- this function
+    # writes the real Box-synced mirror workbook too.
+    path = str(tmp_path / "mirror.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing"
+    ws.append(["Funding Source", "Publisher", "Country", "Segment", "Campaign", "Week of 7", ""])
+    ws.append([None, None, None, None, None, "P", "D"])
+    ws.append(["Cash", "Madison Logic", "IN", "Select-T", "Bob", 18, 0])
+    wb.save(path)
+
+    fake_external_link = b"<not real xml, just needs to round-trip untouched>"
+    with zipfile.ZipFile(path, "a", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("xl/externalLinks/externalLink1.xml", fake_external_link)
+
+    set_pacing_delivered(path, "Bob", 18, week_label="Week of 7")
+
+    with zipfile.ZipFile(path, "r") as zf:
+        assert zf.read("xl/externalLinks/externalLink1.xml") == fake_external_link
 
 
 def test_set_pacing_delivered_overwrites_not_adds(tmp_path):
