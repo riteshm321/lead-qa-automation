@@ -427,6 +427,46 @@ def test_apply_complex_account_rules_end_to_end():
     assert row["Asset download year"] == 2026
 
 
+def test_apply_complex_account_rules_keeps_the_leadfiles_own_company_casing():
+    # Regression test for a real production incident: IBM APAC's leadfile
+    # spells its company column "company" (lowercase), unlike Dell's
+    # "Company". The old code force-renamed ANY casing of it to the
+    # hardcoded "Company" for this module's own internal use -- but
+    # append_leads resolves Company via an EXACT, case-sensitive lookup on
+    # field_mapping.company ("company" for IBM APAC), so that rename left
+    # no column literally named "company" behind, writing every Company
+    # cell blank in the Accumulated Report. The returned DataFrame must
+    # keep the leadfile's own casing, whatever it is.
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="company", cid="CID")
+    df = pd.DataFrame([
+        {"Email": "a@ibm.com", "First": "A", "Last": "One", "company": "IBM India", "CID": "118741"},
+    ])
+
+    enriched, _, _ = apply_complex_account_rules(df, fm, tal_index=None, installed_tech_map={}, pbs_map={})
+
+    assert enriched.iloc[0]["company"] == "IBM India"
+    assert "Company" not in enriched.columns
+
+
+def test_apply_complex_account_rules_tal_mapping_resolves_a_lowercase_company_column():
+    # Same lowercase-"company" leadfile as above, but this time WITH a TAL
+    # match -- apply_tal_mapping must be told the leadfile's own casing
+    # (field_mapping.company), not the hardcoded "Company", or it silently
+    # operates on/writes a column that was never actually there.
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="company", cid="CID")
+    df = pd.DataFrame([
+        {"Email": "a@wipro.com", "First": "A", "Last": "One", "company": "Wipro", "Country": "IN",
+         "Account ID": "", "CID": "118741"},
+    ])
+    tal_index = {"wipro.com": [{"account_id": "P123", "account_name": "Wipro Ltd", "country_code": "IN"}]}
+
+    enriched, _, _ = apply_complex_account_rules(df, fm, tal_index, installed_tech_map={}, pbs_map={})
+
+    assert enriched.iloc[0]["company"] == "Wipro Ltd"
+    assert enriched.iloc[0]["Account ID"] == "P123"
+    assert "Company" not in enriched.columns
+
+
 def test_apply_complex_account_rules_corrects_urn_dell_url_and_form_url_for_india_cid():
     df = _base_leads_df()  # CID 119414, wrong Asset URN/Form URL/Dell Asset URL
 

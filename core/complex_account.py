@@ -14,7 +14,6 @@ from core.matching import extract_domain
 # needs different names, add configurability then.
 COUNTRY_COLUMN = "Country"
 ACCOUNT_ID_COLUMN = "Account ID"
-COMPANY_COLUMN = "Company"
 CAPTURE_DATE_COLUMN = "Capture Date"
 EMAIL_OPTIN_COLUMN = "Email Opt-in"
 PHONE_COLUMN = "Business Phone"
@@ -51,8 +50,19 @@ _DELL_APAC_CIDS = frozenset(AGREED_CONTACTED_BY_CID)
 # Form URL check at all -- no rule was specified for any other CID.
 FORM_URL_SPEC_KEY_BY_CID = {"119414": "india_link", "119415": "au_link"}
 
+# Company is deliberately NOT among these. Every column below is only
+# ever looked up inside this module (or matched case-insensitively by
+# core.excel_io's passthrough logic), so renaming it to a fixed casing is
+# harmless. Company is different: append_leads resolves it via an EXACT,
+# case-sensitive lookup on field_mapping.company (the leadfile's own
+# column name, whatever casing that client actually uses) -- a hardcoded
+# canonical rename here silently broke that lookup for IBM APAC, whose
+# real leadfile spells it "company" (lowercase), writing every Company
+# cell blank once Confirm & Write started actually reaching Accumulated.
+# See apply_complex_account_rules, which passes field_mapping.company
+# (the client's own casing) into apply_tal_mapping instead.
 _KNOWN_COLUMNS = (
-    COUNTRY_COLUMN, ACCOUNT_ID_COLUMN, COMPANY_COLUMN, CAPTURE_DATE_COLUMN,
+    COUNTRY_COLUMN, ACCOUNT_ID_COLUMN, CAPTURE_DATE_COLUMN,
     EMAIL_OPTIN_COLUMN, PHONE_COLUMN, ASSET_TITLE_COLUMN, ASSET_URN_COLUMN,
     FORM_URL_COLUMN, DELL_ASSET_URL_COLUMN, TOP_TOPICS_COLUMN,
     INSTALLED_TECH_COLUMN, PBS_COLUMN, DOWNLOAD_DAY_COLUMN,
@@ -604,7 +614,8 @@ def apply_complex_account_rules(
     corrections: dict[int, list[str]] = {}
 
     if tal_index is not None:
-        df = apply_tal_mapping(df, field_mapping.email, COUNTRY_COLUMN, ACCOUNT_ID_COLUMN, COMPANY_COLUMN, tal_index)
+        df = apply_tal_mapping(
+            df, field_mapping.email, COUNTRY_COLUMN, ACCOUNT_ID_COLUMN, field_mapping.company, tal_index)
 
     if tal_segment_index is not None:
         df = fill_blank_segments(df, field_mapping.email, tal_segment_index)

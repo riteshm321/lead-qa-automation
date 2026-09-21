@@ -21,7 +21,7 @@ from core.excel_recalc import recalculate_workbook
 from core.complex_account import (
     load_tal_index, load_tal_segment_index, load_asset_specifications, load_domain_value_map,
     apply_complex_account_rules, merge_complex_account_review, check_complex_account_conditions,
-    ACCOUNT_ID_COLUMN, COMPANY_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
+    ACCOUNT_ID_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
     CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN,
 )
 from core import jira_client
@@ -870,7 +870,7 @@ if "run_result" in st.session_state:
             st.subheader("Preview: filled columns (nothing written yet)")
             _preview_cols = [c for c in [
                 field_mapping.cid, field_mapping.email, field_mapping.first_name, field_mapping.last_name,
-                ACCOUNT_ID_COLUMN, COMPANY_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
+                field_mapping.company, ACCOUNT_ID_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
                 CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN,
             ] if c and c in enriched_valid.columns]
             st.dataframe(
