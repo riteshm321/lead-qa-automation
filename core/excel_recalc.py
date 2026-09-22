@@ -3,6 +3,8 @@ import shutil
 import tempfile
 import threading
 
+from core.app_logging import get_logger
+
 _DEFAULT_TIMEOUT_SECONDS = 60
 
 
@@ -34,7 +36,15 @@ def recalculate_workbook(path: str, timeout_seconds: int = _DEFAULT_TIMEOUT_SECO
 
     tmp_dir = tempfile.mkdtemp(prefix="leadqa_recalc_")
     tmp_path = os.path.join(tmp_dir, os.path.basename(path))
-    shutil.copy2(path, tmp_path)
+    try:
+        shutil.copy2(path, tmp_path)
+    except OSError:
+        # A locked source file (still mid-OneDrive-sync, or open elsewhere),
+        # a full disk, or a permission error -- leaves an empty tmp_dir
+        # behind if not cleaned up here. Matches this function's own
+        # documented best-effort contract: fall back to the original path.
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return path
 
     outcome = {"ok": False}
     excel_pid: list[int] = []
@@ -105,4 +115,10 @@ def _force_kill(pid: int) -> None:
         import psutil
         psutil.Process(pid).kill()
     except Exception:
-        pass
+        # Since app.Visible = False, a failed kill (psutil missing, access
+        # denied, the process already gone) leaves an invisible orphaned
+        # Excel.exe with no other signal anywhere -- log it so it's at
+        # least diagnosable, without making the recalculation itself fail
+        # (this function's caller already falls back to the original path
+        # regardless of whether the kill succeeded).
+        get_logger().warning("Failed to force-kill orphaned Excel process (pid=%s)", pid, exc_info=True)

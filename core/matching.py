@@ -28,6 +28,23 @@ def extract_domain(email) -> str:
     return email.strip().lower().split("@")[-1]
 
 
+def normalize_cid(value) -> str:
+    # A CID column with even one blank cell elsewhere gets silently
+    # upcast by pandas from int64 to float64, turning every value from
+    # e.g. 119414 into 119414.0 -- without normalizing this, comparing
+    # against a clean digit string ("119414", however configured/typed)
+    # would never match. Originally private to core/complex_account.py
+    # (as _norm_cid) for its own per-CID business rules; promoted here
+    # since the identical .astype(str)-without-normalization bug turned
+    # out to also silently break CID matching in
+    # core.box_tracker.pick_leads_for_approval and
+    # core.excel_io.route_leads_by_cid, which never reused it.
+    text = str(value).strip() if value is not None else ""
+    if text.endswith(".0") and text[:-2].isdigit():
+        return text[:-2]
+    return text
+
+
 def normalize_company_name(name) -> str:
     if name is None:
         return ""

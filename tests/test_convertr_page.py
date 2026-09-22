@@ -6,7 +6,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_convertr_account_credentials, save_app_settings
-from core.convertr_sync import save_pending_leads
+from core.convertr_sync import save_pending_leads, load_pending_leads
 from core.models import ClientProfile, FieldMapping, ConvertrConfig, ConvertrCampaignMapping
 from core.profile_store import save_profile
 
@@ -228,6 +228,57 @@ def test_reconcile_writes_accepted_to_accumulated_and_rejected_to_refund_with_ci
     assert refund_df.loc[0, "Refund Reason"] == "Unable to Contact"
 
 
+def test_reconcile_still_processes_other_leads_when_one_lead_fetch_fails(tmp_path, monkeypatch):
+    # Regression test for a real, confirmed P1 bug: the reconcile loop used
+    # to wrap the ENTIRE per-lead polling loop in one try/except, so a
+    # single pending lead's get_lead_result failure (e.g. its campaign was
+    # deleted at Convertr) aborted reconciliation of every OTHER
+    # already-decided pending lead too, and st.stop() lost all progress
+    # made in that pass. Every future "Fetch decisions" click would hit the
+    # same failing lead_id and re-abort, silently blocking reconciliation
+    # for the whole client indefinitely.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+    save_pending_leads("Amazon Business EMEA", {
+        "101": {"Email": "bad@x.com", "CID": "120022"},
+        "102": {"Email": "good@x.com", "CID": "120022"},
+    })
+
+    from core.convertr_client import ConvertrError
+
+    def _fake_get_lead_result(enterprise, token, publisher_id, lead_id):
+        if lead_id == "101":
+            raise ConvertrError("Campaign no longer exists")
+        return {"status": "valid"}
+
+    with patch("core.convertr_client.login", return_value={"access_token": "tok"}), \
+         patch("core.convertr_client.get_lead_result", side_effect=_fake_get_lead_result):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        next(b for b in at.button if b.label == "Fetch decisions from Convertr").click().run()
+        assert not at.exception
+        assert any("Campaign no longer exists" in w.value for w in at.warning)
+        assert any("1 newly accepted" in i.value for i in at.info)
+
+        next(b for b in at.button if b.label == "Write to Accumulated & Refund").click().run()
+        assert not at.exception
+
+    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
+    assert len(accumulated_df) == 1
+    assert accumulated_df.loc[0, "Email"] == "good@x.com"
+
+    # The failing lead stays pending for a future retry -- it was never
+    # resolved, so it must not have been removed from the pending store.
+    remaining_pending = load_pending_leads("Amazon Business EMEA")
+    assert "101" in remaining_pending
+    assert "102" not in remaining_pending
+
+
 def test_reconcile_does_not_rewrite_already_synced_leads(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
@@ -256,6 +307,58 @@ def test_reconcile_does_not_rewrite_already_synced_leads(tmp_path, monkeypatch):
 
     accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
     assert len(accumulated_df) == 1  # not 2
+
+
+def test_switching_client_after_fetch_does_not_write_the_other_clients_leads(tmp_path, monkeypatch):
+    # Regression test for a real, confirmed P0 bug: fetched accepted/
+    # rejected decisions were never scoped to the client selected at fetch
+    # time. Fetching for Client A, then switching to Client B before
+    # clicking "Write to Accumulated & Refund", used to silently write
+    # Client A's leads into Client B's Accumulated/Refund tabs.
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    acc_a_path = str(tmp_path / "accumulated_a.xlsx")
+    _make_accumulated(acc_a_path)
+    _save_profile(acc_a_path)  # "Amazon Business EMEA"
+    save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+    save_pending_leads("Amazon Business EMEA", {"101": {"Email": "a@x.com", "CID": "120022"}})
+
+    acc_b_path = str(tmp_path / "accumulated_b.xlsx")
+    _make_accumulated(acc_b_path)
+    fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
+    profile_b = ClientProfile(
+        name="Other Client", accumulated_report_path=acc_b_path, field_mapping=fm,
+        convertr=ConvertrConfig(
+            enabled=True, enterprise="otherclient", publisher_id="99999",
+            campaigns=[ConvertrCampaignMapping(cid="1", campaign_id="1", global_form_id="1")],
+            field_mapping={"Email": "email"},
+        ),
+    )
+    save_profile(profile_b, get_clients_dir())
+
+    with patch("core.convertr_client.login", return_value={"access_token": "tok"}), \
+         patch("core.convertr_client.get_lead_result", return_value={"status": "valid"}):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        next(b for b in at.button if b.label == "Fetch decisions from Convertr").click().run()
+        assert not at.exception
+        assert any("1 newly accepted" in i.value for i in at.info)
+
+        # Switch to the other client WITHOUT writing Client A's fetch first.
+        next(s for s in at.selectbox if s.label == "Client").set_value("Other Client").run()
+        assert not at.exception
+        # Client A's fetched rows must not be visible/writable for Client B.
+        assert not any("newly accepted" in i.value for i in at.info)
+        write_buttons = [b for b in at.button if b.label == "Write to Accumulated & Refund"]
+        assert write_buttons == []
+
+    accumulated_b_df = pd.read_excel(acc_b_path, sheet_name="Accumulated")
+    assert len(accumulated_b_df) == 0  # Client A's lead never landed here
+
+    accumulated_a_df = pd.read_excel(acc_a_path, sheet_name="Accumulated")
+    assert len(accumulated_a_df) == 0  # never written for A either -- still pending
 
 
 def test_jira_section_hidden_without_a_ticket_configured(tmp_path, monkeypatch):

@@ -135,6 +135,46 @@ def test_import_leads_raises_on_non_200_http_status():
             import_leads("tok123", "L-22256", [{"Email Address": "j@x.com"}])
 
 
+def test_import_leads_preserves_earlier_chunks_results_when_a_later_chunk_fails():
+    # Regression test for a real, confirmed P0 bug: a >1000-lead call is
+    # split into multiple chunk requests, but the accumulated submitted/
+    # errors were only ever returned after the WHOLE loop finished -- a
+    # later chunk's failure discarded every earlier chunk's real,
+    # already-accepted leadIds entirely, with no way for the caller to
+    # recover them. They must now be attached to the raised EnhancioError
+    # via partial_result.
+    leads = [{"Email Address": f"{i}@x.com"} for i in range(1500)]
+    ok_response = MagicMock(
+        status_code=200,
+        json=lambda: {"success": True, "result": {"submittedLeads": [
+            {"leadId": "1", "status": "Submitted", "email": "a@x.com"}]}},
+    )
+    fail_response = MagicMock(status_code=500, json=lambda: {}, text="Internal Server Error")
+
+    with patch("core.enhancio_client.requests.post", side_effect=[ok_response, fail_response]):
+        with pytest.raises(EnhancioError) as exc_info:
+            import_leads("tok123", "L-22256", leads)
+
+    assert exc_info.value.partial_result == {
+        "submitted": [{"leadId": "1", "status": "Submitted", "email": "a@x.com"}],
+        "errors": [],
+    }
+
+
+def test_import_leads_raises_when_a_200_response_body_is_not_valid_json():
+    # Regression test for a real, confirmed P1 bug: a 200 whose body failed
+    # to parse as JSON (e.g. a proxy error page) was silently substituted
+    # with {} and treated exactly like a genuinely successful, empty
+    # response -- the caller had zero way to tell a broken response apart
+    # from "nothing accepted, no errors", risking a confusing outcome and
+    # possible duplicate resubmission on retry.
+    mock_response = MagicMock(status_code=200, text="<html>Bad Gateway</html>")
+    mock_response.json.side_effect = ValueError("not json")
+    with patch("core.enhancio_client.requests.post", return_value=mock_response):
+        with pytest.raises(EnhancioError, match="Bad Gateway"):
+            import_leads("tok123", "L-22256", [{"Email Address": "j@x.com"}])
+
+
 def test_get_lead_status_posts_lead_ids_and_returns_lead_list():
     mock_response = MagicMock(
         status_code=200,

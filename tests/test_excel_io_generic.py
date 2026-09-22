@@ -1,5 +1,6 @@
 import os
 import zipfile
+from unittest.mock import patch
 
 import openpyxl
 import pandas as pd
@@ -443,6 +444,42 @@ def test_append_leads_preserves_external_link_parts_byte_for_byte(tmp_path):
 
     with zipfile.ZipFile(path, "r") as zf:
         assert zf.read("xl/externalLinks/externalLink1.xml") == fake_external_link
+
+
+def test_append_leads_closes_the_workbook_even_when_the_tab_is_missing(tmp_path):
+    # Regression test: append_leads' xlsx branch used to load the workbook
+    # with no try/finally around it, so any exception between load and
+    # close (a missing/renamed tab, a bad formula translation, wb.save()
+    # itself failing on a locked/mid-sync file) leaked the open workbook
+    # instead of closing it. Verify close() still runs on that path.
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "TEMPLATE"
+    wb.save(path)
+
+    leads_df = pd.DataFrame([{"Email_Address": "bob@x.com"}])
+    field_mapping = FieldMapping(email="Email_Address", first_name="", last_name="", company="", cid="")
+
+    import core.excel_io as excel_io_module
+    original_load = excel_io_module.openpyxl.load_workbook
+    closed = []
+
+    def _spy_load(*args, **kwargs):
+        wb_obj = original_load(*args, **kwargs)
+        original_close = wb_obj.close
+
+        def _spy_close():
+            closed.append(True)
+            return original_close()
+
+        wb_obj.close = _spy_close
+        return wb_obj
+
+    with patch.object(excel_io_module.openpyxl, "load_workbook", side_effect=_spy_load):
+        with pytest.raises(KeyError):
+            append_leads(path, "NoSuchTab", leads_df, field_mapping, run_date="2026-08-13")
+
+    assert closed == [True]
 
 
 def test_detect_cids_from_pacing_overview_stops_at_first_blank_cid_row(tmp_path):

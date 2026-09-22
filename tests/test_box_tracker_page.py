@@ -1,5 +1,6 @@
 import datetime
 import os
+from unittest.mock import patch
 
 import openpyxl
 import pandas as pd
@@ -128,6 +129,41 @@ def test_pick_and_send_writes_approval_sheet_mirror_and_sets_pacing(tmp_path, mo
     assert sent_count == 18
 
 
+def test_pick_and_send_leaves_status_blank_when_the_mirror_write_fails(tmp_path, monkeypatch):
+    # Regression test for a real, confirmed P0 bug: Status used to be
+    # marked "Sent for Approval" BEFORE the leads were actually written to
+    # the mirror Approval Sheet. If that write failed for any reason
+    # (wrong tab, mirror file locked mid-Box-sync, disk error), the leads
+    # were already marked sent even though they were never actually
+    # written -- both recovery paths on this page filter strictly on
+    # blank Status, so those leads became permanently invisible to the
+    # whole tool. Status must now only be marked once the mirror write
+    # (and Pacing update) has actually succeeded.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": f"lead{i}@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
+         "Project Code": "PVLAP", "AMAL ID": "old-id, new-id", "Segment": "SelectT"}
+        for i in range(20)
+    ])
+    _make_mirror(mirror_path)
+    _save_profile(acc_path, mirror_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    pick_button = next(b for b in at.button if b.label == "Pick leads and send for approval")
+    with patch("core.box_tracker.append_mirror_rows", side_effect=RuntimeError("mirror file locked")):
+        pick_button.click().run()
+
+    assert not at.exception  # caught and shown via render_error, not an unhandled crash
+
+    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
+    sent_count = (accumulated_df["Status"].astype(str).str.startswith("Sent for Approval")).sum()
+    assert sent_count == 0  # never marked sent -- the mirror write never actually succeeded
+
+
 def test_pick_and_send_reports_shortfall(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
@@ -165,7 +201,11 @@ def test_pick_and_send_takes_all_leads_and_skips_pacing_for_skipped_campaign(tmp
     at.button(key="pick_and_send_button").click().run()
 
     assert not at.exception
-    assert not at.warning  # no shortfall for an uncapped campaign
+    # No shortfall warning for an uncapped campaign -- the only warning now
+    # present is step 2's unrelated, always-correct "wipes existing rows"
+    # notice, shown because these same 7 leads are immediately eligible
+    # for clearing on this same rerun.
+    assert not any("shortfall" in w.value.lower() or "short by" in w.value.lower() for w in at.warning)
 
     wb = openpyxl.load_workbook(mirror_path)
     assert wb["Approval Sheet"].max_row == 1 + 7  # all 7 leads, no diff+buffer cap
@@ -173,6 +213,36 @@ def test_pick_and_send_takes_all_leads_and_skips_pacing_for_skipped_campaign(tmp
     pacing_ws = wb["Pacing"]
     # CXO's row (row 4) "D" column under "Week of 7" must be untouched (still 0).
     assert pacing_ws.cell(row=4, column=7).value == 0
+
+
+def test_write_cleared_leads_button_is_disabled_until_wipe_is_confirmed(tmp_path, monkeypatch):
+    # Regression test for a real, confirmed P1 bug: "Write cleared leads to
+    # Lead Template" wiped the target file's existing rows (clear_existing=
+    # True) on a single click, with the only warning tucked inside a
+    # collapsed "How this works" expander. The button must now stay
+    # disabled until the user explicitly ticks a confirmation checkbox.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    template_path = str(tmp_path / "bob_template.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
+         "Status": "Sent for Approval - 07-Sep"},
+    ])
+    _make_mirror(mirror_path)
+    _make_lead_template(template_path)
+    _save_profile(acc_path, mirror_path, cid_lead_template_path={"118741": template_path})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
+
+    write_button = next(b for b in at.button if b.key == "write_lead_template_button")
+    assert write_button.disabled is True
+
+    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
+    write_button = next(b for b in at.button if b.key == "write_lead_template_button")
+    assert write_button.disabled is False
 
 
 def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existing(tmp_path, monkeypatch):
@@ -200,6 +270,7 @@ def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existi
     clear_checkbox = next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com")
     clear_checkbox.set_value(True).run()
 
+    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
     write_button = next(b for b in at.button if b.key == "write_lead_template_button")
     write_button.click().run()
 
@@ -262,6 +333,7 @@ def test_write_cleared_leads_uses_accumulated_field_mapping_not_raw_leadfile_map
 
     clear_checkbox = next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com")
     clear_checkbox.set_value(True).run()
+    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
     write_button = next(b for b in at.button if b.key == "write_lead_template_button")
     write_button.click().run()
 
@@ -362,6 +434,7 @@ def test_write_cleared_leads_uses_fixed_micro_audience_for_in_lob_cid(tmp_path, 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
     next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
+    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
     at.button(key="write_lead_template_button").click().run()
 
     assert not at.exception
@@ -397,6 +470,7 @@ def test_write_cleared_leads_combines_multiple_cids_sharing_one_template(tmp_pat
     at.run()
     next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
     next(cb for cb in at.checkbox if cb.label == "Clear lead2@x.com").set_value(True).run()
+    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
     at.button(key="write_lead_template_button").click().run()
 
     assert not at.exception
@@ -407,6 +481,63 @@ def test_write_cleared_leads_combines_multiple_cids_sharing_one_template(tmp_pat
     micro_audience_by_email = dict(zip(template_df["Email"], template_df["micro_audience"]))
     assert micro_audience_by_email["lead1@x.com"] == "AI Leaders"  # fixed value for 118743
     assert micro_audience_by_email["lead2@x.com"] == "LOB"  # fixed value for 119750
+
+
+def test_write_cleared_leads_keeps_earlier_templates_status_when_a_later_one_fails(tmp_path, monkeypatch):
+    # Regression test for a real, confirmed P1 bug: the Accumulated Status
+    # update used to run ONCE after the whole multi-template loop finished.
+    # If a LATER template's write failed, the whole handler aborted before
+    # reaching that single status update -- discarding it even for EARLIER
+    # templates whose Lead Template file had already been successfully
+    # (and destructively, clear_existing=True) rewritten. Those leads then
+    # looked untouched and stayed eligible to be "cleared" again, which
+    # would wipe and re-write the same already-correct file on the next
+    # attempt. Status must now be marked per-template, immediately after
+    # each one's own write succeeds.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    template_a_path = str(tmp_path / "template_a.xlsx")
+    template_b_path = str(tmp_path / "template_b.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118743",
+         "Status": "Sent for Approval - 07-Sep"},
+        {"Email": "lead2@x.com", "First": "F", "Last": "L", "Company": "Y", "CID": "119750",
+         "Status": "Sent for Approval - 07-Sep"},
+    ])
+    _make_mirror(mirror_path)
+    _make_lead_template(template_a_path)
+    _make_lead_template(template_b_path)
+    _save_profile(acc_path, mirror_path, cid_lead_template_path={
+        "118743": template_a_path, "119750": template_b_path,
+    })
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
+    next(cb for cb in at.checkbox if cb.label == "Clear lead2@x.com").set_value(True).run()
+
+    from core.excel_io import append_leads as _real_append_leads
+
+    def _fail_on_template_b(path, *args, **kwargs):
+        if path == template_b_path:
+            raise RuntimeError("Lead Template file locked")
+        return _real_append_leads(path, *args, **kwargs)
+
+    with patch("core.excel_io.append_leads", side_effect=_fail_on_template_b):
+        at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
+        at.button(key="write_lead_template_button").click().run()
+
+    assert not at.exception  # caught and shown via render_error, not an unhandled crash
+
+    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
+    status_by_email = dict(zip(accumulated_df["Email"], accumulated_df["Status"].astype(str)))
+    # Template A's write succeeded -- its lead must be marked cleared even
+    # though template B's write (later in the loop) failed.
+    assert status_by_email["lead1@x.com"].startswith("Cleared for Upload")
+    # Template B's write failed -- its lead must stay eligible for retry,
+    # not silently lost with a stale "already handled" look.
+    assert status_by_email["lead2@x.com"].startswith("Sent for Approval")
 
 
 def test_write_cleared_leads_warns_when_no_template_path_configured(tmp_path, monkeypatch):
@@ -423,6 +554,7 @@ def test_write_cleared_leads_warns_when_no_template_path_configured(tmp_path, mo
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
     next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
+    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
     at.button(key="write_lead_template_button").click().run()
 
     assert not at.exception

@@ -152,17 +152,37 @@ if _current_user["is_admin"]:
         st.markdown("**Existing accounts**")
         _users = load_users()
         _admin_count = sum(1 for r in _users.values() if r.get("is_admin"))
+        _pending_removal_key = "settings_pending_user_removal"
         for _username, _record in _users.items():
             with st.container(border=True):
                 _col_name, _col_remove = st.columns([4, 1])
                 _col_name.markdown(f"**{_username}** — {'Admin' if _record.get('is_admin') else 'User'}")
                 _is_last_admin = _record.get("is_admin") and _admin_count <= 1
-                if _col_remove.button(
+                # Two-step confirm before the actual delete_user call --
+                # this used to remove the account permanently on a single
+                # click, with no "are you sure" step at all. One row in a
+                # loop of colleagues' accounts, Remove only 1/5 of the row
+                # width, made a misclick a real, plausible way to
+                # permanently delete a colleague's login.
+                if st.session_state.get(_pending_removal_key) == _username:
+                    st.warning(f"⚠️ Remove **{_username}**'s account? This can't be undone.")
+                    _col_confirm, _col_cancel = st.columns(2)
+                    if _col_confirm.button(
+                        "Confirm removal", key=f"confirm_remove_{_username}",
+                        type="primary", use_container_width=True,
+                    ):
+                        delete_user(_username)
+                        st.session_state.pop(_pending_removal_key, None)
+                        queue_toast_before_rerun(f"Removed {_username}.")
+                        st.rerun()
+                    if _col_cancel.button("Cancel", key=f"cancel_remove_{_username}", use_container_width=True):
+                        st.session_state.pop(_pending_removal_key, None)
+                        st.rerun()
+                elif _col_remove.button(
                     "Remove", key=f"remove_user_{_username}", disabled=_is_last_admin, use_container_width=True,
                     help="Can't remove the only remaining admin." if _is_last_admin else None,
                 ):
-                    delete_user(_username)
-                    queue_toast_before_rerun(f"Removed {_username}.")
+                    st.session_state[_pending_removal_key] = _username
                     st.rerun()
 
                 _col_role_input, _col_role_save = st.columns([4, 1])

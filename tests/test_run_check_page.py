@@ -66,6 +66,28 @@ def test_cached_loaders_hash_their_mtime_argument():
     assert checked_any, "expected at least one @st.cache_data-decorated function in this page"
 
 
+def test_run_check_button_is_disabled_with_no_leadfile_uploaded(tmp_path, monkeypatch):
+    # Regression test: "Run Check" used to be `if st.button("Run Check") and
+    # new_leads_file:` -- clickable but a silent no-op with zero feedback
+    # when nothing was uploaded yet, since the `and` just short-circuited.
+    # The button must now be disabled instead, matching the Collate
+    # button's existing disabled=not _collate_files pattern.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm)
+    save_profile(profile, get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+
+    run_check_button = next(b for b in at.button if b.label == "Run Check")
+    assert run_check_button.disabled is True
+
+
 def test_collation_expander_appears_only_when_enabled_and_leaves_normal_upload_intact(tmp_path, monkeypatch):
     # AppTest can't simulate a real file upload, so this only checks the
     # collation option's visibility is gated correctly and the page loads

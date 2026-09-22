@@ -125,12 +125,77 @@ def _profile_file_mtime(name: str, clients_dir: str) -> float:
         return 0.0
 
 
+def _cached_read_leadfile(uploaded_file) -> pd.DataFrame:
+    # read_leadfile does a full header-scan + pd.read_excel/read_csv parse
+    # -- this was re-running on every single rerun of the page (including
+    # every checkbox click in the Refund Reasons/Needs Review tables after
+    # Run Check already completed) even though the uploaded file itself
+    # hadn't changed.
+    #
+    # Deliberately NOT @st.cache_data here: Streamlit's default hasher
+    # treats any object carrying a `.name` attribute as a real on-disk
+    # file and calls os.path.getmtime(obj.name) on it to build the cache
+    # key. That's fine for a genuine st.file_uploader widget value, but
+    # core.upload_cache.resolve_upload's "reuse an earlier upload"
+    # branch returns a plain io.BytesIO with .name set to just the
+    # original filename (e.g. "leads.csv") -- not a real path -- which
+    # crashed with FileNotFoundError. A manual memo keyed on
+    # (name, byte length) sidesteps that entirely.
+    uploaded_file.seek(0)
+    data = uploaded_file.read()
+    uploaded_file.seek(0)
+    cache_key = (getattr(uploaded_file, "name", ""), len(data))
+    _leadfile_cache = st.session_state.setdefault("_run_check_leadfile_df_cache", {})
+    if _leadfile_cache.get("key") == cache_key:
+        return _leadfile_cache["df"]
+    df = read_leadfile(uploaded_file)
+    _leadfile_cache["key"] = cache_key
+    _leadfile_cache["df"] = df
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def _cached_pacing_overview(pacing_path: str, mtime: float) -> tuple[pd.DataFrame | None, bool]:
+    # recalculate_workbook launches a full headless Excel COM automation
+    # cycle (up to 60s) to force-recalculate the Pacing Overview table --
+    # this used to re-run on every rerun of the Post-to-Jira panel (any
+    # link checkbox toggle, message edit, or file attach), not just once
+    # per Finalize. Keyed on the Accumulated Report's own mtime -- see
+    # _cached_tal_index above for why mtime isn't underscore-prefixed --
+    # so a NEW Finalize (which changes the file) still triggers a fresh
+    # recalculation, while unrelated UI interactions in between reuse the
+    # already-computed table. The temp file recalculate_workbook returns
+    # is only valid for the duration of THIS call, so it's read and
+    # cleaned up here, inside the cached function, rather than cached
+    # itself -- only the derived DataFrame is cached.
+    pacing_df = None
+    pacing_stale = True
+    try:
+        recalculated_path = recalculate_workbook(pacing_path)
+        pacing_stale = recalculated_path == pacing_path
+        try:
+            pacing_df = read_pacing_overview_table(recalculated_path)
+        finally:
+            if recalculated_path != pacing_path:
+                shutil.rmtree(os.path.dirname(recalculated_path), ignore_errors=True)
+    except Exception:
+        pacing_df = None
+    return pacing_df, pacing_stale
+
+
 try:
     _clients_dir_now = get_clients_dir()
     profile = _cached_load_profile(client_name, _clients_dir_now, _profile_file_mtime(client_name, _clients_dir_now))
-except TypeError as exc:
-    st.error(f"Could not load the profile for '{client_name}' — it may be in an older format. "
-             f"Delete and re-create it in Client Setup. (Technical detail: {exc})")
+except (TypeError, ValueError, OSError) as exc:
+    # TypeError: an older-format profile whose fields no longer match
+    # ClientProfile's dataclass. ValueError (json.JSONDecodeError is a
+    # subclass)/OSError: the shared profile JSON was mid-write from
+    # another machine when this read hit it, or a transient OneDrive
+    # lock -- both real possibilities for a file under the shared
+    # OneDrive clients folder, previously an unhandled crash here.
+    st.error(f"Could not load the profile for '{client_name}' — it may be in an older format, or the "
+             "file may have been mid-write on another machine (try again in a moment). If it keeps "
+             f"happening, delete and re-create it in Client Setup. (Technical detail: {exc})")
     st.stop()
 
 # A stale result from a previous client/file is more confusing than useful —
@@ -238,7 +303,7 @@ else:
 
     if new_leads_file:
         try:
-            new_leads_df = read_leadfile(new_leads_file)
+            new_leads_df = _cached_read_leadfile(new_leads_file)
             new_leads_headers = list(new_leads_df.columns)
         except Exception as exc:
             render_error(exc)
@@ -323,7 +388,8 @@ if profile.complex_account.enabled:
     complex_pbs_file = st.file_uploader(
         "Predictive Buying Stage file", type=["csv"], key=f"complex_pbs_file_{_upload_key_suffix}")
 
-if st.button("Run Check") and new_leads_file:
+if st.button("Run Check", disabled=not new_leads_file,
+             help=None if new_leads_file else "Upload a New Leads file first.") and new_leads_file:
     # Marks the start of this attempt's "automated time" for the Time Saved
     # tracker (see _finalize_write below) -- reset on every Run Check click
     # so a re-check after fixing something only counts time from the click
@@ -976,20 +1042,9 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
         if st.checkbox(f"{_label} — {_link or _path}", value=True, key=f"jira_link_{_label}"):
             _selected_links.append((_label, _link or jira_client.path_to_link_href(_path)))
 
-    _pacing_df = None
     _pacing_path = _pending_summary["accumulated_report_path"]
-    _pacing_stale = True
-    try:
-        with st.spinner("Recalculating Pacing Overview..."):
-            _recalculated_path = recalculate_workbook(_pacing_path)
-        _pacing_stale = _recalculated_path == _pacing_path
-        try:
-            _pacing_df = read_pacing_overview_table(_recalculated_path)
-        finally:
-            if _recalculated_path != _pacing_path:
-                shutil.rmtree(os.path.dirname(_recalculated_path), ignore_errors=True)
-    except Exception:
-        _pacing_df = None
+    with st.spinner("Recalculating Pacing Overview..."):
+        _pacing_df, _pacing_stale = _cached_pacing_overview(_pacing_path, os.path.getmtime(_pacing_path))
     _include_pacing = False
     if _pacing_df is not None and not _pacing_df.empty:
         _include_pacing = st.checkbox("Include Pacing Overview table", value=True, key="jira_include_pacing")

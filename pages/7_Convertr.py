@@ -1,7 +1,9 @@
 # pages/7_Convertr.py
 import datetime
+import os
 
 import pandas as pd
+import requests
 import streamlit as st
 
 from core.app_settings import get_clients_dir, get_convertr_account_credentials, get_jira_settings
@@ -12,6 +14,7 @@ from core.convertr_sync import (
     rejection_reason_from_result, load_pending_leads, save_pending_leads, remove_pending_leads,
     load_uploaded_emails, save_uploaded_emails, filter_already_uploaded, select_rows_for_test_mode,
 )
+from core.errors import render_error
 from core.excel_io import read_leadfile, append_leads, dataframe_to_excel_bytes
 from core import jira_client
 from core.jira_client import JiraError
@@ -23,16 +26,54 @@ _current_user = configure_page("Convertr")
 show_pending_toast()
 st.title("🔗 Convertr")
 
+
+@st.cache_data(show_spinner=False)
+def _cached_profile_names(clients_dir: str, dir_mtime: float) -> list[str]:
+    # mtime must NOT be underscore-prefixed -- Streamlit excludes any
+    # leading-underscore parameter from the cache key hash. Same fix as
+    # pages/2_Run_Check.py's _cached_profile_names.
+    return list_profile_names(clients_dir)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_load_profile(name: str, clients_dir: str, mtime: float):
+    # See _cached_profile_names above for the mtime-not-underscored
+    # reasoning. This page used to re-parse EVERY client profile in the
+    # shared folder (to check .convertr.enabled) plus the selected
+    # client's profile again, all uncached, on every single widget
+    # interaction -- the same anti-pattern already fixed for Run Check/
+    # Client Setup. Caching per-name+mtime (not the whole filtered list
+    # by directory mtime) means a single profile's edit still invalidates
+    # correctly even though the directory's own mtime only changes on
+    # add/remove, not on an existing file being edited in place.
+    return load_profile(name, clients_dir)
+
+
+def _clients_dir_mtime(clients_dir: str) -> float:
+    try:
+        return os.path.getmtime(clients_dir)
+    except OSError:
+        return 0.0
+
+
+def _profile_file_mtime(name: str, clients_dir: str) -> float:
+    try:
+        return os.path.getmtime(os.path.join(clients_dir, f"{name}.json"))
+    except OSError:
+        return 0.0
+
+
+_clients_dir_now = get_clients_dir()
 _profile_names = [
-    name for name in list_profile_names(get_clients_dir())
-    if load_profile(name, get_clients_dir()).convertr.enabled
+    name for name in _cached_profile_names(_clients_dir_now, _clients_dir_mtime(_clients_dir_now))
+    if _cached_load_profile(name, _clients_dir_now, _profile_file_mtime(name, _clients_dir_now)).convertr.enabled
 ]
 if not _profile_names:
     st.warning("No client has Convertr enabled yet. Set it up on the Client Setup page first.")
     st.stop()
 
 client_name = st.selectbox("Client", _profile_names)
-profile = load_profile(client_name, get_clients_dir())
+profile = _cached_load_profile(client_name, _clients_dir_now, _profile_file_mtime(client_name, _clients_dir_now))
 _convertr = profile.convertr
 _campaign_by_cid = {c.cid: c for c in _convertr.campaigns}
 # Convertr's own mapping (set on Client Setup's Convertr section) takes
@@ -61,7 +102,7 @@ if _upload_file:
     try:
         leads_df = read_leadfile(_upload_file)
     except Exception as exc:
-        st.error(f"Could not read this file: {exc}")
+        render_error(exc)
         st.stop()
 
     if not _leadfile_mapping:
@@ -179,19 +220,33 @@ if _upload_file:
         try:
             with st.spinner("Logging in to Convertr..."):
                 _token = convertr_client.login(_convertr.enterprise, _creds["username"], _creds["password"])["access_token"]
-        except ConvertrError as exc:
-            st.error(f"Login failed: {exc}")
+        except (ConvertrError, requests.exceptions.RequestException, KeyError) as exc:
+            # Only ConvertrError was caught before -- a network hiccup
+            # (requests.exceptions.RequestException, e.g. a timeout/DNS/
+            # connection drop) or an unexpected response shape missing
+            # "access_token" (KeyError) crashed the whole page with a raw
+            # traceback instead of this same friendly, logged error.
+            render_error(exc)
             st.stop()
 
         results = []
-        _newly_pending: dict[str, dict] = {}
-        _newly_uploaded_emails: set[str] = set()
 
         _send_by_cid, _skip_results = _plan_sends(leads_df)
         results.extend(_skip_results)
 
+        # A single live API call per lead with no progress indicator made a
+        # batch of 50-100 leads look hung -- every other slow/multi-step
+        # operation on this page (or Run Check's Finalize) already gives
+        # some form of feedback while it works.
+        _total_to_send = sum(len(group) for group in _send_by_cid.values())
+        _send_progress = st.progress(0.0, text=f"Uploading 0 / {_total_to_send} lead(s) to Convertr...") \
+            if _total_to_send else None
+        _sent_so_far = 0
+
         for cid, group in _send_by_cid.items():
             mapping = _campaign_by_cid[cid]
+            _cid_newly_pending: dict[str, dict] = {}
+            _cid_newly_uploaded_emails: set[str] = set()
             for _, lead in group.iterrows():
                 form_data = {
                     convertr_field: str(lead.get(leadfile_col, "") or "")
@@ -209,16 +264,34 @@ if _upload_file:
                     # NO data at all, so this is the only reliable source
                     # for that lead's fields (CID included) once reconcile
                     # writes it to Accumulated/Refund.
-                    _newly_pending[lead_id] = {col: lead.get(col, "") for col in leads_df.columns}
-                    _newly_uploaded_emails.add(str(email))
+                    _cid_newly_pending[lead_id] = {col: lead.get(col, "") for col in leads_df.columns}
+                    _cid_newly_uploaded_emails.add(str(email))
                     results.append({"CID": cid, "Email": email, "Result": f"✅ Lead ID {lead_id}"})
                 except ConvertrError as exc:
                     results.append({"CID": cid, "Email": email, "Result": f"❌ {exc}"})
+                _sent_so_far += 1
+                if _send_progress is not None:
+                    _send_progress.progress(
+                        _sent_so_far / _total_to_send,
+                        text=f"Uploading {_sent_so_far} / {_total_to_send} lead(s) to Convertr...")
 
-        if _newly_pending:
-            save_pending_leads(client_name, _newly_pending)
-        if _newly_uploaded_emails:
-            save_uploaded_emails(client_name, _newly_uploaded_emails)
+            # Persist THIS cid group's results immediately, not batched to
+            # the end of the whole multi-CID loop -- previously an
+            # uncaught exception anywhere outside the per-lead try/except
+            # (e.g. in the per-row form_data construction) could abort the
+            # handler before the single end-of-loop save, discarding
+            # tracking for every EARLIER CID group that had already
+            # succeeded -- those leads exist at Convertr with real lead
+            # IDs, but this tool would have no record they were ever sent,
+            # so a retry would resend them as "new," creating real
+            # duplicate leads.
+            if _cid_newly_pending:
+                save_pending_leads(client_name, _cid_newly_pending)
+            if _cid_newly_uploaded_emails:
+                save_uploaded_emails(client_name, _cid_newly_uploaded_emails)
+        if _send_progress is not None:
+            _send_progress.empty()
+
         st.session_state["convertr_upload_results"] = pd.DataFrame(results)
 
 if st.session_state.get("convertr_upload_results") is not None:
@@ -250,35 +323,62 @@ if st.button("Fetch decisions from Convertr"):
     try:
         with st.spinner("Logging in to Convertr..."):
             _token = convertr_client.login(_convertr.enterprise, _creds["username"], _creds["password"])["access_token"]
-    except ConvertrError as exc:
-        st.error(f"Login failed: {exc}")
+    except (ConvertrError, requests.exceptions.RequestException, KeyError) as exc:
+        render_error(exc)
         st.stop()
 
     pending = load_pending_leads(client_name)
     accepted_rows, rejected_rows = [], []
-    try:
-        with st.spinner(f"Checking {len(pending)} pending lead(s)..."):
-            for lead_id, row in pending.items():
-                result = convertr_client.get_lead_result(_convertr.enterprise, _token, _convertr.publisher_id, lead_id)
-                status = result["status"]
-                if status == "pending":
-                    continue
-                out_row = dict(row)
-                out_row["_convertr_lead_id"] = lead_id
-                if status == "valid":
-                    accepted_rows.append(out_row)
-                else:
-                    out_row["_reason"] = rejection_reason_from_result(result)
-                    rejected_rows.append(out_row)
-    except ConvertrError as exc:
-        st.error(f"Error fetching lead results: {exc}")
-        st.stop()
+    # Per-lead try/except -- this used to wrap the WHOLE loop in one
+    # try/except, so a single pending lead that became permanently
+    # unresolvable at Convertr (e.g. its campaign was deleted, or it
+    # consistently errors) aborted the sync before any of the OTHER
+    # already-decided pending leads (which could be many) got polled,
+    # read, or written -- every future "Fetch decisions" click would hit
+    # the same lead_id and re-abort, silently blocking reconciliation for
+    # the whole client indefinitely. Matches the upload loop above, which
+    # already isolated ConvertrError per lead.
+    _lead_fetch_errors: list[str] = []
+    with st.spinner(f"Checking {len(pending)} pending lead(s)..."):
+        for lead_id, row in pending.items():
+            try:
+                result = convertr_client.get_lead_result(
+                    _convertr.enterprise, _token, _convertr.publisher_id, lead_id)
+            except ConvertrError as exc:
+                _lead_fetch_errors.append(f"{lead_id}: {exc}")
+                continue
+            status = result["status"]
+            if status == "pending":
+                continue
+            out_row = dict(row)
+            out_row["_convertr_lead_id"] = lead_id
+            if status == "valid":
+                accepted_rows.append(out_row)
+            else:
+                out_row["_reason"] = rejection_reason_from_result(result)
+                rejected_rows.append(out_row)
+    if _lead_fetch_errors:
+        st.warning(
+            f"{len(_lead_fetch_errors)} pending lead(s) couldn't be checked this sync and will be "
+            "retried next time: " + "; ".join(_lead_fetch_errors)
+        )
 
     st.session_state["convertr_accepted_rows"] = accepted_rows
     st.session_state["convertr_rejected_rows"] = rejected_rows
+    st.session_state["convertr_decisions_client_name"] = client_name
 
-_accepted_rows = st.session_state.get("convertr_accepted_rows", [])
-_rejected_rows = st.session_state.get("convertr_rejected_rows", [])
+# Scoped to the CURRENTLY selected client -- fetched decisions used to
+# stay visible/writable after switching the Client dropdown, so a fetch
+# for Client A followed by a switch to Client B before clicking "Write to
+# Accumulated & Refund" silently wrote Client A's leads into Client B's
+# Accumulated/Refund tabs (and cleared Client B's pending-leads store
+# using Client A's lead ids). Mirrors the same client_name guard
+# convertr_reconcile_summary already uses below.
+if st.session_state.get("convertr_decisions_client_name") == client_name:
+    _accepted_rows = st.session_state.get("convertr_accepted_rows", [])
+    _rejected_rows = st.session_state.get("convertr_rejected_rows", [])
+else:
+    _accepted_rows, _rejected_rows = [], []
 
 if _accepted_rows or _rejected_rows:
     st.info(f"{len(_accepted_rows)} newly accepted, {len(_rejected_rows)} newly rejected — not yet written.")
@@ -323,7 +423,7 @@ if _accepted_rows or _rejected_rows:
         queue_toast_before_rerun(
             f"Wrote {len(_accepted_rows)} accepted lead(s) and {len(_rejected_rows)} rejected lead(s).")
         st.rerun()
-elif "convertr_accepted_rows" in st.session_state:
+elif st.session_state.get("convertr_decisions_client_name") == client_name:
     st.caption("No new decided leads since the last sync.")
 
 st.divider()

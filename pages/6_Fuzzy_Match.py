@@ -5,6 +5,7 @@ from pathlib import Path
 import streamlit as st
 
 from core.branding import configure_page
+from core.errors import render_error
 from core.excel_io import read_leadfile
 from core.fuzzy_match import compare_columns, apply_match_column_colors, MATCH_COLUMN
 
@@ -22,7 +23,7 @@ if uploaded:
     try:
         df = read_leadfile(uploaded)
     except Exception as exc:
-        st.error(f"Could not read this file: {exc}")
+        render_error(exc)
         st.stop()
 
     headers = list(df.columns)

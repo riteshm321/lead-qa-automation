@@ -7,7 +7,7 @@ import pandas as pd
 
 from core.check_result import ReviewDetail
 from core.excel_io import read_csv_bytes_robust
-from core.matching import extract_domain
+from core.matching import extract_domain, normalize_cid
 
 # Hardcoded to Dell APAC's actual column names (per design decision: not
 # worth a full mapping UI for a single client). If a future complex account
@@ -100,17 +100,6 @@ def _norm_domain(value) -> str:
         return ""
     text = str(value).strip().lower()
     return "" if text in ("", "nan") else text
-
-
-def _norm_cid(value) -> str:
-    # A CID column with even one blank cell elsewhere gets silently upcast
-    # by pandas from int64 to float64, turning every value from e.g. 119414
-    # into 119414.0 -- without normalizing this, a per-CID rule keyed on
-    # the clean digit string ("119414") would never match.
-    text = str(value).strip() if value is not None else ""
-    if text.endswith(".0") and text[:-2].isdigit():
-        return text[:-2]
-    return text
 
 
 def load_tal_index(tal_path: str) -> dict[str, list[dict]]:
@@ -503,7 +492,7 @@ def check_asset_url_mismatches(
             ))
 
         if field_mapping is not None:
-            spec_key = FORM_URL_SPEC_KEY_BY_CID.get(_norm_cid(row.get(field_mapping.cid, "")))
+            spec_key = FORM_URL_SPEC_KEY_BY_CID.get(normalize_cid(row.get(field_mapping.cid, "")))
             if spec_key is not None:
                 form_url = str(row.get(FORM_URL_COLUMN, "") or "").strip()
                 expected_form_url = str(spec.get(spec_key, "")).strip()
@@ -638,7 +627,7 @@ def apply_complex_account_rules(
         if PBS_COLUMN in df.columns:
             df.at[idx, PBS_COLUMN] = f"Predictive Buying Stage: {pbs_value}" if pbs_value else ""
 
-        cid = _norm_cid(row.get(field_mapping.cid, ""))
+        cid = normalize_cid(row.get(field_mapping.cid, ""))
         if AGREED_CONTACTED_COLUMN in df.columns:
             df.at[idx, AGREED_CONTACTED_COLUMN] = AGREED_CONTACTED_BY_CID.get(
                 cid, row.get(AGREED_CONTACTED_COLUMN, ""))

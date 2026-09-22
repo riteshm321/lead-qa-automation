@@ -37,6 +37,28 @@ def test_fresh_machine_shows_shared_root_setup_form_first(tmp_path, monkeypatch)
     assert not any("Lead QA" in t.value for t in at.title)
 
 
+def test_corrupted_credentials_file_shows_a_friendly_message_not_a_crash(tmp_path, monkeypatch):
+    # Regression test: credentials.json lives on the shared OneDrive root
+    # and require_login() reads it as the literal first thing on every
+    # page. A malformed file (OneDrive conflict copy, or caught mid-sync)
+    # used to crash the whole app with a raw traceback -- worse, before
+    # that it risked silently falling through to "no accounts yet" and
+    # offering to bootstrap a duplicate admin over real, existing accounts.
+    root = _configure_shared_root(tmp_path, monkeypatch)
+    creds_path = os.path.join(root, "auth", "credentials.json")
+    os.makedirs(os.path.dirname(creds_path), exist_ok=True)
+    with open(creds_path, "w", encoding="utf-8") as f:
+        f.write("{not valid json")
+
+    at = _unbypassed_app(monkeypatch)
+    at.run()
+
+    assert not at.exception
+    assert any("couldn't be read" in t.value for t in at.title)
+    assert not any("Set up your admin account" in t.value for t in at.title)
+    assert not any("Log in" in t.value for t in at.title)
+
+
 def test_shared_root_setup_with_valid_onedrive_path_continues_to_bootstrap(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(auth_gate, "is_onedrive_synced_path", lambda path: True)

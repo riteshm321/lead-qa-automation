@@ -17,6 +17,7 @@ from core.excel_io import (
     read_external_link_parts, restore_external_link_parts,
     read_worksheet_ext_list, restore_worksheet_ext_list,
 )
+from core.matching import normalize_cid
 
 _PACING_SUMMARY_LABEL_ROW_OFFSET = {"Pending": 1, "Delivered": 2, "Diff": 3}
 
@@ -124,8 +125,15 @@ def pick_leads_for_approval(
     shortfall: dict[str, int] = {}
     is_blank_status = accumulated_df[status_column].fillna("").astype(str).str.strip() == ""
 
+    # normalize_cid on both sides -- a CID column with even one blank cell
+    # elsewhere gets silently upcast by pandas from int64 to float64,
+    # turning every value from e.g. 119414 into 119414.0, which a plain
+    # .astype(str) == cid comparison never matches against the clean
+    # digit-string keys in cid_campaign_map. Confirmed real: this silently
+    # picked zero leads for the affected CID, with no error at all.
+    normalized_cid_column = accumulated_df[cid_column].astype(str).map(normalize_cid)
     for cid, campaign in cid_campaign_map.items():
-        candidates = accumulated_df[is_blank_status & (accumulated_df[cid_column].astype(str) == cid)]
+        candidates = accumulated_df[is_blank_status & (normalized_cid_column == normalize_cid(cid))]
         if campaign in uncapped_campaigns:
             if not candidates.empty:
                 picked_frames.append(candidates)

@@ -774,6 +774,26 @@ def test_route_leads_by_cid_splits_into_matching_tabs_mutually_exclusively():
     assert unmatched.empty
 
 
+def test_route_leads_by_cid_matches_a_float64_upcast_cid_column():
+    # Regression test for a real, confirmed P0 bug: a CID column with even
+    # one blank cell elsewhere gets silently upcast by pandas from int64
+    # to float64 (every value becomes e.g. 119336.0 instead of 119336) --
+    # without normalizing this, a plain .astype(str) comparison against a
+    # tab's clean digit-string CIDs never matched, silently routing the
+    # affected CID's leads into "unmatched" instead of its real tab.
+    leads = pd.DataFrame([
+        {"CID": 119336, "emailaddress": "a@x.com"},
+        {"CID": None, "emailaddress": "b@x.com"},  # forces the CID column to float64
+    ])
+    assert leads["CID"].dtype == "float64"  # confirms the upcast actually happened
+    tabs = [LeadTemplateTab(sheet_name="APAC", cids=["119336"])]
+
+    groups, unmatched = route_leads_by_cid(leads, "CID", tabs)
+
+    assert list(groups[("", "APAC")]["emailaddress"]) == ["a@x.com"]
+    assert list(unmatched["emailaddress"]) == ["b@x.com"]
+
+
 def test_route_leads_by_cid_uses_tabs_own_file_path_when_set():
     leads = pd.DataFrame([
         {"CID": "119336", "emailaddress": "a@x.com"},

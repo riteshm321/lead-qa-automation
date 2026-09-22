@@ -1,7 +1,11 @@
 import os
 
+import pytest
+
 from core.app_settings import save_app_settings
-from core.auth import authenticate, create_user, delete_user, has_any_users, load_users
+from core.auth import (
+    authenticate, create_user, delete_user, has_any_users, load_users, CorruptedCredentialsError,
+)
 
 
 def _configure_shared_root(tmp_path, monkeypatch) -> str:
@@ -30,6 +34,30 @@ def test_create_user_is_a_noop_without_a_configured_shared_root(tmp_path, monkey
 
     assert has_any_users() is False
     assert authenticate("ritesh", "correct-horse") is None
+
+
+def test_load_users_raises_a_distinct_error_on_corrupted_credentials_json(tmp_path, monkeypatch):
+    # Regression test for a real risk this app's own architecture invites:
+    # credentials.json lives on a shared OneDrive root and load_users() is
+    # the literal first thing require_login() calls on every page. Before
+    # this fix, a malformed file (a OneDrive conflict copy, or one caught
+    # mid-sync) raised a bare json.JSONDecodeError straight out of
+    # load_users(), crashing the app for the whole team with no recovery
+    # path. It must now raise a distinct, catchable exception instead of
+    # a generic parse error, so callers can tell "corrupted" apart from
+    # "genuinely no accounts yet" (has_any_users() returning False) --
+    # conflating the two would offer to bootstrap a duplicate admin
+    # account over a file that already has real ones.
+    root = _configure_shared_root(tmp_path, monkeypatch)
+    creds_path = os.path.join(root, "auth", "credentials.json")
+    os.makedirs(os.path.dirname(creds_path), exist_ok=True)
+    with open(creds_path, "w", encoding="utf-8") as f:
+        f.write("{not valid json")
+
+    with pytest.raises(CorruptedCredentialsError):
+        load_users()
+    with pytest.raises(CorruptedCredentialsError):
+        has_any_users()
 
 
 def test_create_user_then_authenticate_succeeds_with_correct_password(tmp_path, monkeypatch):

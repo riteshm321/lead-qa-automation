@@ -98,6 +98,29 @@ def test_pick_leads_for_approval_picks_diff_plus_five_per_campaign():
     assert shortfall == {}
 
 
+def test_pick_leads_for_approval_matches_a_float64_upcast_cid_column():
+    # Regression test for a real, confirmed P0 bug: a CID column with even
+    # one blank cell elsewhere gets silently upcast by pandas from int64
+    # to float64 (every value becomes e.g. 118741.0 instead of 118741) --
+    # without normalizing this, a plain .astype(str) == cid comparison
+    # against cid_campaign_map's clean digit-string keys never matched,
+    # silently picking ZERO leads for the affected CID with no error at
+    # all.
+    accumulated = pd.DataFrame([
+        {"CID": 118741, "Status": ""},
+        {"CID": 118741, "Status": ""},
+        {"CID": None, "Status": ""},  # forces the whole CID column to float64
+    ])
+    assert accumulated["CID"].dtype == "float64"  # confirms the upcast actually happened
+    cid_campaign_map = {"118741": "Bob"}
+    diffs = {"Bob": 0}  # diff <= 0 -> take every available blank-Status lead
+
+    picked, shortfall = pick_leads_for_approval(accumulated, "CID", "Status", cid_campaign_map, diffs)
+
+    assert len(picked) == 2
+    assert shortfall == {}
+
+
 def test_pick_leads_for_approval_takes_everything_available_when_diff_is_negative():
     # A negative diff means Delivered already exceeds Pending -- there's
     # no target left to pick towards (diff + buffer could even go

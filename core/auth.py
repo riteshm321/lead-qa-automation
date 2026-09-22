@@ -25,12 +25,25 @@ def _credentials_path() -> str:
     return os.path.join(root, _CREDENTIALS_SUBPATH) if root else ""
 
 
+class CorruptedCredentialsError(Exception):
+    """credentials.json exists but couldn't be parsed -- e.g. a OneDrive
+    conflict copy or a sync caught it mid-write. Deliberately a distinct
+    exception (not just letting json.JSONDecodeError/OSError propagate)
+    so callers can tell "genuinely no accounts yet" apart from "accounts
+    exist but the file is temporarily unreadable" -- conflating the two
+    would offer to bootstrap a fresh admin account over a file that
+    already has real ones."""
+
+
 def load_users() -> dict:
     path = _credentials_path()
     if not path or not os.path.isfile(path):
         return {}
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise CorruptedCredentialsError(str(exc)) from exc
 
 
 def save_users(users: dict) -> None:

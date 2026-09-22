@@ -3,7 +3,7 @@ import os
 import streamlit as st
 
 from core.app_settings import get_shared_root_dir, load_app_settings, save_app_settings
-from core.auth import authenticate, create_user, has_any_users
+from core.auth import authenticate, create_user, has_any_users, CorruptedCredentialsError
 from core.file_browser import browse_for_folder
 from core.onedrive import is_onedrive_synced_path
 
@@ -41,11 +41,27 @@ def require_login() -> dict:
 
     if not get_shared_root_dir():
         _render_shared_root_setup_form()
-    elif not has_any_users():
-        _render_bootstrap_form()
     else:
-        _render_login_form()
+        try:
+            _no_users_yet = not has_any_users()
+        except CorruptedCredentialsError:
+            _render_corrupted_credentials_message()
+            st.stop()
+        if _no_users_yet:
+            _render_bootstrap_form()
+        else:
+            _render_login_form()
     st.stop()
+
+
+def _render_corrupted_credentials_message() -> None:
+    st.title("⚠️ Accounts file couldn't be read")
+    st.error(
+        "The shared accounts file (credentials.json) exists but couldn't be parsed -- this can happen "
+        "if OneDrive is still syncing it, or if it was caught mid-write. Wait a moment for OneDrive to "
+        "finish syncing and reload this page. If it keeps happening, ask an admin to check "
+        "credentials.json in the shared team folder's auth/ subfolder for a OneDrive conflict copy."
+    )
 
 
 def _render_shared_root_setup_form() -> None:
@@ -113,7 +129,11 @@ def _render_login_form() -> None:
         password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Log in")
     if submitted:
-        user = authenticate(username.strip(), password)
+        try:
+            user = authenticate(username.strip(), password)
+        except CorruptedCredentialsError:
+            _render_corrupted_credentials_message()
+            return
         if user is None:
             st.error("Incorrect username or password.")
         else:

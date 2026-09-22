@@ -251,6 +251,65 @@ def test_upload_fills_asset_title_by_campaign_type_for_covered_cids(tmp_path, mo
     assert captured_leads["L-22UMP"][0]["asset_title"] == "Normal Only"
 
 
+def test_upload_saves_earlier_allocations_pending_leads_when_a_later_one_fails(tmp_path, monkeypatch):
+    # Regression test for a real, confirmed P0 bug: pending-lead tracking
+    # used to be saved ONCE, after the whole multi-allocation loop
+    # finished. A later allocation's import failure aborted the handler
+    # before that single save, discarding tracking for every EARLIER
+    # allocation that had already succeeded -- those leads exist at
+    # Enhancio with real lead IDs, but this tool would have no record they
+    # were ever sent, so a retry would resend them as "new," creating
+    # real duplicate leads. Tracking must now be saved per-allocation,
+    # immediately after each one's own send completes.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="Amazon Business EMEA", accumulated_report_path=acc_path, field_mapping=fm,
+        enhancio=EnhancioConfig(
+            enabled=True,
+            allocations=[
+                EnhancioAllocationMapping(cid="120022", allocation_uid="L-1"),
+                EnhancioAllocationMapping(cid="120028", allocation_uid="L-2"),
+            ],
+            field_mapping={"Email": "Email Address"},
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+    save_enhancio_client_id("CID123")
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([
+        {"CID": "120022", "Email": "a@x.com"},
+        {"CID": "120028", "Email": "b@x.com"},
+    ]).to_csv(leads_csv, index=False)
+
+    from core.enhancio_client import EnhancioError
+
+    def _fake_import_leads(token, allocation_uid, leads):
+        if allocation_uid == "L-2":
+            raise EnhancioError("Enhancio returned 500 importing leads: server error")
+        return {"submitted": [
+            {"leadId": "lead-1", "status": "Submitted", "email": leads[0]["Email Address"]},
+        ], "errors": []}
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+        assert not at.exception
+
+    # Allocation L-1's lead must be tracked as pending even though L-2 failed.
+    pending = load_pending_leads("Amazon Business EMEA")
+    assert "lead-1" in pending
+    assert pending["lead-1"]["Email"] == "a@x.com"
+
+
 def test_upload_forces_industry_to_the_fixed_value_for_covered_cids(tmp_path, monkeypatch):
     # Regression test: Enhancio rejected the leadfile's own real Industry
     # values (e.g. "Professional Services") as "Invalid field value(s)" --
@@ -754,6 +813,59 @@ def test_upload_reformats_a_date_field_to_enhancios_required_format(tmp_path, mo
         assert not at.exception
 
     assert captured["leads"][0]["Created Timestamp"] == "03-05-2026 14:30:00"
+
+
+def test_switching_client_after_fetch_does_not_write_the_other_clients_leads(tmp_path, monkeypatch):
+    # Regression test for a real, confirmed P0 bug (same as Convertr):
+    # fetched accepted/rejected decisions were never scoped to the client
+    # selected at fetch time. Fetching for Client A, then switching to
+    # Client B before clicking "Write to Accumulated & Refund", used to
+    # silently write Client A's leads into Client B's Accumulated/Refund
+    # tabs.
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_enhancio_client_id("CID123")
+
+    acc_a_path = str(tmp_path / "accumulated_a.xlsx")
+    _make_accumulated(acc_a_path)
+    _save_profile(acc_a_path)  # "Amazon Business EMEA"
+    save_pending_leads("Amazon Business EMEA", {"101": {"Email": "a@x.com", "CID": "120022"}})
+
+    acc_b_path = str(tmp_path / "accumulated_b.xlsx")
+    _make_accumulated(acc_b_path)
+    fm = FieldMapping(email="Email", first_name="First Name", last_name="Last Name", company="Company", cid="CID")
+    profile_b = ClientProfile(
+        name="Other Client", accumulated_report_path=acc_b_path, field_mapping=fm,
+        enhancio=EnhancioConfig(
+            enabled=True,
+            allocations=[EnhancioAllocationMapping(cid="1", allocation_uid="L-1")],
+            field_mapping={"Email": "Email Address"},
+        ),
+    )
+    save_profile(profile_b, get_clients_dir())
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.get_lead_status",
+               return_value=[{"leadId": "101", "status": "Accepted", "email": "a@x.com"}]):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        next(b for b in at.button if b.label == "Fetch decisions from Enhancio").click().run()
+        assert not at.exception
+        assert any("1 newly accepted" in i.value for i in at.info)
+
+        # Switch to the other client WITHOUT writing Client A's fetch first.
+        next(s for s in at.selectbox if s.label == "Client").set_value("Other Client").run()
+        assert not at.exception
+        assert not any("newly accepted" in i.value for i in at.info)
+        write_buttons = [b for b in at.button if b.label == "Write to Accumulated & Refund"]
+        assert write_buttons == []
+
+    accumulated_b_df = pd.read_excel(acc_b_path, sheet_name="Accumulated")
+    assert len(accumulated_b_df) == 0  # Client A's lead never landed here
+
+    accumulated_a_df = pd.read_excel(acc_a_path, sheet_name="Accumulated")
+    assert len(accumulated_a_df) == 0  # never written for A either -- still pending
 
 
 def test_reconcile_writes_accepted_to_accumulated_and_rejected_to_refund_with_cid_and_reason(tmp_path, monkeypatch):

@@ -1,8 +1,10 @@
 # pages/8_Enhancio.py
 import datetime
+import os
 from collections import defaultdict
 
 import pandas as pd
+import requests
 import streamlit as st
 
 from core.app_settings import get_clients_dir, get_enhancio_client_id, get_jira_settings
@@ -13,6 +15,7 @@ from core.box_tracker import (
 from core.branding import configure_page
 from core import enhancio_client
 from core.enhancio_client import EnhancioError
+from core.errors import render_error
 from core.enhancio_sync import (
     rejection_reason_from_status_entry, load_pending_leads, save_pending_leads, remove_pending_leads,
     load_uploaded_emails, save_uploaded_emails, clear_uploaded_emails, filter_already_uploaded,
@@ -32,16 +35,63 @@ _current_user = configure_page("Enhancio")
 show_pending_toast()
 st.title("🔗 Enhancio")
 
+
+@st.cache_data(show_spinner=False)
+def _cached_profile_names(clients_dir: str, dir_mtime: float) -> list[str]:
+    # mtime must NOT be underscore-prefixed -- Streamlit excludes any
+    # leading-underscore parameter from the cache key hash. Same fix as
+    # pages/2_Run_Check.py's _cached_profile_names.
+    return list_profile_names(clients_dir)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_load_profile(name: str, clients_dir: str, mtime: float):
+    # See _cached_profile_names above for the mtime-not-underscored
+    # reasoning. This page used to re-parse EVERY client profile in the
+    # shared folder (to check .enhancio.enabled) plus the selected
+    # client's profile again, all uncached, on every single widget
+    # interaction -- the same anti-pattern already fixed for Run Check/
+    # Client Setup/Convertr. Caching per-name+mtime (not the whole
+    # filtered list by directory mtime) means a single profile's edit
+    # still invalidates correctly even though the directory's own mtime
+    # only changes on add/remove, not on an existing file being edited
+    # in place.
+    return load_profile(name, clients_dir)
+
+
+def _clients_dir_mtime(clients_dir: str) -> float:
+    try:
+        return os.path.getmtime(clients_dir)
+    except OSError:
+        return 0.0
+
+
+def _profile_file_mtime(name: str, clients_dir: str) -> float:
+    try:
+        return os.path.getmtime(os.path.join(clients_dir, f"{name}.json"))
+    except OSError:
+        return 0.0
+
+
+@st.cache_data(show_spinner=False)
+def _cached_sheet_df(path: str, sheet_name: str, mtime: float) -> pd.DataFrame:
+    # Same fix as pages/2_Run_Check.py's _cached_sheet_df -- the
+    # Accumulated Report was being re-read from disk uncached whenever
+    # the date-range pull mode is active.
+    return read_sheet_as_dataframe(path, sheet_name)
+
+
+_clients_dir_now = get_clients_dir()
 _profile_names = [
-    name for name in list_profile_names(get_clients_dir())
-    if load_profile(name, get_clients_dir()).enhancio.enabled
+    name for name in _cached_profile_names(_clients_dir_now, _clients_dir_mtime(_clients_dir_now))
+    if _cached_load_profile(name, _clients_dir_now, _profile_file_mtime(name, _clients_dir_now)).enhancio.enabled
 ]
 if not _profile_names:
     st.warning("No client has Enhancio enabled yet. Set it up on the Client Setup page first.")
     st.stop()
 
 client_name = st.selectbox("Client", _profile_names)
-profile = load_profile(client_name, get_clients_dir())
+profile = _cached_load_profile(client_name, _clients_dir_now, _profile_file_mtime(client_name, _clients_dir_now))
 _enhancio = profile.enhancio
 _allocation_by_cid = {a.cid: a.allocation_uid for a in _enhancio.allocations}
 _ACCUMULATED_DATE_COLUMN = "Date"
@@ -55,8 +105,13 @@ def _get_token() -> str:
         st.stop()
     try:
         return enhancio_client.get_access_token(client_id)["access_token"]
-    except EnhancioError as exc:
-        st.error(f"Enhancio login failed: {exc}")
+    except (EnhancioError, requests.exceptions.RequestException, KeyError) as exc:
+        # Only EnhancioError was caught before -- a network hiccup
+        # (requests.exceptions.RequestException, e.g. a timeout/DNS/
+        # connection drop) or an unexpected response shape missing
+        # "access_token" (KeyError) crashed the whole page with a raw
+        # traceback instead of this same friendly, logged error.
+        render_error(exc)
         st.stop()
 
 
@@ -103,9 +158,11 @@ if _from_accumulated:
         st.error("\"From date\" must not be after \"To date\".")
         st.stop()
     try:
-        _accumulated_df = read_sheet_as_dataframe(profile.accumulated_report_path, profile.accumulated_tab_name)
+        _accumulated_df = _cached_sheet_df(
+            profile.accumulated_report_path, profile.accumulated_tab_name,
+            os.path.getmtime(profile.accumulated_report_path))
     except Exception as exc:
-        st.error(f"Could not load Accumulated Report: {exc}")
+        render_error(exc)
         st.stop()
     if _ACCUMULATED_DATE_COLUMN not in _accumulated_df.columns:
         st.error(f"The Accumulated Report has no \"{_ACCUMULATED_DATE_COLUMN}\" column to filter by.")
@@ -127,7 +184,7 @@ else:
         try:
             leads_df = read_leadfile(_upload_file)
         except Exception as exc:
-            st.error(f"Could not read this file: {exc}")
+            render_error(exc)
             st.stop()
 
 if leads_df is not None:
@@ -328,13 +385,24 @@ if leads_df is not None:
         _token = _get_token()
 
         results = []
-        _newly_pending: dict[str, dict] = {}
         _newly_uploaded_emails_by_allocation: dict[str, set[str]] = defaultdict(set)
 
         _send_by_allocation, _skip_results = _plan_sends(leads_df)
         results.extend(_skip_results)
 
-        for allocation_uid, _send_df in _send_by_allocation.items():
+        # One live batch API call per allocation with no progress indicator
+        # made a multi-allocation upload look hung -- every other slow/
+        # multi-step operation on this page (or Run Check's Finalize)
+        # already gives some form of feedback while it works.
+        _total_allocations = len(_send_by_allocation)
+        _send_progress = st.progress(0.0, text=f"Uploading allocation 0 / {_total_allocations}...") \
+            if _total_allocations else None
+
+        for _allocation_idx, (allocation_uid, _send_df) in enumerate(_send_by_allocation.items(), start=1):
+            if _send_progress is not None:
+                _send_progress.progress(
+                    (_allocation_idx - 1) / _total_allocations,
+                    text=f"Uploading allocation {_allocation_idx} / {_total_allocations} ({allocation_uid})...")
             # Fixed values (confirmed once on Client Setup, per allocation --
             # a field like Company Size that's the same for every lead sent
             # to this allocation rather than read from the leadfile) applied
@@ -373,10 +441,28 @@ if leads_df is not None:
             try:
                 _import_result = enhancio_client.import_leads(_token, allocation_uid, lead_payloads)
             except EnhancioError as exc:
-                for _, lead in _send_df.iterrows():
-                    results.append({"CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
-                                     "Result": f"❌ {exc}"})
-                continue
+                if exc.partial_result is not None:
+                    # A >1000-lead batch is chunked internally -- some
+                    # earlier chunk(s) already succeeded before a LATER
+                    # chunk failed. Use what actually went through instead
+                    # of discarding it and reporting every lead in this
+                    # allocation (including genuinely-accepted ones) as
+                    # failed -- see core.enhancio_client.EnhancioError.
+                    _import_result = {
+                        "submitted": exc.partial_result.get("submitted", []),
+                        "errors": exc.partial_result.get("errors", []),
+                    }
+                    st.warning(
+                        f"Allocation {allocation_uid}: the import failed partway through this batch "
+                        f"({exc}) -- leads already accepted before the failure are still recorded "
+                        "below; leads after the failure point were never sent and should be retried."
+                    )
+                else:
+                    for _, lead in _send_df.iterrows():
+                        results.append({
+                            "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
+                            "Result": f"❌ {exc}"})
+                    continue
 
             # A batch can accept some leads and reject others (e.g.
             # duplicates) in the SAME response -- Enhancio doesn't echo
@@ -397,6 +483,7 @@ if leads_df is not None:
                     f"error reason(s) for leads it did not accept in this batch: "
                     + "; ".join(_distinct_batch_errors)
                 )
+            _allocation_newly_pending: dict[str, dict] = {}
             for _, lead in _send_df.iterrows():
                 cid = lead.get(cid_column, "")
                 email = lead.get(_leadfile_mapping.email, "")
@@ -407,7 +494,7 @@ if leads_df is not None:
                     # The original leadfile row, kept exactly as uploaded --
                     # reconcile has no other way to recover a lead's data
                     # once it writes to Accumulated/Refund later.
-                    _newly_pending[str(lead_id)] = {col: lead.get(col, "") for col in leads_df.columns}
+                    _allocation_newly_pending[str(lead_id)] = {col: lead.get(col, "") for col in leads_df.columns}
                     _newly_uploaded_emails_by_allocation[allocation_uid].add(str(email))
                     results.append({"CID": cid, "Email": email, "Result": f"✅ Lead ID {lead_id} ({status})"})
                 else:
@@ -416,10 +503,24 @@ if leads_df is not None:
                         "Result": "❌ Not accepted by Enhancio (see batch error reasons above)",
                     })
 
-        if _newly_pending:
-            save_pending_leads(client_name, _newly_pending)
-        for allocation_uid, emails in _newly_uploaded_emails_by_allocation.items():
-            save_uploaded_emails(client_name, allocation_uid, emails)
+            # Persist THIS allocation's results immediately, not batched to
+            # the end of the whole multi-allocation loop -- previously a
+            # LATER allocation's failure (e.g. an uncaught exception in the
+            # per-row matching logic) could abort the handler before the
+            # single end-of-loop save, discarding tracking for every
+            # EARLIER allocation that had already succeeded -- those leads
+            # exist at Enhancio with real lead IDs, but this tool would
+            # have no record they were ever sent, so a retry would resend
+            # them as "new," creating real duplicate leads. Confirmed real
+            # by the audit.
+            if _allocation_newly_pending:
+                save_pending_leads(client_name, _allocation_newly_pending)
+            if _newly_uploaded_emails_by_allocation[allocation_uid]:
+                save_uploaded_emails(
+                    client_name, allocation_uid, _newly_uploaded_emails_by_allocation[allocation_uid])
+
+        if _send_progress is not None:
+            _send_progress.empty()
 
         if _from_accumulated:
             _all_newly_uploaded_emails = {
@@ -484,9 +585,20 @@ if st.button("Fetch decisions from Enhancio"):
 
     st.session_state["enhancio_accepted_rows"] = accepted_rows
     st.session_state["enhancio_rejected_rows"] = rejected_rows
+    st.session_state["enhancio_decisions_client_name"] = client_name
 
-_accepted_rows = st.session_state.get("enhancio_accepted_rows", [])
-_rejected_rows = st.session_state.get("enhancio_rejected_rows", [])
+# Scoped to the CURRENTLY selected client -- fetched decisions used to
+# stay visible/writable after switching the Client dropdown, so a fetch
+# for Client A followed by a switch to Client B before clicking "Write to
+# Accumulated & Refund" silently wrote Client A's leads into Client B's
+# Accumulated/Refund tabs (and cleared Client B's pending-leads store
+# using Client A's lead ids). Mirrors the same client_name guard
+# enhancio_reconcile_summary already uses below.
+if st.session_state.get("enhancio_decisions_client_name") == client_name:
+    _accepted_rows = st.session_state.get("enhancio_accepted_rows", [])
+    _rejected_rows = st.session_state.get("enhancio_rejected_rows", [])
+else:
+    _accepted_rows, _rejected_rows = [], []
 
 if _accepted_rows or _rejected_rows:
     st.info(f"{len(_accepted_rows)} newly accepted, {len(_rejected_rows)} newly rejected — not yet written.")
@@ -531,7 +643,7 @@ if _accepted_rows or _rejected_rows:
         queue_toast_before_rerun(
             f"Wrote {len(_accepted_rows)} accepted lead(s) and {len(_rejected_rows)} rejected lead(s).")
         st.rerun()
-elif "enhancio_accepted_rows" in st.session_state:
+elif st.session_state.get("enhancio_decisions_client_name") == client_name:
     st.caption("No new decided leads since the last sync.")
 
 st.divider()

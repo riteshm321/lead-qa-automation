@@ -26,7 +26,21 @@ _MAX_BATCH_SIZE = 1000
 
 class EnhancioError(Exception):
     """Raised for any non-success response from an Enhancio API call --
-    carries the parsed error body's message when Enhancio provided one."""
+    carries the parsed error body's message when Enhancio provided one.
+
+    partial_result, if set, carries whatever {"submitted"/"resolved",
+    "errors"} import_leads/get_lead_status had already accumulated from
+    EARLIER chunks before THIS chunk's request failed. A >1000-lead/id
+    call is split into multiple chunk requests -- without this, a later
+    chunk failing discarded every earlier chunk's real, already-accepted
+    results, so leads Enhancio had genuinely accepted (with real lead
+    IDs) were never returned to the caller at all, risking duplicate
+    resubmission and lost tracking. Callers should use partial_result
+    instead of assuming nothing at all succeeded."""
+
+    def __init__(self, message: str, partial_result: dict | None = None):
+        super().__init__(message)
+        self.partial_result = partial_result
 
 
 def _first_error_message(body: dict) -> str:
@@ -42,6 +56,18 @@ def _post(url: str, headers: dict, payload: dict | None, action: str, allow_part
     try:
         body = response.json()
     except ValueError:
+        # A 200 with a body that failed to parse as JSON (e.g. a proxy
+        # error page, or a genuinely empty body) used to be silently
+        # substituted with {} and treated exactly like a real, clean,
+        # error-free response -- the caller had zero way to tell that
+        # apart from an actually-successful empty result, risking a
+        # confusing "nothing accepted, no errors" outcome and possible
+        # duplicate resubmission on retry. Treat it as a failure, the
+        # same as a non-200 status, instead of masking it as success.
+        if response.status_code == 200:
+            raise EnhancioError(
+                f"Enhancio returned 200 {action} but the response body wasn't valid JSON: "
+                f"{response.text[:300]}")
         body = {}
     # Enhancio's envelope can report a full failure with errors present
     # even on a 200 (result is then omitted per its own docs) -- but for
@@ -125,11 +151,17 @@ def import_leads(access_token: str, allocation_uid: str, leads: list[dict]) -> d
     for start in range(0, len(leads), _MAX_BATCH_SIZE):
         chunk = leads[start:start + _MAX_BATCH_SIZE]
         url = f"{_LEAD_API_BASE}/import"
-        body = _post(
-            url, _auth_headers(access_token),
-            {"leadList": chunk, "allocationUid": allocation_uid}, "importing leads",
-            allow_partial=True,
-        )
+        try:
+            body = _post(
+                url, _auth_headers(access_token),
+                {"leadList": chunk, "allocationUid": allocation_uid}, "importing leads",
+                allow_partial=True,
+            )
+        except EnhancioError as exc:
+            # Preserve whatever earlier chunks already got accepted --
+            # see EnhancioError.partial_result.
+            exc.partial_result = {"submitted": submitted, "errors": errors}
+            raise
         submitted.extend((body.get("result") or {}).get("submittedLeads") or [])
         errors.extend(body.get("errors") or [])
     return {"submitted": submitted, "errors": errors}
@@ -144,9 +176,15 @@ def get_lead_status(access_token: str, lead_ids: list[str]) -> list[dict]:
     for start in range(0, len(lead_ids), _MAX_BATCH_SIZE):
         chunk = lead_ids[start:start + _MAX_BATCH_SIZE]
         url = f"{_LEAD_API_BASE}/lead-status"
-        body = _post(
-            url, _auth_headers(access_token), {"leadIds": chunk}, "fetching lead status",
-            allow_partial=True,
-        )
+        try:
+            body = _post(
+                url, _auth_headers(access_token), {"leadIds": chunk}, "fetching lead status",
+                allow_partial=True,
+            )
+        except EnhancioError as exc:
+            # Preserve whatever earlier chunks already resolved -- see
+            # EnhancioError.partial_result.
+            exc.partial_result = {"resolved": resolved}
+            raise
         resolved.extend((body.get("result") or {}).get("leadList") or [])
     return resolved

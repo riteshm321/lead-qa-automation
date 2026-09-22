@@ -130,6 +130,25 @@ def _sources_to_state(sources: list[ReferenceSource]) -> list[dict]:
     ]
 
 
+@st.cache_data(show_spinner=False)
+def _cached_sheet_columns(path: str, sheet_name: str, mtime: float) -> list[str]:
+    # mtime must NOT be underscore-prefixed -- Streamlit excludes any
+    # parameter named with a leading underscore from the cache key hash,
+    # which would silently defeat the whole point of passing it in (to
+    # invalidate the cache when the file changes on disk mid-session).
+    # A TAL/Exclusion/Suppression/Dedupe source can be a large (500k+ row)
+    # reference file per core.complex_account.load_tal_index's own
+    # docstring -- this was being fully re-parsed via read_sheet_as_dataframe
+    # on every rerun of the whole page (any widget interaction anywhere,
+    # not just edits to this specific source row) purely to populate a
+    # column-name dropdown, making the page seconds-to-tens-of-seconds
+    # laggy per interaction. Same fix as _cached_sheet_df in
+    # pages/2_Run_Check.py, applied to the exact same read call so the
+    # column list is guaranteed identical to before, just no longer
+    # redundantly recomputed.
+    return list(read_sheet_as_dataframe(path, sheet_name).columns)
+
+
 def _render_sources_section(
     section_key: str,
     label: str,
@@ -175,7 +194,8 @@ def _render_sources_section(
             header_options: list[str] = []
             if src["file_path"] and src["sheet_name"]:
                 try:
-                    header_options = list(read_sheet_as_dataframe(src["file_path"], src["sheet_name"]).columns)
+                    header_options = _cached_sheet_columns(
+                        src["file_path"], src["sheet_name"], os.path.getmtime(src["file_path"]))
                 except Exception:
                     header_options = []
 
@@ -401,9 +421,16 @@ if mode == "Edit existing client" and existing:
         _clients_dir_now = get_clients_dir()
         profile = _cached_load_profile(
             selected_name, _clients_dir_now, _profile_file_mtime(selected_name, _clients_dir_now))
-    except TypeError as exc:
-        st.error(f"Could not load the profile for '{selected_name}' — it may be in an older format. "
-                 f"Delete and re-create it in Client Setup. (Technical detail: {exc})")
+    except (TypeError, ValueError, OSError) as exc:
+        # TypeError: an older-format profile whose fields no longer match
+        # ClientProfile's dataclass. ValueError (json.JSONDecodeError is a
+        # subclass)/OSError: the shared profile JSON was mid-write from
+        # another machine when this read hit it, or a transient OneDrive
+        # lock -- both real possibilities for a file under the shared
+        # OneDrive clients folder, previously an unhandled crash here.
+        st.error(f"Could not load the profile for '{selected_name}' — it may be in an older format, or the "
+                 "file may have been mid-write on another machine (try again in a moment). If it keeps "
+                 f"happening, delete and re-create it in Client Setup. (Technical detail: {exc})")
         st.stop()
 else:
     selected_name = None

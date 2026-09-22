@@ -16,6 +16,7 @@ from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import range_boundaries
 
+from core.matching import normalize_cid
 from core.models import FieldMapping, LeadTemplateTab
 
 
@@ -563,7 +564,15 @@ def route_leads_by_cid(
     for tab in tabs:
         if not tab.cids or remaining.empty:
             continue
-        mask = remaining[cid_column].astype(str).str.strip().isin(tab.cids)
+        # normalize_cid on both sides -- a CID column with even one blank
+        # cell elsewhere gets silently upcast by pandas from int64 to
+        # float64, turning every value from e.g. 119414 into 119414.0,
+        # which a plain .astype(str) comparison never matches against the
+        # clean digit-string CIDs configured on a tab. Confirmed real:
+        # this silently routed the affected CID's leads into "unmatched"
+        # instead of its real tab, with no error at all.
+        normalized_tab_cids = {normalize_cid(c) for c in tab.cids}
+        mask = remaining[cid_column].astype(str).str.strip().map(normalize_cid).isin(normalized_tab_cids)
         matched = remaining[mask]
         remaining = remaining[~mask]
         if not matched.empty:
@@ -851,143 +860,151 @@ def append_leads(
     _original_external_links = read_external_link_parts(accumulated_path)
     _original_ext_list = read_worksheet_ext_list(accumulated_path, tab_name)
 
+    # Wrapped in try/finally (unlike a bare load...save...close before this
+    # fix) so an exception anywhere in between -- a missing/renamed tab, a
+    # bad formula translation, wb.save() itself failing on a locked/
+    # mid-sync file -- still closes the workbook instead of leaking the
+    # handle. The exception still propagates to the caller exactly as
+    # before; only cleanup changed.
     wb = openpyxl.load_workbook(accumulated_path)
-    ws = wb[tab_name]
+    try:
+        ws = wb[tab_name]
 
-    headers = [cell.value for cell in ws[header_row]]
+        headers = [cell.value for cell in ws[header_row]]
 
-    has_reason_column = any(
-        h is not None and normalize_header_text(h) in _REASON_HEADER_NAMES for h in headers
-    )
-    if reasons and not has_reason_column:
-        reason_col_idx = len(headers) + 1
-        ws.cell(row=header_row, column=reason_col_idx, value="Refund Reason")
-        headers.append("Refund Reason")
+        has_reason_column = any(
+            h is not None and normalize_header_text(h) in _REASON_HEADER_NAMES for h in headers
+        )
+        if reasons and not has_reason_column:
+            reason_col_idx = len(headers) + 1
+            ws.cell(row=header_row, column=reason_col_idx, value="Refund Reason")
+            headers.append("Refund Reason")
 
-    first_data_row = header_row + 1
-    formula_template: dict[str, tuple[str, str]] = {}
-    if ws.max_row >= first_data_row:
-        for col_idx, header in enumerate(headers, start=1):
-            cell = ws.cell(row=first_data_row, column=col_idx)
-            if isinstance(cell.value, str) and cell.value.startswith("="):
-                formula_template[header] = (cell.value, cell.coordinate)
+        first_data_row = header_row + 1
+        formula_template: dict[str, tuple[str, str]] = {}
+        if ws.max_row >= first_data_row:
+            for col_idx, header in enumerate(headers, start=1):
+                cell = ws.cell(row=first_data_row, column=col_idx)
+                if isinstance(cell.value, str) and cell.value.startswith("="):
+                    formula_template[header] = (cell.value, cell.coordinate)
 
-    # clear_existing wipes old data rows (e.g. a Lead Report re-sent fresh
-    # each period rather than accumulated) — capture the formatting from
-    # the row about to be deleted first, since there'll be nothing left to
-    # sample it from afterward.
-    cleared_styles: dict[int, tuple] | None = None
-    if clear_existing and ws.max_row >= first_data_row:
-        cleared_styles = {}
-        for col_idx in range(1, len(headers) + 1):
-            src = ws.cell(row=first_data_row, column=col_idx)
-            cleared_styles[col_idx] = (src.font, src.fill, src.border, src.alignment, src.number_format)
-        ws.delete_rows(first_data_row, ws.max_row - first_data_row + 1)
-
-    last_data_row = _find_last_data_row(ws, first_data_row, headers)
-    has_existing_leads = last_data_row is not None
-    style_template_row = (
-        last_data_row if has_existing_leads
-        else (first_data_row if ws.max_row >= first_data_row else None)
-    )
-    column_styles: dict[int, tuple] = {}
-    if cleared_styles is not None:
-        column_styles = cleared_styles
-    elif style_template_row is not None:
-        for col_idx in range(1, len(headers) + 1):
-            src = ws.cell(row=style_template_row, column=col_idx)
-            column_styles[col_idx] = (src.font, src.fill, src.border, src.alignment, src.number_format)
-
-    # Which lead column (if any) feeds each header only depends on the
-    # header/column identity, never on a specific row — resolve it once
-    # per column rather than once per (row, column) pair.
-    skip_normalized = (
-        {"date", "comment", "status"} | _REASON_HEADER_NAMES
-        | {normalize_header_text(h) for h in formula_template}
-    )
-    column_source, unmatched_passthrough_headers = _resolve_passthrough_columns(
-        headers, leads_df, field_mapping, target_field_mapping, skip_normalized)
-
-    next_row = first_data_row if not has_existing_leads else last_data_row + 1
-    for row_offset, (idx, lead_row) in enumerate(leads_df.iterrows()):
-        excel_row = next_row + row_offset
-        for col_idx, header in enumerate(headers, start=1):
-            if header is None:
-                continue
-            header_norm = normalize_header_text(header)
-            cell = ws.cell(row=excel_row, column=col_idx)
-            if col_idx in column_styles:
-                font, fill, border, alignment, number_format = column_styles[col_idx]
-                cell.font, cell.fill, cell.border, cell.alignment, cell.number_format = (
-                    copy(font), copy(fill), copy(border), copy(alignment), number_format
-                )
-            # Captured before assigning cell.value below — openpyxl itself
-            # overwrites a "General" cell's number_format the moment a
-            # date/datetime value is assigned to it, so checking *after*
-            # assignment would always see openpyxl's own default format
-            # instead of the "General" it actually started from.
-            was_general_format = cell.number_format == "General"
-
-            if header_norm == "date":
-                cell.value = run_date
-                if was_general_format and isinstance(cell.value, (datetime.date, datetime.datetime)):
-                    cell.number_format = "dd-mmm-yy"
-            elif header in formula_template:
-                formula, origin_ref = formula_template[header]
-                col_letter = get_column_letter(col_idx)
-                cell.value = Translator(formula, origin=origin_ref).translate_formula(f"{col_letter}{excel_row}")
-            elif header_norm in ("comment", "status"):
-                cell.value = None
-            elif header_norm in _REASON_HEADER_NAMES:
-                cell.value = (reasons or {}).get(idx, "")
-            else:
-                source_col = column_source.get(col_idx)
-                cell.value = lead_row.get(source_col, "") if source_col is not None else None
-                # A real date/datetime value written into a "General"-formatted
-                # cell displays as a raw serial number and Excel's date filter
-                # can't group it — give it an explicit date format so it shows
-                # and filters like a real date instead.
-                if was_general_format and isinstance(cell.value, (datetime.date, datetime.datetime)):
-                    cell.number_format = _DATE_NUMBER_FORMAT
-                # "Capture Date" specifically must always render mm/dd/yyyy,
-                # even when style_template_row's own cell already carried
-                # some OTHER inherited format (e.g. left over from however
-                # the template was originally built) -- that inherited
-                # format is what column_styles copied above, so the
-                # was_general_format check alone isn't enough here.
-                elif header_norm == "capturedate" and isinstance(cell.value, (datetime.date, datetime.datetime)):
-                    cell.number_format = _DATE_NUMBER_FORMAT
-
-    if highlight_fill and not leads_df.empty:
-        # Only ever one batch highlighted at a time — strip ANY fill color
-        # from whatever rows existed before this run (an earlier run's
-        # highlight, or manual formatting applied outside the tool), then
-        # apply this run's color fresh to the rows it just added.
-        for row in range(first_data_row, next_row):
+        # clear_existing wipes old data rows (e.g. a Lead Report re-sent fresh
+        # each period rather than accumulated) — capture the formatting from
+        # the row about to be deleted first, since there'll be nothing left to
+        # sample it from afterward.
+        cleared_styles: dict[int, tuple] | None = None
+        if clear_existing and ws.max_row >= first_data_row:
+            cleared_styles = {}
             for col_idx in range(1, len(headers) + 1):
-                ws.cell(row=row, column=col_idx).fill = PatternFill(fill_type=None)
-        new_fill = PatternFill(start_color=highlight_fill, end_color=highlight_fill, fill_type="solid")
-        for row in range(next_row, next_row + len(leads_df)):
+                src = ws.cell(row=first_data_row, column=col_idx)
+                cleared_styles[col_idx] = (src.font, src.fill, src.border, src.alignment, src.number_format)
+            ws.delete_rows(first_data_row, ws.max_row - first_data_row + 1)
+
+        last_data_row = _find_last_data_row(ws, first_data_row, headers)
+        has_existing_leads = last_data_row is not None
+        style_template_row = (
+            last_data_row if has_existing_leads
+            else (first_data_row if ws.max_row >= first_data_row else None)
+        )
+        column_styles: dict[int, tuple] = {}
+        if cleared_styles is not None:
+            column_styles = cleared_styles
+        elif style_template_row is not None:
             for col_idx in range(1, len(headers) + 1):
-                ws.cell(row=row, column=col_idx).fill = new_fill
+                src = ws.cell(row=style_template_row, column=col_idx)
+                column_styles[col_idx] = (src.font, src.fill, src.border, src.alignment, src.number_format)
 
-    # openpyxl doesn't keep an Excel Table's declared range in sync with
-    # delete_rows() or new cell writes on its own -- after clear_existing
-    # deletes rows (or leads just get appended past the old range), a
-    # table's `ref` goes stale relative to the sheet's real data footprint
-    # (observed: a table still claiming rows 2-99 after clearing left only
-    # 2 real data rows). Some downstream ingestion platforms read a sheet
-    # via its declared table range rather than a raw cell scan, and see
-    # that mismatch as "no data in the file" even though the cells are
-    # populated. Resize every table anchored at this header row to match.
-    final_last_row = next_row + len(leads_df) - 1
-    for table in ws.tables.values():
-        min_col, min_row, max_col, max_row = range_boundaries(table.ref)
-        if min_row <= header_row <= max_row:
-            table.ref = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{final_last_row}"
+        # Which lead column (if any) feeds each header only depends on the
+        # header/column identity, never on a specific row — resolve it once
+        # per column rather than once per (row, column) pair.
+        skip_normalized = (
+            {"date", "comment", "status"} | _REASON_HEADER_NAMES
+            | {normalize_header_text(h) for h in formula_template}
+        )
+        column_source, unmatched_passthrough_headers = _resolve_passthrough_columns(
+            headers, leads_df, field_mapping, target_field_mapping, skip_normalized)
 
-    wb.save(accumulated_path)
-    wb.close()
+        next_row = first_data_row if not has_existing_leads else last_data_row + 1
+        for row_offset, (idx, lead_row) in enumerate(leads_df.iterrows()):
+            excel_row = next_row + row_offset
+            for col_idx, header in enumerate(headers, start=1):
+                if header is None:
+                    continue
+                header_norm = normalize_header_text(header)
+                cell = ws.cell(row=excel_row, column=col_idx)
+                if col_idx in column_styles:
+                    font, fill, border, alignment, number_format = column_styles[col_idx]
+                    cell.font, cell.fill, cell.border, cell.alignment, cell.number_format = (
+                        copy(font), copy(fill), copy(border), copy(alignment), number_format
+                    )
+                # Captured before assigning cell.value below — openpyxl itself
+                # overwrites a "General" cell's number_format the moment a
+                # date/datetime value is assigned to it, so checking *after*
+                # assignment would always see openpyxl's own default format
+                # instead of the "General" it actually started from.
+                was_general_format = cell.number_format == "General"
+
+                if header_norm == "date":
+                    cell.value = run_date
+                    if was_general_format and isinstance(cell.value, (datetime.date, datetime.datetime)):
+                        cell.number_format = "dd-mmm-yy"
+                elif header in formula_template:
+                    formula, origin_ref = formula_template[header]
+                    col_letter = get_column_letter(col_idx)
+                    cell.value = Translator(formula, origin=origin_ref).translate_formula(f"{col_letter}{excel_row}")
+                elif header_norm in ("comment", "status"):
+                    cell.value = None
+                elif header_norm in _REASON_HEADER_NAMES:
+                    cell.value = (reasons or {}).get(idx, "")
+                else:
+                    source_col = column_source.get(col_idx)
+                    cell.value = lead_row.get(source_col, "") if source_col is not None else None
+                    # A real date/datetime value written into a "General"-formatted
+                    # cell displays as a raw serial number and Excel's date filter
+                    # can't group it — give it an explicit date format so it shows
+                    # and filters like a real date instead.
+                    if was_general_format and isinstance(cell.value, (datetime.date, datetime.datetime)):
+                        cell.number_format = _DATE_NUMBER_FORMAT
+                    # "Capture Date" specifically must always render mm/dd/yyyy,
+                    # even when style_template_row's own cell already carried
+                    # some OTHER inherited format (e.g. left over from however
+                    # the template was originally built) -- that inherited
+                    # format is what column_styles copied above, so the
+                    # was_general_format check alone isn't enough here.
+                    elif header_norm == "capturedate" and isinstance(cell.value, (datetime.date, datetime.datetime)):
+                        cell.number_format = _DATE_NUMBER_FORMAT
+
+        if highlight_fill and not leads_df.empty:
+            # Only ever one batch highlighted at a time — strip ANY fill color
+            # from whatever rows existed before this run (an earlier run's
+            # highlight, or manual formatting applied outside the tool), then
+            # apply this run's color fresh to the rows it just added.
+            for row in range(first_data_row, next_row):
+                for col_idx in range(1, len(headers) + 1):
+                    ws.cell(row=row, column=col_idx).fill = PatternFill(fill_type=None)
+            new_fill = PatternFill(start_color=highlight_fill, end_color=highlight_fill, fill_type="solid")
+            for row in range(next_row, next_row + len(leads_df)):
+                for col_idx in range(1, len(headers) + 1):
+                    ws.cell(row=row, column=col_idx).fill = new_fill
+
+        # openpyxl doesn't keep an Excel Table's declared range in sync with
+        # delete_rows() or new cell writes on its own -- after clear_existing
+        # deletes rows (or leads just get appended past the old range), a
+        # table's `ref` goes stale relative to the sheet's real data footprint
+        # (observed: a table still claiming rows 2-99 after clearing left only
+        # 2 real data rows). Some downstream ingestion platforms read a sheet
+        # via its declared table range rather than a raw cell scan, and see
+        # that mismatch as "no data in the file" even though the cells are
+        # populated. Resize every table anchored at this header row to match.
+        final_last_row = next_row + len(leads_df) - 1
+        for table in ws.tables.values():
+            min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+            if min_row <= header_row <= max_row:
+                table.ref = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{final_last_row}"
+
+        wb.save(accumulated_path)
+    finally:
+        wb.close()
 
     if _original_external_links:
         restore_external_link_parts(accumulated_path, _original_external_links)

@@ -239,3 +239,48 @@ def test_cannot_remove_the_only_remaining_admin(tmp_path, monkeypatch):
 
     remove_button = next(b for b in at.button if b.key == "remove_user_test-admin")
     assert remove_button.disabled
+
+
+def test_removing_an_account_requires_a_confirmation_click(tmp_path, monkeypatch):
+    # Regression test for a real, confirmed P0 bug: "Remove" used to call
+    # delete_user() immediately on a single click, with no "are you sure"
+    # step -- one misclick on a row in a list of colleagues' accounts
+    # permanently deleted that person's login. Clicking "Remove" now must
+    # only show a confirm/cancel prompt; the account must survive until
+    # "Confirm removal" is actually clicked, and "Cancel" must back out
+    # without deleting anything.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings
+    save_app_settings({"shared_root_dir": str(tmp_path / "shared")})
+    from core.auth import create_user, load_users
+    create_user("test-admin", "irrelevant", is_admin=True)
+    create_user("bob", "irrelevant", is_admin=False)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+
+    remove_button = next(b for b in at.button if b.key == "remove_user_bob")
+    remove_button.click().run()
+    assert not at.exception
+
+    # Not actually removed yet -- only a confirm prompt should have appeared.
+    assert "bob" in load_users()
+    assert any("Remove" in w.value and "bob" in w.value for w in at.warning)
+    assert not any(b.key == "remove_user_bob" for b in at.button)
+    confirm_button = next(b for b in at.button if b.key == "confirm_remove_bob")
+    cancel_button = next(b for b in at.button if b.key == "cancel_remove_bob")
+
+    # Cancel backs out without deleting anything.
+    cancel_button.click().run()
+    assert not at.exception
+    assert "bob" in load_users()
+    assert any(b.key == "remove_user_bob" for b in at.button)
+
+    # Confirming actually removes it.
+    remove_button = next(b for b in at.button if b.key == "remove_user_bob")
+    remove_button.click().run()
+    confirm_button = next(b for b in at.button if b.key == "confirm_remove_bob")
+    confirm_button.click().run()
+    assert not at.exception
+    assert "bob" not in load_users()
