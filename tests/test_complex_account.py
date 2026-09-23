@@ -685,6 +685,19 @@ def test_apply_complex_account_rules_sets_phone_optin_yes_for_every_lead_regardl
     assert enriched.loc[1, "Phone Opt-In"] == "Yes"
 
 
+def test_apply_complex_account_rules_sets_phone_optin_yes_even_when_leadfile_has_no_such_column():
+    # The real leadfile never carries a Phone Opt-In column -- it's a pure
+    # business-rule value, not something Dell provides. Previously this rule
+    # was gated on the column already being present, so it silently never
+    # fired and the real output came out blank for every lead.
+    df = _base_leads_df()
+    assert "Phone Opt-In" not in df.columns
+
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert enriched.loc[0, "Phone Opt-In"] == "Yes"
+
+
 def test_apply_complex_account_rules_matches_by_domain_regardless_of_cid():
     # Installed Technologies/Predictive Buying Stage files now cover every
     # CID in one upload -- matching is by domain alone, so a lead's CID

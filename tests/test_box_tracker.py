@@ -10,7 +10,7 @@ from core.box_tracker import (
     cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
     read_lead_template_constants, parse_amal_id, project_code_for_cid, campaign_type_for_cid,
     uploaded_to_approval_sheet_label, has_asset_title_override, asset_title_for_lead,
-    micro_audience_for_lead, has_industry_override, industry_for_lead,
+    micro_audience_for_lead, has_industry_override, industry_for_lead, has_micro_audience_override,
 )
 
 
@@ -568,6 +568,33 @@ def test_micro_audience_for_lead_treats_a_present_but_nan_column_as_blank():
     assert micro_audience_for_lead("119750", row) == "LOB"  # IN LOB -- fixed value, not leadfile-derived
 
 
+def test_micro_audience_for_lead_matches_a_float64_upcast_cid():
+    row = pd.Series({"micro_audience": ""})
+    assert micro_audience_for_lead("119750.0", row) == "LOB"  # IN LOB
+
+
+def test_has_micro_audience_override_matches_a_float64_upcast_cid():
+    assert has_micro_audience_override("119750.0") is True  # IN LOB
+    assert has_micro_audience_override("120131.0") is True  # IN DigiSov (own-column passthrough)
+
+
+def test_add_lead_template_columns_fills_micro_audience_when_cid_column_is_upcast_to_float64():
+    # Regression test for the real bug: a bulk leadfile upload with even
+    # one blank CID cell elsewhere upcasts the whole int64 CID column to
+    # float64 (119750 -> 119750.0), which previously made
+    # has_micro_audience_override/micro_audience_for_lead's exact-string
+    # dict lookups miss entirely -- micro_audience silently came out blank
+    # in bulk even though a single-lead test-mode upload (no upcast) worked.
+    leads_df = pd.DataFrame([
+        {"CID": 119750.0, "Asset Title": "A", "Country": "IN", "Company Size": "1"},
+        {"CID": float("nan"), "Asset Title": "B", "Country": "IN", "Company Size": "1"},
+    ])
+
+    result = add_lead_template_columns(leads_df, "CID")
+
+    assert result.loc[0, "micro_audience"] == "LOB"
+
+
 def test_add_lead_template_columns_fills_asset_title_by_campaign_type_regardless_of_template_constants():
     # Regression test: for a CID with a known Campaign Type, asset_title
     # must come from the touch-specific column (see asset_title_for_lead)
@@ -674,3 +701,16 @@ def test_campaign_type_for_cid_known_campaigns():
 
 def test_campaign_type_for_cid_unknown_cid_is_blank():
     assert campaign_type_for_cid("999999") == ""
+
+
+def test_campaign_type_for_cid_matches_a_float64_upcast_cid():
+    # A bulk leadfile with even one blank CID cell elsewhere upcasts the
+    # whole column to float64, so a single row's CID can arrive here as
+    # 119750.0 (via str()) instead of "119750" -- confirmed as the real
+    # cause of micro_audience/asset_title/Industry silently not populating
+    # in bulk uploads despite working for a single test-mode lead.
+    assert campaign_type_for_cid("119750.0") == "2T"  # IN LOB
+
+
+def test_project_code_for_cid_matches_a_float64_upcast_cid():
+    assert project_code_for_cid("120129.0", "") == "CXOAP"  # AU CXO

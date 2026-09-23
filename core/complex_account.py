@@ -676,8 +676,12 @@ def apply_complex_account_rules(
                         df.at[idx, FORM_URL_COLUMN] = expected
                         corrections.setdefault(idx, []).append(f"Form URL: \"{current}\" -> \"{expected}\"")
 
-    if PHONE_OPTIN_COLUMN in df.columns:
-        df[PHONE_OPTIN_COLUMN] = "Yes"
+    # Unconditional, not "if present" -- this is a fixed business rule, not
+    # something derived from the leadfile, so it must fire even when the
+    # leadfile doesn't carry a Phone Opt-In column at all (the normal case:
+    # this was coming out blank in the real output before this fix, since
+    # the leadfile itself never has this column).
+    df[PHONE_OPTIN_COLUMN] = "Yes"
 
     if MAIL_OPTIN_COLUMN in df.columns:
         df[MAIL_OPTIN_COLUMN] = ""

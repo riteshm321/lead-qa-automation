@@ -346,7 +346,7 @@ _CAMPAIGN_TYPE_BY_CID = {
 
 
 def campaign_type_for_cid(cid: str) -> str:
-    return _CAMPAIGN_TYPE_BY_CID.get(cid, "")
+    return _CAMPAIGN_TYPE_BY_CID.get(normalize_cid(cid), "")
 
 
 def parse_amal_id(raw: str | None) -> str:
@@ -366,7 +366,7 @@ def project_code_for_cid(cid: str, leadfile_value: str) -> str:
     for the CIDs in _PROJECT_CODE_OVERRIDE_BY_CID, which always get the
     fixed value regardless of what (if anything) the leadfile carries.
     """
-    return _PROJECT_CODE_OVERRIDE_BY_CID.get(cid, leadfile_value)
+    return _PROJECT_CODE_OVERRIDE_BY_CID.get(normalize_cid(cid), leadfile_value)
 
 
 
@@ -440,7 +440,7 @@ def has_micro_audience_override(cid) -> bool:
     every other CID's own micro_audience value (if it has one) with the
     rule's default "no override" answer.
     """
-    cid = str(cid).strip()
+    cid = normalize_cid(cid)
     return cid in _MICRO_AUDIENCE_BY_CID or cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS
 
 
@@ -466,7 +466,7 @@ def micro_audience_for_lead(cid: str, row) -> object:
     need this exact same per-CID rule applied to whichever leads they're
     each sending.
     """
-    cid = str(cid).strip()
+    cid = normalize_cid(cid)
     if cid in _MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS:
         return _blank_safe_get(row, "micro_audience")
     return _MICRO_AUDIENCE_BY_CID.get(cid, "")
