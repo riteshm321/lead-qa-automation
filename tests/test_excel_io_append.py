@@ -1,6 +1,7 @@
 import datetime
 import zipfile
 
+import numpy as np
 import openpyxl
 import pandas as pd
 from openpyxl.styles import Font, PatternFill
@@ -423,6 +424,94 @@ def test_append_leads_keeps_unparseable_date_value_as_raw_text(tmp_path):
     wb2 = openpyxl.load_workbook(path)
     cell = wb2["Sheet1"].cell(row=2, column=2)
     assert cell.value == "not a date"
+
+
+def test_append_leads_reformats_a_bare_excel_serial_number_date_for_xlsx(tmp_path):
+    # Regression test: a date-formatted column whose raw leadfile value is a
+    # bare Excel serial number (int or float), not a string and not an
+    # openpyxl-parsed datetime -- e.g. a source cell with no date number
+    # format applied reads back through pandas as a plain number. 46096 is
+    # the verified Excel serial number for 2026-03-15 (days since the
+    # 1899-12-30 epoch: (Timestamp("2026-03-15") - Timestamp("1899-12-30")).days
+    # == 46096). Before the fix, pd.to_datetime(46096, errors="coerce")
+    # does NOT return NaT -- it silently succeeds by interpreting the bare
+    # number as Unix-epoch NANOSECONDS, producing a bogus ~1970-01-01 date,
+    # so the "unit=D, origin=1899-12-30" serial-number fallback never fired.
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Capture Date"])
+    wb.save(path)
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([
+        {"Email": "a@x.com", "Capture Date": 46096},
+        {"Email": "b@x.com", "Capture Date": 46096.0},
+    ])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="YYYY-MM-DD"),
+    ])
+
+    append_leads(path, "Sheet1", leads_df, fm, run_date="2026-08-08", lead_template_mapping=ltm)
+
+    wb2 = openpyxl.load_workbook(path)
+    ws2 = wb2["Sheet1"]
+    int_cell = ws2.cell(row=2, column=2)
+    float_cell = ws2.cell(row=3, column=2)
+    assert int_cell.value.strftime("%Y-%m-%d") == "2026-03-15"
+    assert int_cell.number_format == "yyyy\\-mm\\-dd"
+    assert float_cell.value.strftime("%Y-%m-%d") == "2026-03-15"
+    assert float_cell.number_format == "yyyy\\-mm\\-dd"
+
+
+def test_append_leads_reformats_a_numpy_dtype_excel_serial_number_date_for_xlsx(tmp_path):
+    # Same bug as the test above, but specifically for numpy.int64/
+    # numpy.float64 raw values (not plain Python int/float) -- a real
+    # pandas-sourced numeric leadfile column yields exactly these numpy
+    # scalar types cell-by-cell, and numpy.int64 does NOT subclass Python's
+    # built-in int in numpy 2.x, so an isinstance(raw_value, (int, float))
+    # check misses it even after the ordering bug above is fixed.
+    #
+    # NOTE: leads_df.iterrows() (what append_leads actually uses) unboxes
+    # numpy scalars to native Python int/float for any row that also
+    # contains a string column (e.g. "Email") -- pandas builds the per-row
+    # Series as dtype=object via an internal native-scalar conversion, so a
+    # DataFrame built the "normal" way (mixed str/int columns, letting
+    # pandas infer int64) does NOT actually reach this code path as a
+    # numpy.int64 once iterrows() hands it over; verified directly against
+    # this pandas version. To genuinely exercise the numpy-dtype code path,
+    # the "Capture Date" column below is built as dtype=object holding real
+    # numpy.int64/numpy.float64 instances, which iterrows() passes through
+    # unmodified (confirmed by asserting the dtype below).
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Capture Date"])
+    wb.save(path)
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame({
+        "Email": ["a@x.com", "b@x.com"],
+        "Capture Date": pd.Series([np.int64(46096), np.float64(46096.0)], dtype=object),
+    })
+    assert isinstance(leads_df.iloc[0]["Capture Date"], np.integer)
+    assert isinstance(leads_df.iloc[1]["Capture Date"], np.floating)
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="YYYY-MM-DD"),
+    ])
+
+    append_leads(path, "Sheet1", leads_df, fm, run_date="2026-08-08", lead_template_mapping=ltm)
+
+    wb2 = openpyxl.load_workbook(path)
+    ws2 = wb2["Sheet1"]
+    int_cell = ws2.cell(row=2, column=2)
+    float_cell = ws2.cell(row=3, column=2)
+    assert int_cell.value.strftime("%Y-%m-%d") == "2026-03-15"
+    assert int_cell.number_format == "yyyy\\-mm\\-dd"
+    assert float_cell.value.strftime("%Y-%m-%d") == "2026-03-15"
+    assert float_cell.number_format == "yyyy\\-mm\\-dd"
 
 
 def test_append_leads_highlight_fill_clears_previous_run_highlight(tmp_path):
@@ -1084,6 +1173,61 @@ def test_append_leads_applies_a_configured_date_format_to_csv(tmp_path):
 
     result = pd.read_csv(path, dtype=str, keep_default_na=False)
     assert result.loc[0, "Capture Date"] == "15/03/2026"
+
+
+def test_append_leads_reformats_a_bare_excel_serial_number_date_for_csv(tmp_path):
+    # CSV counterpart of test_append_leads_reformats_a_bare_excel_serial_number_date_for_xlsx
+    # -- same verified serial number (46096 == 2026-03-15), same underlying
+    # bug: pd.to_datetime(46096, errors="coerce") does not return NaT, so
+    # the serial-number fallback never fired.
+    path = tmp_path / "template.csv"
+    path.write_text("Email,Capture Date\n", encoding="utf-8")
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([
+        {"Email": "a@x.com", "Capture Date": 46096},
+        {"Email": "b@x.com", "Capture Date": 46096.0},
+    ])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="YYYY-MM-DD"),
+    ])
+
+    append_leads(str(path), "(CSV file)", leads_df, fm, run_date="2026-08-13", lead_template_mapping=ltm)
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert result.loc[0, "Capture Date"] == "2026-03-15"
+    assert result.loc[1, "Capture Date"] == "2026-03-15"
+
+
+def test_append_leads_reformats_a_numpy_dtype_excel_serial_number_date_for_csv(tmp_path):
+    # CSV counterpart of test_append_leads_reformats_a_numpy_dtype_excel_serial_number_date_for_xlsx
+    # -- see that test's comment for why the "Capture Date" column must be
+    # built as dtype=object holding real numpy.int64/numpy.float64
+    # instances: leads_df.iterrows() (what append_leads actually uses)
+    # unboxes numpy scalars to native Python int/float for any row that
+    # also contains a string column, so a "naturally inferred" int64 column
+    # does not actually reach this code path as a numpy.int64 once
+    # iterrows() hands it over -- verified directly against this pandas
+    # version.
+    path = tmp_path / "template.csv"
+    path.write_text("Email,Capture Date\n", encoding="utf-8")
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame({
+        "Email": ["a@x.com", "b@x.com"],
+        "Capture Date": pd.Series([np.int64(46096), np.float64(46096.0)], dtype=object),
+    })
+    assert isinstance(leads_df.iloc[0]["Capture Date"], np.integer)
+    assert isinstance(leads_df.iloc[1]["Capture Date"], np.floating)
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="YYYY-MM-DD"),
+    ])
+
+    append_leads(str(path), "(CSV file)", leads_df, fm, run_date="2026-08-13", lead_template_mapping=ltm)
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert result.loc[0, "Capture Date"] == "2026-03-15"
+    assert result.loc[1, "Capture Date"] == "2026-03-15"
 
 
 def test_append_leads_csv_adds_refund_reason_column_when_missing(tmp_path):

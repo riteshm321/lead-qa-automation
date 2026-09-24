@@ -9,6 +9,7 @@ import zipfile
 from copy import copy
 from pathlib import Path
 
+import numpy as np
 import openpyxl
 import pandas as pd
 from openpyxl.formula.translate import Translator
@@ -875,12 +876,28 @@ def _append_leads_csv(
                 if date_fmt is not None and source_col is not None:
                     strftime_fmt, _ = date_fmt
                     raw_value = lead_row.get(source_col, "")
-                    parsed = pd.to_datetime(raw_value, errors="coerce")
-                    if pd.isna(parsed) and isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
-                        # Bare Excel serial number fallback -- same origin already
-                        # proven necessary elsewhere in this codebase (e.g.
-                        # core/enhancio_sync.py's _EXCEL_DATE_ORIGIN).
+                    if (isinstance(raw_value, (int, float, np.integer, np.floating))
+                            and not isinstance(raw_value, bool) and pd.notna(raw_value)):
+                        # Bare Excel serial number -- this check MUST run before
+                        # the generic pd.to_datetime() call below, not after it
+                        # as a "did it fail" fallback: pd.to_datetime() on a
+                        # bare int/float does NOT raise or coerce to NaT, it
+                        # silently interprets the number as Unix-epoch
+                        # NANOSECONDS and "succeeds" with a bogus ~1970 date
+                        # instead of the real one (confirmed:
+                        # pd.to_datetime(46096, errors="coerce") returns
+                        # Timestamp("1970-01-01 00:00:00.000046096"), not NaT).
+                        # Same origin already proven necessary elsewhere in
+                        # this codebase -- see core/enhancio_sync.py's
+                        # _EXCEL_DATE_ORIGIN docstring for the identical bug.
+                        # np.integer/np.floating (not just int/float) are
+                        # required because a real pandas-sourced numeric
+                        # leadfile column yields numpy.int64/numpy.float64 per
+                        # cell, and numpy.int64 does NOT subclass Python's
+                        # built-in int in numpy 2.x.
                         parsed = pd.to_datetime(raw_value, unit="D", origin="1899-12-30", errors="coerce")
+                    else:
+                        parsed = pd.to_datetime(raw_value, errors="coerce")
                     value = parsed.strftime(strftime_fmt) if pd.notna(parsed) else (
                         str(raw_value) if raw_value not in (None, "") and pd.notna(raw_value) else "")
                 else:
@@ -1039,15 +1056,19 @@ def append_leads(
                     # regardless of whether the cell started as "General" --
                     # handled entirely here instead of falling through to the
                     # generic passthrough branch below.
-                    strftime_fmt, excel_fmt = date_formats[header_norm]
+                    _, excel_fmt = date_formats[header_norm]
                     source_col = column_source[col_idx]
                     raw_value = lead_row.get(source_col, "")
-                    parsed = pd.to_datetime(raw_value, errors="coerce")
-                    if pd.isna(parsed) and isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
-                        # Bare Excel serial number fallback -- same origin already
-                        # proven necessary elsewhere in this codebase (e.g.
-                        # core/enhancio_sync.py's _EXCEL_DATE_ORIGIN).
+                    if (isinstance(raw_value, (int, float, np.integer, np.floating))
+                            and not isinstance(raw_value, bool) and pd.notna(raw_value)):
+                        # Bare Excel serial number -- see the identical, more
+                        # fully-commented check in _append_leads_csv above for
+                        # why the numeric check must run BEFORE the generic
+                        # pd.to_datetime() call, and why np.integer/np.floating
+                        # are required alongside int/float.
                         parsed = pd.to_datetime(raw_value, unit="D", origin="1899-12-30", errors="coerce")
+                    else:
+                        parsed = pd.to_datetime(raw_value, errors="coerce")
                     if pd.notna(parsed):
                         cell.value = parsed.to_pydatetime()
                         cell.number_format = excel_fmt
