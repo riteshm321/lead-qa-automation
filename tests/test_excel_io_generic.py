@@ -545,6 +545,34 @@ def test_read_pacing_overview_table_captures_every_column(tmp_path):
     assert df.iloc[2].tolist() == ["", "Grand Total", "", 180, 122]
 
 
+def test_read_pacing_overview_table_dedupes_two_columns_with_the_same_header(tmp_path):
+    # Confirmed against a real client sheet: two columns both literally
+    # named "SIDs". Previously this silently dropped the first SIDs
+    # column's data (dict keyed on header text) and then crashed when
+    # rendered (st.dataframe -> pyarrow: "Duplicate column names found"),
+    # since pandas was still asked for two identically-named columns.
+    from core.excel_io import read_pacing_overview_table
+
+    path = str(tmp_path / "accumulated.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pacing Overview"
+    ws["B3"] = "CID"
+    ws["C3"] = "SIDs"
+    ws["D3"] = "Delivered"
+    ws["E3"] = "SIDs"
+    ws["B4"] = "118118"
+    ws["C4"] = "SID-A"
+    ws["D4"] = 42
+    ws["E4"] = "SID-B"
+    wb.save(path)
+
+    df = read_pacing_overview_table(path)
+
+    assert list(df.columns) == ["CID", "SIDs", "Delivered", "SIDs (2)"]
+    assert df.iloc[0].tolist() == ["118118", "SID-A", 42, "SID-B"]
+
+
 def test_read_pacing_overview_table_formats_pacing_column_as_percentage(tmp_path):
     from core.excel_io import read_pacing_overview_table
 

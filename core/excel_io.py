@@ -1084,6 +1084,22 @@ def _format_pacing_value(header: str, value):
     return value
 
 
+def _dedupe_pacing_headers(headers: list[str]) -> list[str]:
+    """Appends " (2)", " (3)", ... to every repeat of a header text that
+    already appeared earlier in the list, so read_pacing_overview_table
+    never builds a dict keyed on a non-unique header (which would silently
+    drop one column's data) or hands pandas a `columns=` list with the
+    same name twice (which produces an actual duplicate-column DataFrame).
+    The first occurrence of a name is left unchanged.
+    """
+    seen: dict[str, int] = {}
+    deduped = []
+    for header in headers:
+        seen[header] = seen.get(header, 0) + 1
+        deduped.append(header if seen[header] == 1 else f"{header} ({seen[header]})")
+    return deduped
+
+
 def read_pacing_overview_table(accumulated_path: str, sheet_name: str = "Pacing Overview") -> pd.DataFrame:
     """Read the Pacing Overview sheet as a full table (every column, not
     just CID/Campaign), for embedding as a native table in a Jira summary
@@ -1126,6 +1142,17 @@ def read_pacing_overview_table(accumulated_path: str, sheet_name: str = "Pacing 
             and not ws.column_dimensions[get_column_letter(c.column)].hidden
         ]
         headers = [_format_pacing_header(ws.cell(row=header_row_idx, column=c).value) for c in col_indices]
+        # A real Pacing Overview sheet can legitimately have two columns
+        # with the exact same header text (e.g. two "SIDs" columns) --
+        # confirmed against a real client sheet. Building each row as a
+        # plain {header: value} dict below would silently let the second
+        # column's value overwrite the first's for every row, and handing
+        # pandas a `columns=` list with the same name twice then produces
+        # an actual duplicate-column DataFrame, which crashes downstream
+        # (st.dataframe -> pyarrow.Table.from_pandas: "Duplicate column
+        # names found"). Disambiguate here so both real columns' data
+        # survives and no duplicate-named DataFrame is ever produced.
+        headers = _dedupe_pacing_headers(headers)
 
         def _row_record(row) -> dict:
             return {
