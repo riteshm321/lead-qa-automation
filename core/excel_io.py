@@ -17,7 +17,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import range_boundaries
 
 from core.matching import normalize_cid
-from core.models import FieldMapping, LeadTemplateTab
+from core.models import FieldMapping, LeadTemplateMappingConfig, LeadTemplateTab
 
 
 def read_external_link_parts(path: str) -> dict[str, bytes]:
@@ -719,6 +719,34 @@ def find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str, 
 _DATE_NUMBER_FORMAT = "mm\\/dd\\/yyyy"
 
 
+# strftime string -> Excel number-format string (backslash-escaped, same
+# reasoning as _DATE_NUMBER_FORMAT above -- an unescaped "/" or "-" is
+# read as "whatever date separator Windows' Regional Settings configures,"
+# not a literal character).
+_DATE_FORMAT_PRESETS = {
+    "MM/DD/YYYY": ("%m/%d/%Y", "mm\\/dd\\/yyyy"),
+    "DD/MM/YYYY": ("%d/%m/%Y", "dd\\/mm\\/yyyy"),
+    "DD-MMM-YY": ("%d-%b-%y", "dd\\-mmm\\-yy"),
+    "YYYY-MM-DD": ("%Y-%m-%d", "yyyy\\-mm\\-dd"),
+    "YYYY-MM-DD HH:MM:SS": ("%Y-%m-%d %H:%M:%S", "yyyy\\-mm\\-dd\\ hh:mm:ss"),
+}
+
+
+def _resolve_date_format(value: str) -> tuple[str, str]:
+    """Resolves a LeadTemplateColumnRule.date_format value to
+    (strftime_string, excel_number_format). A known preset name resolves
+    to its pair above; anything else is treated as a raw strftime string
+    directly (the "Custom..." UI option), with its Excel number format
+    approximated by escaping every "/"/"-" the same way the presets do --
+    good enough for a custom format, since Excel's own format-code syntax
+    and Python's strftime syntax mostly overlap for date tokens anyway.
+    """
+    if value in _DATE_FORMAT_PRESETS:
+        return _DATE_FORMAT_PRESETS[value]
+    escaped = value.replace("/", "\\/").replace("-", "\\-")
+    return value, escaped
+
+
 def _resolve_passthrough_columns(
     headers: list, leads_df: pd.DataFrame, field_mapping: FieldMapping,
     target_field_mapping: FieldMapping | None, skip_normalized: set[str],
@@ -796,6 +824,7 @@ def _append_leads_csv(
     reasons: dict[int, str] | None,
     target_field_mapping: FieldMapping | None,
     clear_existing: bool,
+    lead_template_mapping: LeadTemplateMappingConfig | None = None,
 ) -> list[str]:
     """CSV counterpart of append_leads' xlsx branch below -- same column
     resolution (_resolve_passthrough_columns), but none of the cell
@@ -814,9 +843,20 @@ def _append_leads_csv(
         headers = headers + ["Refund Reason"]
         existing_data_rows = [row + [""] for row in existing_data_rows]
 
+    manual_overrides = {
+        normalize_header_text(r.template_column): r.source_column
+        for r in (lead_template_mapping.rules if lead_template_mapping else [])
+        if r.source_column
+    }
+    date_formats = {
+        normalize_header_text(r.template_column): _resolve_date_format(r.date_format)
+        for r in (lead_template_mapping.rules if lead_template_mapping else [])
+        if r.date_format
+    }
+
     skip_normalized = {"date", "comment", "status"} | _REASON_HEADER_NAMES
     column_source, unmatched_passthrough_headers = _resolve_passthrough_columns(
-        headers, leads_df, field_mapping, target_field_mapping, skip_normalized)
+        headers, leads_df, field_mapping, target_field_mapping, skip_normalized, manual_overrides=manual_overrides)
 
     new_rows = []
     for idx, lead_row in leads_df.iterrows():
@@ -831,7 +871,20 @@ def _append_leads_csv(
                 value = (reasons or {}).get(idx, "")
             else:
                 source_col = column_source.get(col_idx)
-                value = lead_row.get(source_col, "") if source_col is not None else ""
+                date_fmt = date_formats.get(header_norm)
+                if date_fmt is not None and source_col is not None:
+                    strftime_fmt, _ = date_fmt
+                    raw_value = lead_row.get(source_col, "")
+                    parsed = pd.to_datetime(raw_value, errors="coerce")
+                    if pd.isna(parsed) and isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+                        # Bare Excel serial number fallback -- same origin already
+                        # proven necessary elsewhere in this codebase (e.g.
+                        # core/enhancio_sync.py's _EXCEL_DATE_ORIGIN).
+                        parsed = pd.to_datetime(raw_value, unit="D", origin="1899-12-30", errors="coerce")
+                    value = parsed.strftime(strftime_fmt) if pd.notna(parsed) else (
+                        str(raw_value) if raw_value not in (None, "") and pd.notna(raw_value) else "")
+                else:
+                    value = lead_row.get(source_col, "") if source_col is not None else ""
             if isinstance(value, (datetime.date, datetime.datetime)):
                 value = value.strftime(_CSV_RUN_DATE_STRFTIME if header_norm == "date" else _CSV_DATE_STRFTIME)
             elif value is None or pd.isna(value):
@@ -854,6 +907,7 @@ def append_leads(
     header_row: int = 1,
     clear_existing: bool = False,
     highlight_fill: str | None = None,
+    lead_template_mapping: LeadTemplateMappingConfig | None = None,
 ) -> list[str]:
     # A Lead Template or Accumulated Report can be a plain .csv (no cell
     # styling, formulas, tables, or external links to worry about at all)
@@ -867,7 +921,8 @@ def append_leads(
     # surfaces to the caller same as the xlsx path.
     if accumulated_path.lower().endswith(".csv"):
         return _append_leads_csv(
-            accumulated_path, leads_df, field_mapping, run_date, reasons, target_field_mapping, clear_existing)
+            accumulated_path, leads_df, field_mapping, run_date, reasons, target_field_mapping, clear_existing,
+            lead_template_mapping)
 
     _original_external_links = read_external_link_parts(accumulated_path)
     _original_ext_list = read_worksheet_ext_list(accumulated_path, tab_name)
@@ -929,12 +984,23 @@ def append_leads(
         # Which lead column (if any) feeds each header only depends on the
         # header/column identity, never on a specific row — resolve it once
         # per column rather than once per (row, column) pair.
+        manual_overrides = {
+            normalize_header_text(r.template_column): r.source_column
+            for r in (lead_template_mapping.rules if lead_template_mapping else [])
+            if r.source_column
+        }
+        date_formats = {
+            normalize_header_text(r.template_column): _resolve_date_format(r.date_format)
+            for r in (lead_template_mapping.rules if lead_template_mapping else [])
+            if r.date_format
+        }
+
         skip_normalized = (
             {"date", "comment", "status"} | _REASON_HEADER_NAMES
             | {normalize_header_text(h) for h in formula_template}
         )
         column_source, unmatched_passthrough_headers = _resolve_passthrough_columns(
-            headers, leads_df, field_mapping, target_field_mapping, skip_normalized)
+            headers, leads_df, field_mapping, target_field_mapping, skip_normalized, manual_overrides=manual_overrides)
 
         next_row = first_data_row if not has_existing_leads else last_data_row + 1
         for row_offset, (idx, lead_row) in enumerate(leads_df.iterrows()):
@@ -968,6 +1034,27 @@ def append_leads(
                     cell.value = None
                 elif header_norm in _REASON_HEADER_NAMES:
                     cell.value = (reasons or {}).get(idx, "")
+                elif date_formats.get(header_norm) is not None and column_source.get(col_idx) is not None:
+                    # A configured date_format always wins for this header,
+                    # regardless of whether the cell started as "General" --
+                    # handled entirely here instead of falling through to the
+                    # generic passthrough branch below.
+                    strftime_fmt, excel_fmt = date_formats[header_norm]
+                    source_col = column_source[col_idx]
+                    raw_value = lead_row.get(source_col, "")
+                    parsed = pd.to_datetime(raw_value, errors="coerce")
+                    if pd.isna(parsed) and isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+                        # Bare Excel serial number fallback -- same origin already
+                        # proven necessary elsewhere in this codebase (e.g.
+                        # core/enhancio_sync.py's _EXCEL_DATE_ORIGIN).
+                        parsed = pd.to_datetime(raw_value, unit="D", origin="1899-12-30", errors="coerce")
+                    if pd.notna(parsed):
+                        cell.value = parsed.to_pydatetime()
+                        cell.number_format = excel_fmt
+                    else:
+                        # Unparseable -- leave the raw text visible rather than
+                        # silently blanking a malformed source value.
+                        cell.value = str(raw_value) if raw_value not in (None, "") and pd.notna(raw_value) else None
                 else:
                     source_col = column_source.get(col_idx)
                     cell.value = lead_row.get(source_col, "") if source_col is not None else None

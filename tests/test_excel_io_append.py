@@ -10,7 +10,7 @@ from core.excel_io import (
     append_leads, guess_target_field_mapping, find_header_row, read_sheet_headers, route_leads_by_cid,
     set_status_for_emails, set_status_by_row_index,
 )
-from core.models import FieldMapping, LeadTemplateTab
+from core.models import FieldMapping, LeadTemplateColumnRule, LeadTemplateMappingConfig, LeadTemplateTab
 
 
 def _make_accumulated_workbook(path: str) -> None:
@@ -376,6 +376,53 @@ def test_append_leads_forces_mmddyyyy_for_capture_date_even_with_a_different_inh
     cell = ws.cell(row=3, column=6)
     assert cell.value == datetime.datetime(2026, 8, 17)
     assert cell.number_format == "mm\\/dd\\/yyyy"
+
+
+def test_append_leads_applies_a_configured_date_format_to_xlsx(tmp_path):
+    # A LeadTemplateColumnRule with a date_format must reformat the source
+    # value into that format's Excel number format, taking priority over
+    # the generic passthrough/"Capture Date" mm/dd/yyyy special-casing
+    # exercised by the two tests above.
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Capture Date"])
+    wb.save(path)
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([{"Email": "a@x.com", "Capture Date": "2026-03-15"}])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="YYYY-MM-DD"),
+    ])
+
+    append_leads(path, "Sheet1", leads_df, fm, run_date="2026-08-08", lead_template_mapping=ltm)
+
+    wb2 = openpyxl.load_workbook(path)
+    cell = wb2["Sheet1"].cell(row=2, column=2)
+    assert cell.value.strftime("%Y-%m-%d") == "2026-03-15"
+    assert cell.number_format == "yyyy\\-mm\\-dd"
+
+
+def test_append_leads_keeps_unparseable_date_value_as_raw_text(tmp_path):
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Capture Date"])
+    wb.save(path)
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([{"Email": "a@x.com", "Capture Date": "not a date"}])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="YYYY-MM-DD"),
+    ])
+
+    append_leads(path, "Sheet1", leads_df, fm, run_date="2026-08-08", lead_template_mapping=ltm)
+
+    wb2 = openpyxl.load_workbook(path)
+    cell = wb2["Sheet1"].cell(row=2, column=2)
+    assert cell.value == "not a date"
 
 
 def test_append_leads_highlight_fill_clears_previous_run_highlight(tmp_path):
@@ -1018,6 +1065,25 @@ def test_append_leads_csv_formats_date_and_capture_date_columns_as_text(tmp_path
     result = pd.read_csv(path, dtype=str, keep_default_na=False)
     assert result.loc[0, "Date"] == "01-Sep-26"
     assert result.loc[0, "Capture Date"] == "08/17/2026"
+
+
+def test_append_leads_applies_a_configured_date_format_to_csv(tmp_path):
+    # CSV counterpart of test_append_leads_applies_a_configured_date_format_to_xlsx
+    # -- same date_format rule, but the reformatted value is written as
+    # plain text (CSV has no separate cell-format layer).
+    path = tmp_path / "template.csv"
+    path.write_text("Email,Capture Date\n", encoding="utf-8")
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([{"Email": "a@x.com", "Capture Date": "2026-03-15"}])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="DD/MM/YYYY"),
+    ])
+
+    append_leads(str(path), "(CSV file)", leads_df, fm, run_date="2026-08-13", lead_template_mapping=ltm)
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert result.loc[0, "Capture Date"] == "15/03/2026"
 
 
 def test_append_leads_csv_adds_refund_reason_column_when_missing(tmp_path):
