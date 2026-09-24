@@ -8,6 +8,7 @@ from core.models import (
     TalConfig, ExclusionConfig, SuppressionConfig,
     DuplicateConfig, DedupeListConfig, ReferenceSource, LeadTemplateTab, ComplexAccountConfig,
     BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping, EnhancioConfig, EnhancioAllocationMapping,
+    IntegrateConfig,
 )
 
 
@@ -68,6 +69,10 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
     enhancio_leadfile_fm = enhancio.get("leadfile_field_mapping")
     enhancio["leadfile_field_mapping"] = FieldMapping(**enhancio_leadfile_fm) if enhancio_leadfile_fm else None
 
+    integrate = data.get("integrate") or {}
+    integrate_leadfile_fm = integrate.get("leadfile_field_mapping")
+    integrate["leadfile_field_mapping"] = FieldMapping(**integrate_leadfile_fm) if integrate_leadfile_fm else None
+
     return ClientProfile(
         name=data["name"],
         accumulated_report_path=data["accumulated_report_path"],
@@ -97,6 +102,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         box_tracker=BoxTrackerConfig(**(data.get("box_tracker") or {})),
         convertr=ConvertrConfig(**convertr),
         enhancio=EnhancioConfig(**enhancio),
+        integrate=IntegrateConfig(**integrate),
     )
 
 

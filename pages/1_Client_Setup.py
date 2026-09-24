@@ -23,7 +23,7 @@ from core.models import (
     ClientProfile, DuplicateConfig, LeadcapConfig, LeadcapSegment,
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
     LeadTemplateTab, ComplexAccountConfig, BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
-    EnhancioConfig, EnhancioAllocationMapping,
+    EnhancioConfig, EnhancioAllocationMapping, IntegrateConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 from core.toast import show_pending_toast
@@ -1090,6 +1090,56 @@ with tab_complex:
         else:
             st.caption("Enhancio upload is disabled for this client.")
 
+        st.divider()
+        st.markdown("**Integrate Upload (optional)**")
+        st.caption(
+            "Uploads a client-verified leadfile straight to Integrate.com's Lead API. One shared "
+            "org-wide API Key/Secret (set once on the ⚙️ Settings page) — this client just needs its "
+            "own Source ID (SID), from that Source's URL on home.integrate.com."
+        )
+        integrate_enabled = st.checkbox(
+            "This client uploads to Integrate", value=profile.integrate.enabled if profile else False,
+            key="integrate_enabled")
+        integrate_sid = ""
+        integrate_callback_url = ""
+        integrate_field_mapping: dict[str, str] = {}
+        integrate_fixed_values: dict[str, str] = {}
+        integrate_leadfile_mapping: FieldMapping | None = None
+        if integrate_enabled:
+            integrate_sid = st.text_input(
+                "Integrate Source ID (SID) — the GUID in home.integrate.com/sources/{SID}",
+                value=profile.integrate.sid if profile else "", key="integrate_sid_input").strip()
+            integrate_callback_url = st.text_input(
+                "Callback URL (optional — leave blank unless Integrate told you to set one)",
+                value=profile.integrate.callback_url if profile else "", key="integrate_callback_url_input").strip()
+
+            integrate_field_mapping = _render_paired_field_mapping(
+                "integrate", "Integrate", profile.integrate.field_mapping if profile else {})
+
+            st.caption(
+                "Fixed field values, one per line, format `Attribute,Fixed Value` — for an Integrate "
+                "attribute that's the SAME for every lead this client sends (e.g. country), not read "
+                "from the leadfile:"
+            )
+            _existing_integrate_fixed_text = "\n".join(
+                f"{attr},{value}"
+                for attr, value in (profile.integrate.fixed_field_values.items() if profile else [])
+            )
+            _integrate_fixed_text = st.text_area(
+                "Integrate fixed field values", value=_existing_integrate_fixed_text,
+                key="integrate_fixed_values_input", label_visibility="collapsed", height=80)
+            for _line in _integrate_fixed_text.splitlines():
+                _line = _line.strip()
+                if not _line or "," not in _line:
+                    continue
+                _attr, _value = (p.strip() for p in _line.split(",", 1))
+                integrate_fixed_values[_attr] = _value
+
+            integrate_leadfile_mapping = _render_leadfile_column_mapping(
+                "integrate", profile.integrate.leadfile_field_mapping if profile else None)
+        else:
+            st.caption("Integrate upload is disabled for this client.")
+
 st.divider()
 
 _enabled_summary = ", ".join(
@@ -1203,6 +1253,14 @@ if st.button("💾 Save Client Profile", type="primary"):
                 field_mapping=enhancio_field_mapping if enhancio_enabled else {},
                 fixed_field_values=enhancio_fixed_values if enhancio_enabled else {},
                 leadfile_field_mapping=enhancio_leadfile_mapping if enhancio_enabled else None,
+            ),
+            integrate=IntegrateConfig(
+                enabled=integrate_enabled,
+                sid=integrate_sid if integrate_enabled else "",
+                callback_url=integrate_callback_url if integrate_enabled else "",
+                field_mapping=integrate_field_mapping if integrate_enabled else {},
+                fixed_field_values=integrate_fixed_values if integrate_enabled else {},
+                leadfile_field_mapping=integrate_leadfile_mapping if integrate_enabled else None,
             ),
         )
         saved_path = save_profile(new_profile, get_clients_dir())

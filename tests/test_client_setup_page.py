@@ -590,3 +590,30 @@ def test_box_tracker_lead_template_map_and_pacing_skip_fields_save(tmp_path, mon
     loaded = load_profile("IBM APAC", get_clients_dir())
     assert loaded.box_tracker.cid_lead_template_path == {"118741": str(tmp_path / "bob_template.xlsx")}
     assert loaded.box_tracker.pacing_skipped_campaigns == ["CXO"]
+
+
+def test_saving_integrate_section_persists_sid_and_field_mapping(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(c for c in at.checkbox if c.label == "This client uploads to Integrate").set_value(True).run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("Everpure EMEA").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="integrate_sid_input").set_value("d8a9deeb-7bb2-4832-b3d9-1df8a9fe5cab").run()
+    at.text_area(key="integrate_field_map_cols_input").set_value("Email\nFirst Name").run()
+    at.text_area(key="integrate_field_map_targets_input").set_value("email\nfirst_name").run()
+    at.text_area(key="integrate_fixed_values_input").set_value("country,UK").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Everpure EMEA", get_clients_dir())
+    assert loaded.integrate.enabled is True
+    assert loaded.integrate.sid == "d8a9deeb-7bb2-4832-b3d9-1df8a9fe5cab"
+    assert loaded.integrate.field_mapping == {"Email": "email", "First Name": "first_name"}
+    assert loaded.integrate.fixed_field_values == {"country": "UK"}
