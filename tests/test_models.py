@@ -2,6 +2,7 @@ from core.models import (
     FieldMapping, LeadcapSegment, LeadcapConfig, TalConfig,
     ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, DuplicateConfig,
     ClientProfile, IntegrateConfig, resolve_field_mapping,
+    LeadTemplateColumnRule, LeadTemplateMappingConfig,
 )
 from core.check_result import CheckOutcome
 
@@ -83,3 +84,15 @@ def test_client_profile_defaults_to_a_disabled_integrate_config():
     assert profile.integrate.field_mapping == {}
     assert profile.integrate.fixed_field_values == {}
     assert profile.integrate.leadfile_field_mapping is None
+
+
+def test_client_profile_defaults_to_an_empty_lead_template_mapping():
+    profile = ClientProfile(name="X", accumulated_report_path="acc.xlsx")
+    assert profile.lead_template_mapping.rules == []
+
+
+def test_lead_template_column_rule_defaults():
+    rule = LeadTemplateColumnRule(template_column="Company Size")
+    assert rule.source_column == ""
+    assert rule.mandatory is False
+    assert rule.date_format == ""

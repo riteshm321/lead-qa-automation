@@ -114,6 +114,30 @@ class LeadTemplateTab:
 
 
 @dataclass
+class LeadTemplateColumnRule:
+    # Exact Lead Template header text this rule applies to.
+    template_column: str
+    # Blank means "use the existing auto-match chain unchanged"
+    # (core.excel_io._resolve_passthrough_columns) -- set only to
+    # override it with a specific leadfile column name.
+    source_column: str = ""
+    # A blank/unmapped value for this column on a given lead gets flagged
+    # for review (core.checks.lead_template_mapping) instead of silently
+    # written blank -- only for columns the user actually marks.
+    mandatory: bool = False
+    # Blank means "no special formatting -- pass the leadfile's raw value
+    # through unchanged," exactly like every column does today. A preset
+    # name ("MM/DD/YYYY", "DD/MM/YYYY", "DD-MMM-YY", "YYYY-MM-DD",
+    # "YYYY-MM-DD HH:MM:SS") or a custom strftime-style string.
+    date_format: str = ""
+
+
+@dataclass
+class LeadTemplateMappingConfig:
+    rules: list[LeadTemplateColumnRule] = field(default_factory=list)
+
+
+@dataclass
 class ComplexAccountConfig:
     # A "complex account" needs a batch of highly specific, largely
     # non-transferable enrichment rules (TAL account-ID mapping, per-CID
@@ -283,6 +307,7 @@ class ClientProfile:
     lead_template_sheet_name: str = ""
     lead_template_multi_tab: bool = False
     lead_template_tabs: list[LeadTemplateTab] = field(default_factory=list)
+    lead_template_mapping: LeadTemplateMappingConfig = field(default_factory=LeadTemplateMappingConfig)
     lead_template_clear_existing: bool = False
     field_mapping: Optional[FieldMapping] = None
     accumulated_field_mapping: Optional[FieldMapping] = None

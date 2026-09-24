@@ -8,7 +8,7 @@ from core.models import (
     TalConfig, ExclusionConfig, SuppressionConfig,
     DuplicateConfig, DedupeListConfig, ReferenceSource, LeadTemplateTab, ComplexAccountConfig,
     BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping, EnhancioConfig, EnhancioAllocationMapping,
-    IntegrateConfig,
+    IntegrateConfig, LeadTemplateColumnRule, LeadTemplateMappingConfig,
 )
 
 
@@ -53,6 +53,10 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
 
     lead_template_tabs = [LeadTemplateTab(**t) for t in data.get("lead_template_tabs", [])]
 
+    _ltm_data = data.get("lead_template_mapping") or {}
+    lead_template_mapping = LeadTemplateMappingConfig(
+        rules=[LeadTemplateColumnRule(**r) for r in _ltm_data.get("rules", [])])
+
     convertr = data.get("convertr") or {}
     # "publisher_id" used to live per-campaign; it moved up to ConvertrConfig
     # (one fixed value per account) -- drop it here so a profile saved
@@ -88,6 +92,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         lead_template_sheet_name=data.get("lead_template_sheet_name", ""),
         lead_template_multi_tab=data.get("lead_template_multi_tab", False),
         lead_template_tabs=lead_template_tabs,
+        lead_template_mapping=lead_template_mapping,
         lead_template_clear_existing=data.get("lead_template_clear_existing", False),
         field_mapping=field_mapping,
         accumulated_field_mapping=accumulated_field_mapping,

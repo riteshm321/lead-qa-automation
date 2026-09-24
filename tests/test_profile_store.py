@@ -6,6 +6,7 @@ from core.models import (
     TalConfig, ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, LeadTemplateTab,
     ComplexAccountConfig, BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
     EnhancioConfig, EnhancioAllocationMapping,
+    LeadTemplateColumnRule, LeadTemplateMappingConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 
@@ -467,3 +468,21 @@ def test_load_profile_defaults_lead_template_map_and_pacing_skip_for_old_schema_
     loaded = load_profile("OldClient8", clients_dir=clients_dir)
     assert loaded.box_tracker.cid_lead_template_path == {}
     assert loaded.box_tracker.pacing_skipped_campaigns == []
+
+
+def test_lead_template_mapping_rules_round_trip_through_save_and_load(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    profile = _sample_profile()
+    profile.lead_template_mapping = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(
+            template_column="Company Size", source_column="Employee Count",
+            mandatory=True, date_format=""),
+        LeadTemplateColumnRule(
+            template_column="Capture Date", source_column="", mandatory=False,
+            date_format="MM/DD/YYYY"),
+    ])
+
+    save_profile(profile, clients_dir=clients_dir)
+    loaded = load_profile("Basware", clients_dir=clients_dir)
+
+    assert loaded.lead_template_mapping.rules == profile.lead_template_mapping.rules
