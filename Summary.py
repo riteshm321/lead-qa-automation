@@ -33,6 +33,7 @@ pg = st.navigation({
     "Upload Tools": [
         st.Page("pages/7_Convertr.py", title="Convertr", icon="🔗"),
         st.Page("pages/8_Enhancio.py", title="Enhancio", icon="🔗"),
+        st.Page("pages/9_Integrate.py", title="Integrate", icon="🔗"),
     ],
 })
 pg.run()
