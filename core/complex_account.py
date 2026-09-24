@@ -50,6 +50,23 @@ _DELL_APAC_CIDS = frozenset(AGREED_CONTACTED_BY_CID)
 # Form URL check at all -- no rule was specified for any other CID.
 FORM_URL_SPEC_KEY_BY_CID = {"119414": "india_link", "119415": "au_link"}
 
+ADDITIONAL_DATA_POINT_4_COLUMN = "Additional Data Point (poll questions, dynamic data, etc)  4"
+ADDITIONAL_DATA_POINT_5_COLUMN = "Additional Data Point (poll questions, dynamic data, etc)  5"
+# 119415 (Dell APAC AU) only -- its leadfile carries two extra ad hoc poll
+# questions as their own columns, with the literal question wording AS the
+# column header and each row's answer as that column's own value. Unlike
+# TOP_TOPICS_COLUMN's fixed "Top Trending Topics: " label, there is no
+# fixed label here -- the leadfile's own header text for each of these two
+# columns IS the label, confirmed against a real leadfile sample. Maps
+# {leadfile question-column name: Lead Template target column}; a CID
+# other than 119415 never touches ADDITIONAL_DATA_POINT_4/5_COLUMN at all.
+CID_119415_EXTRA_QUESTION_COLUMNS = {
+    "Which solution area are you currently exploring that you'd like to discuss with a Dell Sales rep?":
+        ADDITIONAL_DATA_POINT_4_COLUMN,
+    "What potential challenges are of most concern to your business when integrating and scaling AI solutions?":
+        ADDITIONAL_DATA_POINT_5_COLUMN,
+}
+
 # Company is deliberately NOT among these. Every column below is only
 # ever looked up inside this module (or matched case-insensitively by
 # core.excel_io's passthrough logic), so renaming it to a fixed casing is
@@ -68,7 +85,7 @@ _KNOWN_COLUMNS = (
     INSTALLED_TECH_COLUMN, PBS_COLUMN, DOWNLOAD_DAY_COLUMN,
     DOWNLOAD_MONTH_COLUMN, DOWNLOAD_YEAR_COLUMN, AGREED_CONTACTED_COLUMN,
     PHONE_OPTIN_COLUMN, MAIL_OPTIN_COLUMN, SIGNAL_NOTES_COLUMN,
-    CUSTOMER_COMMENTS_COLUMN,
+    CUSTOMER_COMMENTS_COLUMN, ADDITIONAL_DATA_POINT_4_COLUMN, ADDITIONAL_DATA_POINT_5_COLUMN,
 )
 
 
@@ -597,6 +614,14 @@ def apply_complex_account_rules(
     prefixed with CUSTOMER_COMMENTS_PREFIX ("Accounts Researching - ")
     when the leadfile's own value is non-blank, else left blank. Dell
     APAC CIDs leave this column untouched.
+
+    Additional Data Point 4/5: 119415 (Dell APAC AU) only, see
+    CID_119415_EXTRA_QUESTION_COLUMNS. For each of that CID's two extra
+    leadfile question-columns, a row with a non-blank answer gets
+    "{question} {answer}" written into that question's mapped target
+    column; a blank answer leaves the target column's existing value
+    untouched (skipped, not overwritten with blank). Any other CID never
+    touches these two target columns at all.
     """
     df = _normalize_known_columns(leads_df.copy())
     review: dict[int, list[ReviewDetail]] = {}
@@ -616,6 +641,12 @@ def apply_complex_account_rules(
         # Capture Date/Asset download day/year further down.
         df[CUSTOMER_COMMENTS_COLUMN] = df[CUSTOMER_COMMENTS_COLUMN].astype(object)
 
+    for _target_col in (ADDITIONAL_DATA_POINT_4_COLUMN, ADDITIONAL_DATA_POINT_5_COLUMN):
+        if _target_col in df.columns:
+            # Same all-NaN-infers-float64 reasoning as Customer Comments
+            # above -- this column is blank for every CID except 119415.
+            df[_target_col] = df[_target_col].astype(object)
+
     for idx, row in df.iterrows():
         domain = _norm_domain(extract_domain(row.get(field_mapping.email)))
 
@@ -634,6 +665,18 @@ def apply_complex_account_rules(
 
         if SIGNAL_NOTES_COLUMN in df.columns and cid in _DELL_APAC_CIDS:
             df.at[idx, SIGNAL_NOTES_COLUMN] = ""
+
+        if cid == "119415":
+            for _question_col, _target_col in CID_119415_EXTRA_QUESTION_COLUMNS.items():
+                if _question_col not in df.columns or _target_col not in df.columns:
+                    continue
+                _answer = row.get(_question_col, "")
+                # pd.notna, not `or ""` -- a blank cell comes back as float
+                # NaN, and NaN is truthy in Python, so skipping on `not
+                # _answer` alone would still write "nan" for a genuinely
+                # blank cell. Same reasoning as Customer Comments above.
+                if pd.notna(_answer) and str(_answer).strip():
+                    df.at[idx, _target_col] = f"{_question_col} {str(_answer).strip()}"
 
         if CUSTOMER_COMMENTS_COLUMN in df.columns and cid not in _DELL_APAC_CIDS:
             _raw_comment = row.get(CUSTOMER_COMMENTS_COLUMN, "")

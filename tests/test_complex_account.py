@@ -9,6 +9,7 @@ from core.complex_account import (
     load_domain_value_map, reformat_capture_date, clean_email_optin, asset_download_parts,
     format_phone, load_asset_specifications, apply_complex_account_rules,
     merge_complex_account_review, check_complex_account_conditions, check_asset_url_mismatches,
+    ADDITIONAL_DATA_POINT_4_COLUMN, ADDITIONAL_DATA_POINT_5_COLUMN, CID_119415_EXTRA_QUESTION_COLUMNS,
 )
 from core.check_result import ReviewDetail
 from core.models import FieldMapping
@@ -696,6 +697,54 @@ def test_apply_complex_account_rules_sets_phone_optin_yes_even_when_leadfile_has
     enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
 
     assert enriched.loc[0, "Phone Opt-In"] == "Yes"
+
+
+def test_apply_complex_account_rules_collates_119415_extra_questions_into_data_points_4_and_5():
+    q1, q2 = CID_119415_EXTRA_QUESTION_COLUMNS.keys()
+    df = pd.DataFrame([{
+        **_base_leads_df().iloc[0].to_dict(), "CID": "119415",
+        q1: "AI Data Integration and Management",
+        q2: "Aligning AI strategy with business outcomes",
+        ADDITIONAL_DATA_POINT_4_COLUMN: "", ADDITIONAL_DATA_POINT_5_COLUMN: "",
+    }])
+
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert enriched.loc[0, ADDITIONAL_DATA_POINT_4_COLUMN] == f"{q1} AI Data Integration and Management"
+    assert enriched.loc[0, ADDITIONAL_DATA_POINT_5_COLUMN] == \
+        f"{q2} Aligning AI strategy with business outcomes"
+
+
+def test_apply_complex_account_rules_skips_119415_extra_question_when_answer_is_blank():
+    q1, q2 = CID_119415_EXTRA_QUESTION_COLUMNS.keys()
+    df = pd.DataFrame([{
+        **_base_leads_df().iloc[0].to_dict(), "CID": "119415",
+        q1: float("nan"), q2: "Aligning AI strategy with business outcomes",
+        ADDITIONAL_DATA_POINT_4_COLUMN: "existing value", ADDITIONAL_DATA_POINT_5_COLUMN: "",
+    }])
+
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    # Blank answer -> untouched, not overwritten with blank/"nan".
+    assert enriched.loc[0, ADDITIONAL_DATA_POINT_4_COLUMN] == "existing value"
+    assert enriched.loc[0, ADDITIONAL_DATA_POINT_5_COLUMN] == \
+        f"{q2} Aligning AI strategy with business outcomes"
+
+
+def test_apply_complex_account_rules_never_touches_data_points_4_and_5_for_other_cids():
+    q1, q2 = CID_119415_EXTRA_QUESTION_COLUMNS.keys()
+    df = pd.DataFrame([{
+        **_base_leads_df().iloc[0].to_dict(), "CID": "119414",  # not 119415
+        q1: "AI Data Integration and Management",
+        q2: "Aligning AI strategy with business outcomes",
+    }])
+
+    enriched, _, _ = apply_complex_account_rules(df, FM, None, {}, {})
+
+    assert ADDITIONAL_DATA_POINT_4_COLUMN not in enriched.columns or pd.isna(
+        enriched.loc[0, ADDITIONAL_DATA_POINT_4_COLUMN])
+    assert ADDITIONAL_DATA_POINT_5_COLUMN not in enriched.columns or pd.isna(
+        enriched.loc[0, ADDITIONAL_DATA_POINT_5_COLUMN])
 
 
 def test_apply_complex_account_rules_matches_by_domain_regardless_of_cid():
