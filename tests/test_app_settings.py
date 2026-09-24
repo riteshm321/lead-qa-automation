@@ -5,6 +5,7 @@ from core.app_settings import (
     get_jira_settings, save_jira_settings,
     get_convertr_account_credentials, save_convertr_account_credentials,
     get_enhancio_client_id, save_enhancio_client_id,
+    get_integrate_credentials, save_integrate_credentials,
 )
 
 _ROOT = r"C:\Shared\OneDrive\LeadQA"
@@ -157,3 +158,10 @@ def test_jira_settings_never_derive_from_shared_root(tmp_path, monkeypatch):
     with open("app_settings.json", encoding="utf-8") as f:
         raw = f.read()
     assert _ROOT.replace("\\", "\\\\") in raw  # sanity: still the same local settings file
+
+
+def test_save_and_get_integrate_credentials_round_trip(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert get_integrate_credentials() == ("", "")
+    save_integrate_credentials("  key123  ", "secret456")
+    assert get_integrate_credentials() == ("key123", "secret456")

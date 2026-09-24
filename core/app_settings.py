@@ -100,3 +100,21 @@ def save_enhancio_client_id(client_id: str) -> None:
     updated = load_app_settings()
     updated["enhancio_client_id"] = client_id.strip()
     save_app_settings(updated)
+
+
+def get_integrate_credentials() -> tuple[str, str]:
+    # Unconfirmed whether Integrate's API Key/Secret is genuinely
+    # org-wide-shared or needs to be per-client (see the design spec's
+    # "Open questions") -- built as ONE shared credential for now, same
+    # storage reasoning as get_jira_settings/get_enhancio_client_id: a
+    # live API credential belongs in the plain local app_settings.json
+    # only, never inside the shared clients folder every teammate can read.
+    settings = load_app_settings()
+    return settings.get("integrate_api_key", ""), settings.get("integrate_api_secret", "")
+
+
+def save_integrate_credentials(api_key: str, api_secret: str) -> None:
+    updated = load_app_settings()
+    updated["integrate_api_key"] = api_key.strip()
+    updated["integrate_api_secret"] = api_secret.strip()
+    save_app_settings(updated)
