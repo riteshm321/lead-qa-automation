@@ -722,6 +722,7 @@ _DATE_NUMBER_FORMAT = "mm\\/dd\\/yyyy"
 def _resolve_passthrough_columns(
     headers: list, leads_df: pd.DataFrame, field_mapping: FieldMapping,
     target_field_mapping: FieldMapping | None, skip_normalized: set[str],
+    manual_overrides: dict[str, str] | None = None,
 ) -> tuple[dict[int, str | None], list[str]]:
     """Resolves which leadfile column (if any) feeds each target header:
     the target role (email/first name/... via target_field_mapping) ->
@@ -735,9 +736,16 @@ def _resolve_passthrough_columns(
     xlsx only) from passthrough resolution and the unmatched-headers
     report -- those headers' values never come from column_source at all.
 
+    manual_overrides ({normalized template header: leadfile column name})
+    takes priority over every other resolution source when the named
+    leadfile column actually exists in leads_df -- an override naming a
+    column that doesn't exist in THIS leadfile falls back to the normal
+    auto-match chain below rather than silently resolving to nothing.
+
     Returns (column_source keyed by 1-based column position, matching
     enumerate(headers, start=1); unmatched_passthrough_headers).
     """
+    manual_overrides = manual_overrides or {}
     lead_headers_norm = {normalize_header_text(h): h for h in leads_df.columns}
     target_role_by_header: dict[str, str] = {}
     if target_field_mapping is not None:
@@ -753,6 +761,10 @@ def _resolve_passthrough_columns(
             continue
         header_norm = normalize_header_text(header)
         if header_norm in skip_normalized:
+            continue
+        override_col = manual_overrides.get(header_norm)
+        if override_col and override_col in leads_df.columns:
+            column_source[col_idx] = override_col
             continue
         if header_norm in target_role_by_header:
             column_source[col_idx] = getattr(field_mapping, target_role_by_header[header_norm])

@@ -423,6 +423,43 @@ def test_append_leads_leaves_ambiguous_containment_matches_unmatched(tmp_path):
     assert unmatched == ["Region"]
 
 
+def test_resolve_passthrough_columns_manual_override_wins_over_auto_match():
+    from core.excel_io import _resolve_passthrough_columns
+
+    leads_df = pd.DataFrame([{"Company Size": "50", "Employee Count": "75"}])
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+
+    # Without an override, "Company Size" auto-matches to the identically
+    # named leadfile column (exact match beats anything else).
+    column_source, unmatched = _resolve_passthrough_columns(
+        ["Company Size"], leads_df, fm, None, set())
+    assert column_source[1] == "Company Size"
+
+    # With an override, it's redirected to a DIFFERENT leadfile column
+    # even though an exact-name match also exists.
+    column_source, unmatched = _resolve_passthrough_columns(
+        ["Company Size"], leads_df, fm, None, set(),
+        manual_overrides={"companysize": "Employee Count"})
+    assert column_source[1] == "Employee Count"
+    assert unmatched == []
+
+
+def test_resolve_passthrough_columns_manual_override_of_nonexistent_column_falls_back_to_auto_match():
+    from core.excel_io import _resolve_passthrough_columns
+
+    leads_df = pd.DataFrame([{"Company Size": "50"}])
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+
+    # The override names a column that doesn't actually exist in this
+    # leadfile -- must NOT silently resolve to nothing; falls back to the
+    # normal auto-match chain, which finds the exact-name match.
+    column_source, unmatched = _resolve_passthrough_columns(
+        ["Company Size"], leads_df, fm, None, set(),
+        manual_overrides={"companysize": "Nonexistent Column"})
+    assert column_source[1] == "Company Size"
+    assert unmatched == []
+
+
 def test_append_leads_preserves_external_link_parts_byte_for_byte(tmp_path):
     path = str(tmp_path / "template.xlsx")
     wb = openpyxl.Workbook()
