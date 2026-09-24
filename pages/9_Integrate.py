@@ -13,6 +13,14 @@ from core.integrate_sync import filter_already_uploaded, load_uploaded_emails, s
 from core.models import resolve_field_mapping
 from core.profile_store import list_profile_names, load_profile
 
+def _nan_safe_cell(value) -> str:
+    # pd.notna, not `value or ""` -- a blank leadfile cell comes back as
+    # float NaN, and NaN is truthy in Python, so `nan or ""` evaluates to
+    # nan itself and str()'s to the literal text "nan" (same footgun
+    # documented in core/complex_account.py's Customer Comments handling).
+    return str(value).strip() if pd.notna(value) else ""
+
+
 _current_user = configure_page("Integrate")
 st.title("🔗 Integrate")
 
@@ -111,6 +119,21 @@ if _upload_file:
         )
         st.stop()
 
+    # A mapped leadfile column that doesn't exist in THIS uploaded file
+    # likely means a genuine leadfile/config mismatch (a renamed export
+    # column, the wrong file, a stale mapping) -- surfaced immediately
+    # rather than silently sending "" for it per lead, same reasoning as
+    # the Email-column check above.
+    _missing_mapped_columns = sorted(
+        col for col in _integrate.field_mapping if col not in leads_df.columns
+    )
+    if _missing_mapped_columns:
+        st.error(
+            "This client's Integrate field mapping references column(s) not present in the uploaded "
+            "file: " + ", ".join(_missing_mapped_columns)
+        )
+        st.stop()
+
     if st.button("Upload to Integrate", type="primary"):
         results = []
         for _, lead in _dup_df.iterrows():
@@ -124,24 +147,36 @@ if _upload_file:
 
         for _, lead in _send_df.iterrows():
             attributes = {
-                integrate_attr: str(lead.get(leadfile_col, "") or "")
+                integrate_attr: _nan_safe_cell(lead.get(leadfile_col, ""))
                 for leadfile_col, integrate_attr in _integrate.field_mapping.items()
             }
             attributes.update(_integrate.fixed_field_values)
-            email = lead.get(email_column, "")
-            try:
-                response = integrate_client.submit_lead(
-                    _integrate.sid, _api_key, _api_secret, attributes, callback_url=_integrate.callback_url,
-                )
-                lead_id = str(response.get("id", ""))
-                results.append({"Email": email, "Result": f"✅ Lead ID {lead_id}"})
-                # Saved per-lead, not batched to the end of the whole loop --
-                # same reasoning as pages/7_Convertr.py's per-CID incremental
-                # save: an exception on a LATER lead must never discard an
-                # earlier, already-succeeded lead's dedup record.
-                save_uploaded_emails(client_name, {str(email)})
-            except IntegrateError as exc:
-                results.append({"Email": email, "Result": f"❌ {exc}"})
+            email = _nan_safe_cell(lead.get(email_column, ""))
+            if not email:
+                # Skip BEFORE submit_lead/save_uploaded_emails -- a blank
+                # email that reached save_uploaded_emails used to
+                # normalize to the literal string "nan" and get saved to
+                # the dedup store, which then made every SUBSEQUENT
+                # blank-email row for this client match that same "nan"
+                # entry in filter_already_uploaded and get silently
+                # skipped as "already uploaded" forever. Surfacing it here
+                # instead keeps it visible in the results table.
+                results.append({"Email": email, "Result": "❌ No email value for this row"})
+            else:
+                try:
+                    response = integrate_client.submit_lead(
+                        _integrate.sid, _api_key, _api_secret, attributes, callback_url=_integrate.callback_url,
+                    )
+                    lead_id = str(response.get("id", ""))
+                    results.append({"Email": email, "Result": f"✅ Lead ID {lead_id}"})
+                    # Saved per-lead, not batched to the end of the whole loop
+                    # -- same reasoning as pages/7_Convertr.py's per-CID
+                    # incremental save: an exception on a LATER lead must
+                    # never discard an earlier, already-succeeded lead's
+                    # dedup record.
+                    save_uploaded_emails(client_name, {str(email)})
+                except IntegrateError as exc:
+                    results.append({"Email": email, "Result": f"❌ {exc}"})
             _sent_so_far += 1
             if _send_progress is not None:
                 _send_progress.progress(

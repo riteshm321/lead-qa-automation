@@ -46,7 +46,14 @@ def submit_lead(
     payload = {"data": {"type": "lead", "attributes": attributes}}
     params = {"callback": callback_url} if callback_url else {}
 
-    response = requests.post(url, headers=headers, json=payload, params=params, timeout=30)
+    try:
+        response = requests.post(url, headers=headers, json=payload, params=params, timeout=30)
+    except requests.exceptions.RequestException as exc:
+        raise IntegrateError(
+            f"Network error calling Integrate (the lead may still have been created — check before "
+            f"retrying): {exc}"
+        )
+
     try:
         body = response.json()
     except ValueError:
@@ -56,7 +63,23 @@ def submit_lead(
         )
 
     if not (200 <= response.status_code < 300):
-        message = _first_error_title(body) or response.text[:300]
+        error_body = body if isinstance(body, dict) else {}
+        message = _first_error_title(error_body) or response.text[:300]
         raise IntegrateError(f"Integrate returned {response.status_code}: {message}")
 
-    return (body or {}).get("data", {})
+    # A 2xx status alone isn't proof Integrate actually created the lead --
+    # confirmed possible in practice for a malformed/empty body -- so this
+    # requires the parsed body to actually be a dict with a real
+    # data.id before treating it as success, same "2xx isn't automatically
+    # success" reasoning as the not-valid-JSON case above. isinstance
+    # checks throughout (not `.get()` chains) so a body that comes back as
+    # a list or other non-dict JSON value can't crash this with an
+    # AttributeError.
+    data = body.get("data") if isinstance(body, dict) else None
+    lead_id = data.get("id") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or not lead_id:
+        error_body = body if isinstance(body, dict) else {}
+        message = _first_error_title(error_body) or "Integrate returned a 2xx response with no valid lead id"
+        raise IntegrateError(message)
+
+    return data

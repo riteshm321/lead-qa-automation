@@ -1,6 +1,7 @@
 from unittest.mock import patch, MagicMock
 
 import pytest
+import requests
 
 from core.integrate_client import submit_lead, IntegrateError
 
@@ -48,4 +49,38 @@ def test_submit_lead_raises_when_the_response_body_is_not_valid_json():
     mock_response.json.side_effect = ValueError("no JSON")
     with patch("core.integrate_client.requests.post", return_value=mock_response):
         with pytest.raises(IntegrateError):
+            submit_lead("sid1", "key", "secret", {"email": "a@x.com"})
+
+
+def test_submit_lead_raises_on_a_2xx_response_with_no_real_lead_id():
+    # An empty (or otherwise data-less) 200 body used to be silently
+    # returned as success via `(body or {}).get("data", {})` -- this must
+    # raise IntegrateError instead, and must not crash with an
+    # AttributeError if body isn't a dict at all.
+    mock_response = MagicMock(status_code=200, json=lambda: {}, text="{}")
+    with patch("core.integrate_client.requests.post", return_value=mock_response):
+        with pytest.raises(IntegrateError):
+            submit_lead("sid1", "key", "secret", {"email": "a@x.com"})
+
+
+def test_submit_lead_raises_on_a_2xx_response_whose_body_is_a_json_list():
+    mock_response = MagicMock(status_code=200, json=lambda: [1, 2, 3], text="[1,2,3]")
+    with patch("core.integrate_client.requests.post", return_value=mock_response):
+        with pytest.raises(IntegrateError):
+            submit_lead("sid1", "key", "secret", {"email": "a@x.com"})
+
+
+def test_submit_lead_raises_on_a_2xx_response_with_data_but_no_id():
+    mock_response = MagicMock(status_code=200, json=lambda: {"data": {"type": "lead"}}, text="{}")
+    with patch("core.integrate_client.requests.post", return_value=mock_response):
+        with pytest.raises(IntegrateError):
+            submit_lead("sid1", "key", "secret", {"email": "a@x.com"})
+
+
+def test_submit_lead_wraps_a_network_exception_in_integrate_error():
+    with patch(
+        "core.integrate_client.requests.post",
+        side_effect=requests.exceptions.ConnectionError("connection reset"),
+    ):
+        with pytest.raises(IntegrateError, match="connection reset"):
             submit_lead("sid1", "key", "secret", {"email": "a@x.com"})

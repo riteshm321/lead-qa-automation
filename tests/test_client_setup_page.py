@@ -617,3 +617,28 @@ def test_saving_integrate_section_persists_sid_and_field_mapping(tmp_path, monke
     assert loaded.integrate.sid == "d8a9deeb-7bb2-4832-b3d9-1df8a9fe5cab"
     assert loaded.integrate.field_mapping == {"Email": "email", "First Name": "first_name"}
     assert loaded.integrate.fixed_field_values == {"country": "UK"}
+
+
+def test_invalid_integrate_target_attribute_warns_but_still_saves(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(c for c in at.checkbox if c.label == "This client uploads to Integrate").set_value(True).run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("Everpure EMEA").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="integrate_sid_input").set_value("d8a9deeb-7bb2-4832-b3d9-1df8a9fe5cab").run()
+    at.text_area(key="integrate_field_map_cols_input").set_value("Email").run()
+    # "emial" is a typo -- not one of Integrate's 17 real attribute names.
+    at.text_area(key="integrate_field_map_targets_input").set_value("emial").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+    assert any("emial" in w.value for w in at.warning)
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    loaded = load_profile("Everpure EMEA", get_clients_dir())
+    assert loaded.integrate.field_mapping == {"Email": "emial"}

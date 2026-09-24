@@ -28,6 +28,16 @@ from core.models import (
 from core.profile_store import save_profile, load_profile, list_profile_names
 from core.toast import show_pending_toast
 
+# Integrate's own documented set of real lead attribute names -- confirmed
+# from the account's Import -> API tab, same source as core/integrate_client.py's
+# base URL comment. Used only to flag a likely field-mapping typo (e.g.
+# "emial" for "email"), not to block a save -- see the warning below.
+_INTEGRATE_VALID_ATTRIBUTES = {
+    "first_name", "last_name", "email", "phone", "asset_title", "company_name", "industry", "job_title",
+    "employee_size", "job_level", "job_function", "CompanyRevenue", "opt_in", "OptInDate", "double_optin",
+    "double_date_optin", "country",
+}
+
 configure_page("Client Setup")
 show_pending_toast()
 st.title("Client Setup")
@@ -1115,6 +1125,18 @@ with tab_complex:
 
             integrate_field_mapping = _render_paired_field_mapping(
                 "integrate", "Integrate", profile.integrate.field_mapping if profile else {})
+            _integrate_invalid_targets = sorted(
+                set(integrate_field_mapping.values()) - _INTEGRATE_VALID_ATTRIBUTES
+            )
+            if _integrate_invalid_targets:
+                # Warning, not error/stop -- flags a likely typo (e.g.
+                # "emial") without blocking the save, since Integrate's own
+                # attribute list could grow and this app shouldn't be the
+                # thing standing in the way of using a brand-new one.
+                st.warning(
+                    "These Integrate field mapping target(s) aren't one of Integrate's known attribute "
+                    "names, double-check for a typo: " + ", ".join(_integrate_invalid_targets)
+                )
 
             st.caption(
                 "Fixed field values, one per line, format `Attribute,Fixed Value` — for an Integrate "

@@ -135,6 +135,93 @@ def test_a_single_lead_failure_does_not_abort_the_rest_of_the_batch(tmp_path, mo
     assert load_uploaded_emails("Everpure EMEA") == {"good@x.com"}
 
 
+def test_blank_leadfile_cell_is_sent_as_empty_string_not_the_text_nan(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_integrate_credentials("key123", "secret456")
+    _save_profile()
+
+    leads_csv = tmp_path / "leads.csv"
+    # First's cell is left empty -- pandas reads an all-blank CSV cell in
+    # an otherwise-populated column as float NaN, not "".
+    pd.DataFrame([
+        {"CID": "1", "Email": "a@x.com", "First": "", "Last": "One"},
+        {"CID": "1", "Email": "b@x.com", "First": "B", "Last": "Two"},
+    ]).to_csv(leads_csv, index=False)
+
+    submit_calls = []
+
+    def _fake_submit(sid, api_key, api_secret, attributes, callback_url=""):
+        submit_calls.append(attributes)
+        return {"id": f"lead-{len(submit_calls)}"}
+
+    with patch("core.integrate_client.submit_lead", side_effect=_fake_submit):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Everpure EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Integrate").click().run()
+
+    assert not at.exception
+    assert len(submit_calls) == 2
+    assert submit_calls[0]["first_name"] == ""
+    assert submit_calls[0]["first_name"] != "nan"
+
+
+def test_blank_email_row_is_skipped_not_submitted_and_not_saved_to_dedup(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_integrate_credentials("key123", "secret456")
+    _save_profile()
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([
+        {"CID": "1", "Email": "", "First": "No", "Last": "Email"},
+        {"CID": "1", "Email": "b@x.com", "First": "B", "Last": "Two"},
+    ]).to_csv(leads_csv, index=False)
+
+    with patch("core.integrate_client.submit_lead", return_value={"id": "lead-1"}) as mock_submit:
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Everpure EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Integrate").click().run()
+
+    assert not at.exception
+    assert mock_submit.call_count == 1
+    assert mock_submit.call_args[0][3]["email"] == "b@x.com"
+    results_df = at.session_state["integrate_upload_results"]
+    assert any(results_df["Result"].str.contains("No email value"))
+    assert load_uploaded_emails("Everpure EMEA") == {"b@x.com"}
+
+
+def test_missing_mapped_leadfile_column_errors_and_does_not_submit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_integrate_credentials("key123", "secret456")
+    # field_mapping references "Last" but the uploaded file below has no
+    # "Last" column -- a genuine leadfile/config mismatch.
+    _save_profile()
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([
+        {"CID": "1", "Email": "a@x.com", "First": "A"},
+    ]).to_csv(leads_csv, index=False)
+
+    with patch("core.integrate_client.submit_lead") as mock_submit:
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Everpure EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+
+    assert not at.exception
+    assert any("Last" in e.value for e in at.error)
+    mock_submit.assert_not_called()
+
+
 def test_dedup_skips_a_previously_uploaded_email(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
