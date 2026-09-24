@@ -147,6 +147,22 @@ def test_suppression_and_dedupe_use_sources_keys():
     assert result.refund_reasons[0] == "Suppression - domain"
 
 
+def test_run_pipeline_with_no_mandatory_lead_template_rules_is_unaffected():
+    # Default ClientProfile.lead_template_mapping is an empty
+    # LeadTemplateMappingConfig (no rules), so the new mandatory-column
+    # check should never even run -- same PipelineResult as before this
+    # feature existed for a fixture with no data-quality issues.
+    profile = _profile()
+    new_leads = pd.DataFrame([{"emailaddress": "a@x.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1"}])
+    accumulated = pd.DataFrame(columns=["emailaddress", "firstname", "lastname", "company", "CID"])
+
+    result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[])
+
+    assert result.valid_indices == [0]
+    assert result.refund_reasons == {}
+    assert result.review_reasons == {}
+
+
 def test_apply_refund_overrides_promotes_approved_leads_to_valid():
     result = PipelineResult(valid_indices=[0], refund_reasons={1: "Duplicate - exact email", 2: "Exclusion - domain"})
 
