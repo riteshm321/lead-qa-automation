@@ -1,7 +1,7 @@
 from core.models import (
     FieldMapping, LeadcapSegment, LeadcapConfig, TalConfig,
     ExclusionConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, DuplicateConfig,
-    ClientProfile, resolve_field_mapping,
+    ClientProfile, IntegrateConfig, resolve_field_mapping,
 )
 from core.check_result import CheckOutcome
 
@@ -74,3 +74,12 @@ def test_check_outcome_defaults_are_independent():
     b = CheckOutcome()
     a.fail[1] = "x"
     assert b.fail == {}
+
+
+def test_client_profile_defaults_to_a_disabled_integrate_config():
+    profile = ClientProfile(name="X", accumulated_report_path="acc.xlsx")
+    assert profile.integrate.enabled is False
+    assert profile.integrate.sid == ""
+    assert profile.integrate.field_mapping == {}
+    assert profile.integrate.fixed_field_values == {}
+    assert profile.integrate.leadfile_field_mapping is None

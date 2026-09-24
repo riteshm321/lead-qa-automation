@@ -236,6 +236,32 @@ class EnhancioConfig:
 
 
 @dataclass
+class IntegrateConfig:
+    # Uploads a client-verified leadfile straight to Integrate.com's Lead
+    # API (https://api.integrate.com/api/v1/contracts/{sid}/leads) --
+    # confirmed live from the account's own Import -> API tab. Unlike
+    # Convertr/Enhancio, ONE SID per client (not per-CID), since a client
+    # maps to exactly one Integrate Source for this rollout.
+    enabled: bool = False
+    sid: str = ""
+    # Optional -- Integrate's own docs show this as an unrequired query
+    # param. This app has no public endpoint to receive it, so it's sent
+    # only when explicitly configured, never a made-up placeholder value.
+    callback_url: str = ""
+    # {leadfile column name: Integrate attribute name}, e.g.
+    # {"Email": "email", "First Name": "first_name"}.
+    field_mapping: dict[str, str] = field(default_factory=dict)
+    # {Integrate attribute name: fixed value} -- for an attribute that's
+    # the SAME for every lead this client sends (e.g. "country": "UK"),
+    # not read from the leadfile row at all. Same purpose as
+    # EnhancioConfig.fixed_field_values, but flat (not per-allocation)
+    # since there's only one SID here.
+    fixed_field_values: dict[str, str] = field(default_factory=dict)
+    # Same purpose/fallback behavior as ConvertrConfig.leadfile_field_mapping.
+    leadfile_field_mapping: Optional[FieldMapping] = None
+
+
+@dataclass
 class ClientProfile:
     name: str
     accumulated_report_path: str
@@ -271,3 +297,4 @@ class ClientProfile:
     box_tracker: BoxTrackerConfig = field(default_factory=BoxTrackerConfig)
     convertr: ConvertrConfig = field(default_factory=ConvertrConfig)
     enhancio: EnhancioConfig = field(default_factory=EnhancioConfig)
+    integrate: IntegrateConfig = field(default_factory=IntegrateConfig)
