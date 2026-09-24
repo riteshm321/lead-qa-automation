@@ -6,7 +6,7 @@ import streamlit as st
 from core.errors import render_error
 from core.excel_io import (
     list_sheet_names, read_sheet_as_dataframe, detect_cids_from_pacing_overview, guess_target_field_mapping,
-    find_header_row, read_sheet_headers,
+    find_header_row, read_sheet_headers, find_passthrough_lead_column, normalize_header_text, read_leadfile,
 )
 from core.app_settings import (
     get_clients_dir, get_convertr_account_credentials, save_convertr_account_credentials,
@@ -23,7 +23,7 @@ from core.models import (
     ClientProfile, DuplicateConfig, LeadcapConfig, LeadcapSegment,
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
     LeadTemplateTab, ComplexAccountConfig, BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
-    EnhancioConfig, EnhancioAllocationMapping, IntegrateConfig,
+    EnhancioConfig, EnhancioAllocationMapping, IntegrateConfig, LeadTemplateColumnRule, LeadTemplateMappingConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 from core.toast import show_pending_toast
@@ -564,6 +564,11 @@ with tab_basics:
         lead_template_multi_tab = False
         lead_template_tabs_result: list[LeadTemplateTab] = []
         lead_template_field_mapping_result = None
+        # Pre-initialized (matching every other Lead-QA-only variable above)
+        # so the ClientProfile(...) call below never raises NameError when
+        # client_mode == "Lead QA & Upload" skips the whole block that
+        # would otherwise build this list.
+        lead_template_mapping_rules: list[LeadTemplateColumnRule] = []
         if client_mode == "Lead QA":
             lead_template_path = _path_input_with_browse(
                 "Lead Template path", "lead_template_path_input",
@@ -676,6 +681,95 @@ with tab_basics:
                                "otherwise the shared Lead Template path.")
                 else:
                     st.caption("Header row auto-detected — rows above it (titles, instructions) are left untouched.")
+
+            st.divider()
+            st.markdown("**Lead Template Column Mapping (optional)**")
+            st.caption(
+                "Preview which Lead Template columns the app can auto-match from a leadfile, mark specific "
+                "columns as mandatory (a blank value gets flagged for review instead of silently left blank), "
+                "manually override a column's source, or set a specific date format for a column. Every "
+                "column left untouched here keeps working exactly as it does today."
+            )
+            _ltm_template_headers: list[str] = []
+            if lead_template_path and lead_template_sheet_name:
+                _ltm_template_headers, _ltm_err = _safe_read_template_headers(
+                    lead_template_path, lead_template_sheet_name)
+                if _ltm_err is not None:
+                    render_error(_ltm_err)
+
+            _ltm_skip = {"date", "comment", "status", "refund reason", "reason"}
+            _ltm_template_headers = [h for h in _ltm_template_headers if normalize_header_text(h) not in _ltm_skip]
+
+            _ltm_sample_file = st.file_uploader(
+                "Sample leadfile (optional — lets this preview show real auto-match results and pick a source "
+                "column from a dropdown instead of typing it)",
+                type=["xlsx", "csv"], key="ltm_sample_file")
+            _ltm_sample_headers: list[str] = []
+            if _ltm_sample_file is not None:
+                try:
+                    _ltm_sample_headers = list(read_leadfile(_ltm_sample_file).columns)
+                except Exception as exc:
+                    render_error(exc)
+
+            _ltm_sample_headers_norm = {normalize_header_text(h): h for h in _ltm_sample_headers}
+            _existing_ltm_rules = {r.template_column: r for r in (profile.lead_template_mapping.rules if profile else [])}
+            _DATE_FORMAT_OPTIONS = [
+                "(no special formatting)", "MM/DD/YYYY", "DD/MM/YYYY", "DD-MMM-YY",
+                "YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS", "Custom...",
+            ]
+
+            lead_template_mapping_rules: list[LeadTemplateColumnRule] = []
+            if not _ltm_template_headers:
+                st.caption("Set a Lead Template path and sheet above to configure column mapping.")
+            for _ltm_col in _ltm_template_headers:
+                _existing_rule = _existing_ltm_rules.get(_ltm_col)
+                with st.container(border=True):
+                    if _ltm_sample_headers:
+                        _auto_match = find_passthrough_lead_column(
+                            normalize_header_text(_ltm_col), _ltm_sample_headers_norm)
+                        st.write(
+                            f"**{_ltm_col}** — auto-matches: *{_auto_match}*" if _auto_match
+                            else f"**{_ltm_col}** — ⚠️ no auto-match found")
+                    else:
+                        st.write(f"**{_ltm_col}**")
+
+                    _col_a, _col_b = st.columns(2)
+                    _ltm_mandatory = _col_a.checkbox(
+                        "Mandatory", value=_existing_rule.mandatory if _existing_rule else False,
+                        key=f"ltm_mandatory_{_ltm_col}")
+
+                    if _ltm_sample_headers:
+                        _override_options = ["(auto)"] + _ltm_sample_headers
+                        _default_override = _existing_rule.source_column if _existing_rule and _existing_rule.source_column else "(auto)"
+                        _override_idx = _override_options.index(_default_override) if _default_override in _override_options else 0
+                        _ltm_source_selected = _col_b.selectbox(
+                            "Source column", _override_options, index=_override_idx, key=f"ltm_source_{_ltm_col}")
+                        _ltm_source = "" if _ltm_source_selected == "(auto)" else _ltm_source_selected
+                    else:
+                        _ltm_source = _col_b.text_input(
+                            "Source column override (blank = auto)",
+                            value=_existing_rule.source_column if _existing_rule else "",
+                            key=f"ltm_source_text_{_ltm_col}")
+
+                    _default_fmt = _existing_rule.date_format if _existing_rule else ""
+                    _fmt_idx = _DATE_FORMAT_OPTIONS.index(_default_fmt) if _default_fmt in _DATE_FORMAT_OPTIONS else 0
+                    _ltm_fmt_selected = st.selectbox(
+                        "Date format", _DATE_FORMAT_OPTIONS, index=_fmt_idx, key=f"ltm_fmt_{_ltm_col}")
+                    if _ltm_fmt_selected == "Custom...":
+                        _ltm_date_format = st.text_input(
+                            "Custom date format (Python strftime, e.g. %d %b %Y)",
+                            value=_default_fmt if _default_fmt not in _DATE_FORMAT_OPTIONS else "",
+                            key=f"ltm_fmt_custom_{_ltm_col}")
+                    elif _ltm_fmt_selected == "(no special formatting)":
+                        _ltm_date_format = ""
+                    else:
+                        _ltm_date_format = _ltm_fmt_selected
+
+                if _ltm_mandatory or _ltm_source or _ltm_date_format:
+                    lead_template_mapping_rules.append(LeadTemplateColumnRule(
+                        template_column=_ltm_col, source_column=_ltm_source,
+                        mandatory=_ltm_mandatory, date_format=_ltm_date_format,
+                    ))
 
     with st.container(border=True):
         st.subheader("Duplicate Check")
@@ -1227,6 +1321,7 @@ if st.button("💾 Save Client Profile", type="primary"):
             lead_template_multi_tab=lead_template_multi_tab if client_mode == "Lead QA" else False,
             lead_template_tabs=(
                 lead_template_tabs_result if client_mode == "Lead QA" and lead_template_multi_tab else []),
+            lead_template_mapping=LeadTemplateMappingConfig(rules=lead_template_mapping_rules),
             lead_template_clear_existing=(
                 lead_template_clear_existing if client_mode == "Lead QA" else False),
             field_mapping=profile.field_mapping if profile else None,

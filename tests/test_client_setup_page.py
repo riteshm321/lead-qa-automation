@@ -93,6 +93,71 @@ def test_lead_template_mapping_reads_from_first_tabs_own_file_when_shared_path_i
     assert "Email_Address" in email_select.options
 
 
+def test_saving_lead_template_mapping_persists_mandatory_and_override(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    # Build a minimal real Lead Template workbook so _safe_read_template_headers
+    # has something to read.
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Company Size"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Test Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+
+    at.checkbox(key="ltm_mandatory_Company Size").set_value(True).run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("LTM Test Client", get_clients_dir())
+    rule = next(r for r in saved.lead_template_mapping.rules if r.template_column == "Company Size")
+    assert rule.mandatory is True
+
+
+def test_a_lead_template_column_left_at_every_default_is_not_saved_as_a_rule(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Company Size"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Default Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+
+    # Deliberately do NOT touch the "Company Size" mandatory checkbox,
+    # source override, or date format -- every Lead Template column left at
+    # its default must not turn into a saved rule.
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("LTM Default Client", get_clients_dir())
+    assert saved.lead_template_mapping.rules == []
+
+
 def test_accumulated_field_mapping_saves_as_none_when_every_dropdown_left_unset(tmp_path, monkeypatch):
     # Regression test for a real bug: this section is documented as
     # "(optional)" -- leaving every dropdown at "No mapping" (the default)
