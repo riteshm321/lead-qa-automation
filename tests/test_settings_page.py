@@ -3,6 +3,8 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
+from core.app_settings import get_integrate_credentials
+
 _PAGE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pages", "3_Settings.py")
 
 
@@ -159,6 +161,17 @@ def test_save_enhancio_client_id_persists_settings(tmp_path, monkeypatch):
 
     from core.app_settings import get_enhancio_client_id
     assert get_enhancio_client_id() == "vE2Y4XmLPg74oY8cpIL9KBO8lkKPEg30"
+
+
+def test_saving_integrate_credentials_persists_them(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    at.text_input(key="integrate_api_key_input").set_value("key123").run()
+    at.text_input(key="integrate_api_secret_input").set_value("secret456").run()
+    next(b for b in at.button if b.label == "Save Integrate credentials").click().run()
+    assert not at.exception
+    assert get_integrate_credentials() == ("key123", "secret456")
 
 
 def test_admin_can_add_a_new_user_account(tmp_path, monkeypatch):

@@ -6,6 +6,7 @@ from core.app_settings import (
     get_aliases_path, get_clients_dir, get_jira_settings, get_shared_root_dir,
     load_app_settings, save_app_settings, save_jira_settings,
     get_enhancio_client_id, save_enhancio_client_id,
+    get_integrate_credentials, save_integrate_credentials,
 )
 from core.activity_tracker import load_all_activity, get_user_stats, format_minutes
 from core.auth import create_user, delete_user, load_users, update_user_role
@@ -119,6 +120,23 @@ with st.expander("🔑 Enhancio Client ID (private to this machine)", expanded=F
     )
     if st.button("Save Enhancio Client ID", key="enhancio_client_id_save"):
         save_enhancio_client_id(enhancio_client_id)
+        queue_toast_before_rerun("Saved.")
+        st.rerun()
+
+with st.expander("🔑 Integrate API credentials (private to this machine)", expanded=False):
+    st.caption(
+        "Used by the 🔗 Integrate page. One shared API Key/Secret for the whole org (from Integrate's "
+        "Keys & credentials admin page) — each client just needs its own Source ID (SID), set on Client "
+        "Setup. This is a live API credential, so it's stored locally on this machine only, never inside "
+        "the shared clients folder above."
+    )
+    _integrate_key, _integrate_secret = get_integrate_credentials()
+    integrate_api_key = st.text_input(
+        "Integrate API Key", value=_integrate_key, type="password", key="integrate_api_key_input")
+    integrate_api_secret = st.text_input(
+        "Integrate API Secret", value=_integrate_secret, type="password", key="integrate_api_secret_input")
+    if st.button("Save Integrate credentials", key="integrate_credentials_save"):
+        save_integrate_credentials(integrate_api_key, integrate_api_secret)
         queue_toast_before_rerun("Saved.")
         st.rerun()
 
