@@ -783,7 +783,8 @@ if "run_result" in st.session_state:
                         tab_leads, profile.field_mapping, run_date,
                         target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
                         clear_existing=profile.lead_template_clear_existing,
-                        highlight_fill=_tmpl_highlight))
+                        highlight_fill=_tmpl_highlight,
+                        lead_template_mapping=profile.lead_template_mapping))
                     _tmpl_files_used.add(_tmpl_file_path)
                     lead_template_links_used[_tmpl_file_path] = _tab_link_by_file.get(
                         _tmpl_file_path, profile.lead_template_link)
@@ -803,7 +804,8 @@ if "run_result" in st.session_state:
                     valid_leads_df, profile.field_mapping, run_date,
                     target_field_mapping=_tmpl_fm, header_row=_tmpl_header_row,
                     clear_existing=profile.lead_template_clear_existing,
-                    highlight_fill=_tmpl_highlight))
+                    highlight_fill=_tmpl_highlight,
+                    lead_template_mapping=profile.lead_template_mapping))
                 st.info(f"Valid leads also appended to Lead Template at {profile.lead_template_path}")
                 lead_template_links_used[profile.lead_template_path] = profile.lead_template_link
 

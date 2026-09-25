@@ -369,6 +369,7 @@ else:
                     unmatched_headers.update(append_leads(
                         template_path, sheet_name, enriched_group, _acc_fm,
                         datetime.date.today(), header_row=header_row, clear_existing=True,
+                        lead_template_mapping=profile.lead_template_mapping,
                     ))
                     written_cids.extend(sorted(group[_acc_fm.cid].astype(str).unique()))
                     written_indices.update(group.index)

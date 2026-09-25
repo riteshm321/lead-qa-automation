@@ -10,6 +10,7 @@ from core.app_settings import get_clients_dir, save_jira_settings
 from core.check_result import ReviewDetail
 from core.jira_client import JiraError
 from core.models import ClientProfile, FieldMapping, DuplicateConfig, LeadTemplateTab, ComplexAccountConfig
+from core.models import LeadTemplateMappingConfig, LeadTemplateColumnRule
 from core.models import EnhancioConfig, EnhancioAllocationMapping, BoxTrackerConfig
 from core.pipeline import PipelineResult, run_pipeline
 from core.profile_store import save_profile
@@ -1553,3 +1554,99 @@ def test_switching_clients_does_not_reuse_the_other_clients_cached_file(tmp_path
 
     assert not at.exception
     assert not any("Using previously selected file" in c.value for c in at.caption)
+
+
+def test_lead_template_mandatory_rule_with_no_resolvable_source_forces_needs_review(tmp_path, monkeypatch):
+    # Confirms Task 4's mandatory-column check (already wired into
+    # run_pipeline, committed separately) actually fires: a mandatory Lead
+    # Template rule whose column has no match anywhere in the leadfile must
+    # flag the lead for review instead of letting it go straight to a
+    # normal Valid write. Calls run_pipeline() directly with the same
+    # arguments pages/2_Run_Check.py's own "Run Check" button passes (minus
+    # on_progress -- see the concern noted in the Task 6 report about why),
+    # matching this file's own existing precedent for exercising pipeline
+    # behavior "as the page would"
+    # (test_complex_account_flags_asset_url_mismatch_for_review_check_does_not_mutate
+    # above).
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        lead_template_mapping=LeadTemplateMappingConfig(rules=[
+            LeadTemplateColumnRule(template_column="Opt-In Date", mandatory=True),
+        ]),
+    )
+    save_profile(profile, get_clients_dir())
+
+    # "Opt-In Date" has no match at all among the leadfile's columns below --
+    # find_passthrough_lead_column can't resolve any source for it.
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee",
+         "Company_Name": "Beta", "CID": "1"},
+    ])
+    accumulated_leads = pd.read_excel(acc_path, sheet_name="Accumulated")
+
+    result = run_pipeline(new_leads, profile, accumulated_leads, {}, [])
+
+    assert 0 not in result.valid_indices
+    assert 0 in result.review_reasons
+    assert any("Opt-In Date" in str(d) for d in result.review_reasons[0])
+
+
+def test_finalize_applies_lead_template_mapping_date_format_to_written_column(tmp_path, monkeypatch):
+    # Proves lead_template_mapping actually reaches _finalize_write's
+    # append_leads call (Task 6's own wiring) through the real page path: a
+    # configured date_format rule must reformat the written Lead Template
+    # cell into a real date value in that format, not leave the passthrough
+    # value as unformatted raw text -- mirrors the single-tab `else` branch
+    # (search anchor: `clear_existing=profile.lead_template_clear_existing`).
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Sheet"
+    wb.active.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "CID", "Opt-In Date"])
+    wb.save(template_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        client_mode="Lead QA", lead_template_path=template_path, lead_template_sheet_name="Sheet",
+        lead_template_mapping=LeadTemplateMappingConfig(rules=[
+            LeadTemplateColumnRule(template_column="Opt-In Date", date_format="MM/DD/YYYY"),
+        ]),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta",
+         "CID": "1", "Opt-In Date": "2026-03-05"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    finalize_button = next(b for b in at.button if b.label == "Finalize")
+    finalize_button.click().run()
+    assert not at.exception
+
+    wb = openpyxl.load_workbook(template_path)
+    ws = wb["Sheet"]
+    headers = [cell.value for cell in ws[1]]
+    col_idx = headers.index("Opt-In Date") + 1
+    cell = ws.cell(row=2, column=col_idx)
+    wb.close()
+
+    assert isinstance(cell.value, datetime.datetime)
+    assert cell.value == datetime.datetime(2026, 3, 5)
+    assert cell.number_format == "mm\\/dd\\/yyyy"

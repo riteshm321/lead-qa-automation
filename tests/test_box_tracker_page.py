@@ -9,6 +9,7 @@ from streamlit.testing.v1 import AppTest
 from core.app_settings import get_clients_dir
 from core.box_tracker import current_week_label
 from core.models import ClientProfile, FieldMapping, BoxTrackerConfig, ComplexAccountConfig
+from core.models import LeadTemplateMappingConfig, LeadTemplateColumnRule
 from core.profile_store import save_profile
 
 _PAGE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pages", "5_Box_Tracker.py")
@@ -293,6 +294,79 @@ def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existi
     accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
     status = accumulated_df.loc[accumulated_df["Email"] == "lead1@x.com", "Status"].iloc[0]
     assert status.startswith("Cleared for Upload")
+
+
+def test_write_cleared_leads_applies_configured_date_format_to_lead_template_column(tmp_path, monkeypatch):
+    # Proves lead_template_mapping actually reaches this page's append_leads
+    # call: a configured date_format rule for "user_transaction_date" must
+    # reformat the written cell into a real date value in the rule's format,
+    # not leave it as the plain "YYYY-MM-DD HH:MM:SS" text
+    # add_lead_template_columns carries over by default (see the previous
+    # test's identical fixture and its own user_transaction_date assertion).
+    # Write to a real temp workbook and reopen it with openpyxl directly --
+    # no mocking -- to check the actual cell value/type and number format.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    template_path = str(tmp_path / "bob_template.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
+         "Status": "Sent for Approval - 07-Sep", "Asset Title": "Omdia Universe", "Country": "IN",
+         "Asset": "Normal Asset", "Second Asset": "Touch 2 Asset"},
+    ])
+    _make_mirror(mirror_path)
+    # An existing lead from a previous cycle -- carries AID/NC_*/
+    # campaign_code forward (irrelevant here). The Accumulated Report
+    # fixture has no Timestamp column, so add_lead_template_columns falls
+    # back to datetime.datetime.now() (formatted "YYYY-MM-DD HH:MM:SS") as
+    # user_transaction_date's raw value -- exactly the string the
+    # date_format rule must parse and reformat.
+    _make_lead_template(template_path, existing_rows=[
+        ["L-22SD7", "UC", "UC", "2026-08-20 06:55:41", "PVLAP", "Old Asset", "IN", "Platform_SWE", "All",
+         "Old", "Lead", "old.lead@x.com", "Old Co"],
+    ])
+    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
+    profile = ClientProfile(
+        name="IBM APAC Interactive Avenues Pvt Ltd", accumulated_report_path=acc_path, field_mapping=fm,
+        complex_account=ComplexAccountConfig(enabled=True),
+        box_tracker=BoxTrackerConfig(
+            enabled=True, mirror_workbook_path=mirror_path,
+            cid_campaign_map={"118741": "Bob"},
+            cid_lead_template_path={"118741": template_path},
+        ),
+        lead_template_mapping=LeadTemplateMappingConfig(rules=[
+            LeadTemplateColumnRule(template_column="user_transaction_date", date_format="MM/DD/YYYY"),
+        ]),
+    )
+    save_profile(profile, get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    clear_checkbox = next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com")
+    clear_checkbox.set_value(True).run()
+
+    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
+    write_button = next(b for b in at.button if b.key == "write_lead_template_button")
+    write_button.click().run()
+
+    assert not at.exception
+
+    wb = openpyxl.load_workbook(template_path)
+    ws = wb["LEAD_TEMPLATE"]
+    headers = [cell.value for cell in ws[1]]
+    col_idx = headers.index("user_transaction_date") + 1
+    cell = ws.cell(row=2, column=col_idx)
+    wb.close()
+
+    # A real datetime with the rule's number format -- not the plain
+    # "YYYY-MM-DD HH:MM:SS" text add_lead_template_columns's own fallback
+    # would otherwise leave untouched (proven by this same assertion
+    # failing before the lead_template_mapping wiring: the raw fallback
+    # string, e.g. "2026-09-25 22:19:20", is not a datetime instance).
+    assert isinstance(cell.value, datetime.datetime)
+    assert cell.value.date() == datetime.date.today()
+    assert cell.number_format == "mm\\/dd\\/yyyy"
 
 
 def test_write_cleared_leads_uses_accumulated_field_mapping_not_raw_leadfile_mapping(tmp_path, monkeypatch):
