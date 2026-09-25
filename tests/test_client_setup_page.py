@@ -158,6 +158,159 @@ def test_a_lead_template_column_left_at_every_default_is_not_saved_as_a_rule(tmp
     assert saved.lead_template_mapping.rules == []
 
 
+def test_refund_reason_template_column_is_never_offered_as_a_configurable_row(tmp_path, monkeypatch):
+    # Regression test: normalize_header_text strips ALL non-alphanumeric
+    # characters INCLUDING SPACES, so normalize_header_text("Refund Reason")
+    # == "refundreason", which never matches a literal "refund reason" (with
+    # a space) in a hand-typed skip set. "Refund Reason" must still never be
+    # offered as a configurable row here (it never comes from a leadfile
+    # passthrough).
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Company Size", "Refund Reason"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Refund Reason Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+
+    assert not any(c.key == "ltm_mandatory_Refund Reason" for c in at.checkbox)
+    # A normal, non-skip-list column should still be offered.
+    assert any(c.key == "ltm_mandatory_Company Size" for c in at.checkbox)
+
+
+def test_formula_template_column_is_never_offered_as_a_configurable_row(tmp_path, monkeypatch):
+    # Regression test: formula columns (their value is fully computed by
+    # the template's own formula, never a leadfile passthrough) must be
+    # excluded from the mapping UI the same way append_leads already
+    # excludes them from passthrough resolution.
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Company Size", "Campaign Name"])
+    ws.append(["a@x.com", 50, "=SUM(B2:B2)"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Formula Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+
+    assert not any(c.key == "ltm_mandatory_Campaign Name" for c in at.checkbox)
+    # A normal, non-formula column should still be offered.
+    assert any(c.key == "ltm_mandatory_Company Size" for c in at.checkbox)
+
+
+def test_saving_a_source_column_override_alone_persists_a_rule(tmp_path, monkeypatch):
+    # Coverage gap: only the "mandatory alone" save branch was previously
+    # tested. A source override set with no mandatory checkbox and no date
+    # format must also save a rule for that column.
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Company Size"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Source Override Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+
+    at.text_input(key="ltm_source_text_Company Size").set_value("Employee Count").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("LTM Source Override Client", get_clients_dir())
+    rule = next(r for r in saved.lead_template_mapping.rules if r.template_column == "Company Size")
+    assert rule.source_column == "Employee Count"
+    assert rule.mandatory is False
+    assert rule.date_format == ""
+
+
+def test_saving_a_date_format_alone_persists_a_rule(tmp_path, monkeypatch):
+    # Coverage gap: a date format set with no mandatory checkbox and no
+    # source override must also save a rule for that column.
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Company Size"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Date Format Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+
+    at.selectbox(key="ltm_fmt_Company Size").set_value("MM/DD/YYYY").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("LTM Date Format Client", get_clients_dir())
+    rule = next(r for r in saved.lead_template_mapping.rules if r.template_column == "Company Size")
+    assert rule.date_format == "MM/DD/YYYY"
+    assert rule.mandatory is False
+    assert rule.source_column == ""
+
+
+def test_saving_in_lead_qa_and_upload_mode_does_not_raise_and_saves_no_rules(tmp_path, monkeypatch):
+    # Regression test for a previously-fixed NameError risk:
+    # lead_template_mapping_rules used to only be defined inside the
+    # `if client_mode == "Lead QA":` block, so saving a profile in
+    # "Lead QA & Upload" mode (which skips that whole block) would have
+    # raised NameError on Save. Confirms the pre-initialization fix holds.
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Upload Mode Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    next(r for r in at.radio if r.options == ["Lead QA", "Lead QA & Upload"]).set_value("Lead QA & Upload").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("LTM Upload Mode Client", get_clients_dir())
+    assert saved.lead_template_mapping.rules == []
+
+
 def test_accumulated_field_mapping_saves_as_none_when_every_dropdown_left_unset(tmp_path, monkeypatch):
     # Regression test for a real bug: this section is documented as
     # "(optional)" -- leaving every dropdown at "No mapping" (the default)

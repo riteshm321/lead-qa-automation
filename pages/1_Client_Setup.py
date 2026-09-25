@@ -7,6 +7,7 @@ from core.errors import render_error
 from core.excel_io import (
     list_sheet_names, read_sheet_as_dataframe, detect_cids_from_pacing_overview, guess_target_field_mapping,
     find_header_row, read_sheet_headers, find_passthrough_lead_column, normalize_header_text, read_leadfile,
+    detect_formula_columns,
 )
 from core.app_settings import (
     get_clients_dir, get_convertr_account_credentials, save_convertr_account_credentials,
@@ -697,8 +698,27 @@ with tab_basics:
                 if _ltm_err is not None:
                     render_error(_ltm_err)
 
-            _ltm_skip = {"date", "comment", "status", "refund reason", "reason"}
-            _ltm_template_headers = [h for h in _ltm_template_headers if normalize_header_text(h) not in _ltm_skip]
+            # Built via normalize_header_text on each literal, not typed out
+            # by hand -- normalize_header_text strips ALL non-alphanumeric
+            # characters INCLUDING SPACES, so a hand-typed "refund reason"
+            # (with a space) would never match normalize_header_text("Refund
+            # Reason") == "refundreason". Reuses the same literals as
+            # core.excel_io._REASON_HEADER_NAMES/append_leads' own
+            # skip_normalized set so this stays in sync with that logic.
+            _ltm_skip = {normalize_header_text(s) for s in ("date", "comment", "status", "reason", "refund reason")}
+
+            _ltm_formula_headers: set[str] = set()
+            if lead_template_path and lead_template_sheet_name:
+                try:
+                    _ltm_formula_headers = detect_formula_columns(lead_template_path, lead_template_sheet_name)
+                except Exception as exc:
+                    render_error(exc)
+            _ltm_formula_headers_norm = {normalize_header_text(h) for h in _ltm_formula_headers if h is not None}
+
+            _ltm_template_headers = [
+                h for h in _ltm_template_headers
+                if normalize_header_text(h) not in _ltm_skip and normalize_header_text(h) not in _ltm_formula_headers_norm
+            ]
 
             _ltm_sample_file = st.file_uploader(
                 "Sample leadfile (optional — lets this preview show real auto-match results and pick a source "

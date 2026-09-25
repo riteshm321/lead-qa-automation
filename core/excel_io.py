@@ -543,6 +543,56 @@ def read_sheet_headers(path: str, sheet_name: str, header_row: int = 1) -> list:
         wb.close()
 
 
+def detect_formula_columns(path: str, sheet_name: str, header_row: int | None = None) -> set[str]:
+    """Detect which of a sheet's columns are formula columns, using the same
+    method append_leads uses internally (see its `formula_template` block):
+    a column counts as a formula column when its cell in the first real data
+    row (the row directly below the header row) is a formula -- a string
+    value starting with "=".
+
+    This is a deliberate, self-contained duplicate of that detection method
+    for read-only callers (e.g. the Client Setup column-mapping preview)
+    that only have a path/sheet_name, not an already-open worksheet -- it
+    does not replace or get called by append_leads itself. append_leads
+    already has its own workbook open for writing plus the headers/
+    first-data-row bookkeeping it needs for its own purposes (translating
+    the formula for each newly appended row); re-deriving all of that here
+    and having append_leads call into this instead was judged a needless
+    behavior risk to that function's write path for a read-only preview
+    feature -- a small, correct duplication of the "is this cell a formula"
+    check was the safer choice.
+
+    A CSV file has no formulas at all (plain text), so this always returns
+    an empty set for one without opening it, matching append_leads' own
+    CSV branch (which never builds a formula_template either).
+    """
+    if path.lower().endswith(".csv"):
+        return set()
+    if header_row is None:
+        header_row = find_header_row(path, sheet_name)
+    first_data_row = header_row + 1
+
+    wb = openpyxl.load_workbook(path, read_only=True)
+    try:
+        ws = wb[sheet_name]
+        header_rows = list(ws.iter_rows(min_row=header_row, max_row=header_row))
+        if not header_rows:
+            return set()
+        headers = [cell.value for cell in header_rows[0]]
+
+        data_rows = list(ws.iter_rows(min_row=first_data_row, max_row=first_data_row))
+        if not data_rows:
+            return set()
+
+        formula_headers: set[str] = set()
+        for header, cell in zip(headers, data_rows[0]):
+            if header is not None and isinstance(cell.value, str) and cell.value.startswith("="):
+                formula_headers.add(header)
+        return formula_headers
+    finally:
+        wb.close()
+
+
 def route_leads_by_cid(
     leads_df: pd.DataFrame, cid_column: str, tabs: list[LeadTemplateTab], default_file_path: str = "",
 ) -> tuple[dict[tuple[str, str], pd.DataFrame], pd.DataFrame]:
