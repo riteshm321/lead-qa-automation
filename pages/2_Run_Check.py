@@ -414,6 +414,8 @@ if st.button("Run Check", disabled=not new_leads_file,
                 ("Checking TAL", profile.tal.enabled),
                 ("Checking Suppression List", profile.suppression.enabled),
                 ("Checking Dedupe List", profile.dedupe_list.enabled),
+                ("Checking Lead Template Mandatory Columns",
+                 any(r.mandatory for r in profile.lead_template_mapping.rules)),
             ] if on
         ]
         _progress_bar = st.progress(0.0, text=f"{_stage_labels[0]}...")
@@ -522,6 +524,7 @@ if "run_result" in st.session_state:
             ("Duplicate", profile.duplicate.enabled), ("Leadcap", profile.leadcap.enabled),
             ("Exclusion", profile.exclusion.enabled), ("TAL", profile.tal.enabled),
             ("Suppression", profile.suppression.enabled), ("Dedupe list", profile.dedupe_list.enabled),
+            ("Lead Template Mapping", any(r.mandatory for r in profile.lead_template_mapping.rules)),
         ] if on
     ]
     if profile.complex_account.enabled:

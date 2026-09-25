@@ -1597,6 +1597,51 @@ def test_lead_template_mandatory_rule_with_no_resolvable_source_forces_needs_rev
     assert any("Opt-In Date" in str(d) for d in result.review_reasons[0])
 
 
+def test_run_check_button_succeeds_for_client_with_mandatory_lead_template_rule(tmp_path, monkeypatch):
+    # Regression test for the CROSS-TASK BUG documented in
+    # .superpowers/sdd/2026-09-25-lead-template-column-mapping/progress.md:
+    # run_pipeline (core/pipeline.py) reports a new "Checking Lead Template
+    # Mandatory Columns" progress stage whenever the client has at least one
+    # mandatory LeadTemplateColumnRule configured, but this page's
+    # _stage_labels/_completed_checks didn't know about that label --
+    # _advance_progress's _stage_labels.index(label) raised ValueError the
+    # moment such a client clicked "Run Check", surfaced to the user as a
+    # raw, undiagnosable error. Unlike the review-only test above (which
+    # calls run_pipeline directly specifically to dodge this bug), this
+    # drives the actual "Run Check" button through AppTest to prove the
+    # whole page-level path works end to end for a client in this shape.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        lead_template_mapping=LeadTemplateMappingConfig(rules=[
+            LeadTemplateColumnRule(template_column="Opt-In Date", mandatory=True),
+        ]),
+    )
+    save_profile(profile, get_clients_dir())
+
+    leads_csv = (
+        b"Email_Address,First_Name,Last_Name,Company_Name,CID,Opt-In Date\n"
+        b"bob@new.com,Bob,Lee,Beta,1,2026-03-05\n"
+    )
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_check_upload_cache"] = {
+        "Test Client": {"new_leads": {"name": "leads.csv", "data": leads_csv}},
+    }
+    at.run()
+    assert not at.exception
+
+    run_button = next(b for b in at.button if b.label == "Run Check")
+    run_button.click().run()
+
+    assert not at.exception
+    assert "run_result" in at.session_state
+
+
 def test_finalize_applies_lead_template_mapping_date_format_to_written_column(tmp_path, monkeypatch):
     # Proves lead_template_mapping actually reaches _finalize_write's
     # append_leads call (Task 6's own wiring) through the real page path: a
