@@ -11,6 +11,7 @@ from core.check_result import ReviewDetail
 from core.jira_client import JiraError
 from core.models import ClientProfile, FieldMapping, DuplicateConfig, LeadTemplateTab, ComplexAccountConfig
 from core.models import LeadTemplateMappingConfig, LeadTemplateColumnRule
+from core.models import GoogleSheetsConfig, GoogleSheetTab
 from core.models import EnhancioConfig, EnhancioAllocationMapping, BoxTrackerConfig
 from core.pipeline import PipelineResult, run_pipeline
 from core.profile_store import save_profile
@@ -1722,3 +1723,162 @@ def test_finalize_applies_lead_template_mapping_date_format_to_written_column(tm
     assert isinstance(cell.value, datetime.datetime)
     assert cell.value == datetime.datetime(2026, 3, 5)
     assert cell.number_format == "mm\\/dd\\/yyyy"
+
+
+def test_run_check_button_succeeds_for_client_with_mandatory_google_sheets_rule(tmp_path, monkeypatch):
+    # Regression test for the SAME cross-task bug class as
+    # test_run_check_button_succeeds_for_client_with_mandatory_lead_template_rule
+    # above, but for the SECOND mandatory-column stage this task (Task 5)
+    # adds: core/pipeline.py's "Checking Google Sheets Mandatory Columns",
+    # reported whenever profile.google_sheets.mapping has at least one
+    # mandatory rule. This task's own brief exists specifically to make
+    # sure adding that new pipeline stage doesn't repeat the exact same
+    # _stage_labels.index(label) ValueError for its own new label. A raw
+    # `assert not at.exception` alone would pass identically whether the
+    # bug is present or fixed -- render_error swallows the ValueError via
+    # st.error() -- so "run_result" in at.session_state is the assertion
+    # that actually discriminates.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        google_sheets=GoogleSheetsConfig(mapping=LeadTemplateMappingConfig(rules=[
+            LeadTemplateColumnRule(template_column="X", mandatory=True),
+        ])),
+    )
+    save_profile(profile, get_clients_dir())
+
+    leads_csv = (
+        b"Email_Address,First_Name,Last_Name,Company_Name,CID\n"
+        b"bob@new.com,Bob,Lee,Beta,1\n"
+    )
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_check_upload_cache"] = {
+        "Test Client": {"new_leads": {"name": "leads.csv", "data": leads_csv}},
+    }
+    at.run()
+    assert not at.exception
+
+    run_button = next(b for b in at.button if b.label == "Run Check")
+    run_button.click().run()
+
+    assert not at.exception
+    assert "run_result" in at.session_state
+
+
+def test_finalize_writes_valid_leads_to_google_sheets_with_date_format_applied(tmp_path, monkeypatch):
+    # Proves Step 15's write-path wiring: _finalize_write must call
+    # core.google_sheets_client.append_rows once per matched CID, with rows
+    # resolved through the exact same manual-override/target-role/synonym/
+    # fuzzy-match chain append_leads itself uses (resolve_lead_template_rules
+    # + _resolve_passthrough_columns), and with any configured
+    # LeadTemplateColumnRule.date_format actually applied to that column's
+    # value -- not left as the leadfile's raw, unformatted text (see
+    # test_finalize_applies_lead_template_mapping_date_format_to_written_column
+    # above for the equivalent proof on the Excel Lead Template side).
+    # core.google_sheets_client.read_sheet_headers/append_rows are mocked
+    # the same way tests/test_client_setup_page.py's Google Sheets tests
+    # mock them (patching the origin module directly, not a page-qualified
+    # path -- `from core import google_sheets_client` in the page means the
+    # page's calls resolve through this same module object at call time).
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_google_sheets_key_path
+    key_path = str(tmp_path / "key.json")
+    save_google_sheets_key_path(key_path)
+
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        google_sheets=GoogleSheetsConfig(
+            enabled=True,
+            tabs=[GoogleSheetTab(cid="1", sheet_id="sheet123", worksheet_name="Sheet1")],
+            mapping=LeadTemplateMappingConfig(rules=[
+                LeadTemplateColumnRule(template_column="Opt-In Date", date_format="MM/DD/YYYY"),
+            ]),
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta",
+         "CID": "1", "Opt-In Date": "2026-03-05"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    with patch("core.google_sheets_client.read_sheet_headers", return_value=[
+        "Email_Address", "First_Name", "Last_Name", "Company_Name", "CID", "Opt-In Date",
+    ]), patch("core.google_sheets_client.append_rows") as mock_append_rows:
+        finalize_button = next(b for b in at.button if b.label == "Finalize")
+        finalize_button.click().run()
+    assert not at.exception
+
+    mock_append_rows.assert_called_once_with(
+        key_path, "sheet123", "Sheet1",
+        [{
+            "Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee",
+            "Company_Name": "Beta", "CID": "1", "Opt-In Date": "03/05/2026",
+        }],
+    )
+
+
+def test_finalize_skips_google_sheets_write_when_key_path_not_set(tmp_path, monkeypatch):
+    # A client can have Google Sheets Lead Delivery enabled on a machine
+    # where nobody has set up the shared service-account key path yet
+    # (Settings page) -- this must not attempt a write (there's no key to
+    # authenticate with) or crash, and must not stop the Accumulated
+    # Report write from completing. Doesn't assert on the st.error(...)
+    # message _finalize_write shows in this case -- like every other direct
+    # st.info/st.warning call already inside _finalize_write (e.g. the
+    # "Backed up Accumulated Report to ..." info above), it's wiped by the
+    # Finalize button handler's own st.rerun() immediately afterward
+    # (confirmed empirically: even that pre-existing, already-shipped info
+    # message doesn't survive a `.click().run()` in this test harness) --
+    # a pre-existing characteristic of this page's rerun design, not
+    # something this task changes.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        google_sheets=GoogleSheetsConfig(
+            enabled=True,
+            tabs=[GoogleSheetTab(cid="1", sheet_id="sheet123", worksheet_name="Sheet1")],
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta",
+         "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    with patch("core.google_sheets_client.append_rows") as mock_append_rows:
+        finalize_button = next(b for b in at.button if b.label == "Finalize")
+        finalize_button.click().run()
+    assert not at.exception
+
+    mock_append_rows.assert_not_called()

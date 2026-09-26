@@ -4,6 +4,7 @@ from core.pipeline import run_pipeline, apply_refund_overrides, PipelineResult
 from core.models import (
     ClientProfile, FieldMapping, DuplicateConfig, ExclusionConfig, ReferenceSource,
     SuppressionConfig, DedupeListConfig, LeadTemplateMappingConfig, LeadTemplateColumnRule,
+    GoogleSheetsConfig,
 )
 
 FM = FieldMapping(email="emailaddress", first_name="firstname", last_name="lastname",
@@ -188,6 +189,52 @@ def test_run_pipeline_passes_lead_template_field_mapping_to_the_mandatory_check(
 
     result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[])
 
+    assert result.review_reasons == {}
+
+
+def test_run_pipeline_flags_every_lead_when_a_mandatory_google_sheets_column_has_no_source():
+    # Same fixture shape as
+    # test_run_pipeline_passes_lead_template_field_mapping_to_the_mandatory_check
+    # above, but via profile.google_sheets.mapping instead of
+    # profile.lead_template_mapping -- proves core/pipeline.py's SECOND
+    # check_lead_template_mandatory_columns call (wired against
+    # google_sheets.mapping, added by this task) actually runs. That
+    # function is reused completely unchanged for this second call (see
+    # Task 5 report) -- its ReviewDetail.check is still hardcoded "Lead
+    # Template Mapping" regardless of which config triggered it, so the
+    # message text (naming the specific unmatched column) is what actually
+    # proves THIS rule fired, not the check label.
+    profile = _profile(
+        google_sheets=GoogleSheetsConfig(mapping=LeadTemplateMappingConfig(rules=[
+            LeadTemplateColumnRule(template_column="Totally Unmatched Column", mandatory=True),
+        ])),
+    )
+    new_leads = pd.DataFrame([
+        {"emailaddress": "a@x.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1"},
+        {"emailaddress": "b@x.com", "firstname": "C", "lastname": "D", "company": "Y", "CID": "2"},
+    ])
+    accumulated = pd.DataFrame(columns=["emailaddress", "firstname", "lastname", "company", "CID"])
+
+    result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[])
+
+    assert set(result.review_reasons.keys()) == {0, 1}
+    for reasons in result.review_reasons.values():
+        assert any("Totally Unmatched Column" in str(d) for d in reasons)
+
+
+def test_run_pipeline_with_no_mandatory_google_sheets_rules_is_unaffected():
+    # Default ClientProfile.google_sheets is an empty GoogleSheetsConfig (no
+    # rules), so the new mandatory-column check should never even run --
+    # same non-regression shape as
+    # test_run_pipeline_with_no_mandatory_lead_template_rules_is_unaffected.
+    profile = _profile()
+    new_leads = pd.DataFrame([{"emailaddress": "a@x.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1"}])
+    accumulated = pd.DataFrame(columns=["emailaddress", "firstname", "lastname", "company", "CID"])
+
+    result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[])
+
+    assert result.valid_indices == [0]
+    assert result.refund_reasons == {}
     assert result.review_reasons == {}
 
 

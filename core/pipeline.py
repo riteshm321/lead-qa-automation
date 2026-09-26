@@ -70,6 +70,11 @@ def run_pipeline(
         merge(lead_template_mapping.check_lead_template_mandatory_columns(
             new_leads, fm, profile.lead_template_mapping, profile.lead_template_field_mapping))
 
+    if any(r.mandatory for r in profile.google_sheets.mapping.rules):
+        report("Checking Google Sheets Mandatory Columns")
+        merge(lead_template_mapping.check_lead_template_mandatory_columns(
+            new_leads, fm, profile.google_sheets.mapping))
+
     refund_reasons = {idx: "; ".join(reasons) for idx, reasons in fail.items()}
     review_reasons = {idx: reasons for idx, reasons in review.items() if idx not in fail}
     valid_indices = [idx for idx in new_leads.index if idx not in fail and idx not in review_reasons]

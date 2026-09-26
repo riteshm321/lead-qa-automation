@@ -4,11 +4,12 @@ import os
 import shutil
 import time
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from core.activity_tracker import record_process_completed
-from core.app_settings import get_aliases_path, get_clients_dir, get_jira_settings
+from core.app_settings import get_aliases_path, get_clients_dir, get_jira_settings, get_google_sheets_key_path
 from core.branding import configure_page
 from core.checks.leadcap import validate_purchased_report_cids
 from core.collation import collate_uploaded_files
@@ -16,6 +17,7 @@ from core.errors import render_error
 from core.excel_io import (
     read_sheet_as_dataframe, append_leads, backup_file, require_columns, find_header_row, route_leads_by_cid,
     read_leadfile, read_pacing_overview_table, dataframe_to_excel_bytes, read_csv_bytes_robust,
+    resolve_lead_template_rules, normalize_header_text, _resolve_passthrough_columns, _ISO_DATE_PREFIX_RE,
 )
 from core.excel_recalc import recalculate_workbook
 from core.complex_account import (
@@ -24,7 +26,8 @@ from core.complex_account import (
     ACCOUNT_ID_COLUMN, TOP_TOPICS_COLUMN, INSTALLED_TECH_COLUMN, PBS_COLUMN,
     CAPTURE_DATE_COLUMN, EMAIL_OPTIN_COLUMN, PHONE_COLUMN,
 )
-from core import jira_client
+from core import google_sheets_client, jira_client
+from core.google_sheets_client import GoogleSheetsError
 from core.jira_client import JiraError
 from core.matching import load_alias_groups, add_alias_pair
 from core.models import FieldMapping
@@ -417,6 +420,8 @@ if st.button("Run Check", disabled=not new_leads_file,
                 ("Checking Dedupe List", profile.dedupe_list.enabled),
                 ("Checking Lead Template Mandatory Columns",
                  any(r.mandatory for r in profile.lead_template_mapping.rules)),
+                ("Checking Google Sheets Mandatory Columns",
+                 any(r.mandatory for r in profile.google_sheets.mapping.rules)),
             ] if on
         ]
         _progress_bar = st.progress(0.0, text=f"{_stage_labels[0]}...")
@@ -526,6 +531,7 @@ if "run_result" in st.session_state:
             ("Exclusion", profile.exclusion.enabled), ("TAL", profile.tal.enabled),
             ("Suppression", profile.suppression.enabled), ("Dedupe list", profile.dedupe_list.enabled),
             ("Lead Template Mapping", any(r.mandatory for r in profile.lead_template_mapping.rules)),
+            ("Google Sheets Mapping", any(r.mandatory for r in profile.google_sheets.mapping.rules)),
         ] if on
     ]
     if profile.complex_account.enabled:
@@ -716,6 +722,33 @@ if "run_result" in st.session_state:
     ]
     _upload_tools_label = " / ".join(_upload_tools_enabled) or "the upload tool"
 
+    def _format_gs_date_value(raw_value, date_fmt: tuple[str, str, bool]) -> str:
+        """Applies one LeadTemplateColumnRule.date_format (already resolved
+        via resolve_lead_template_rules) to a single Google Sheets cell's
+        raw leadfile value. A Sheets row is plain text/values, same shape
+        as a CSV row, not a real Excel cell with its own separate
+        number-format layer -- so this mirrors core.excel_io's
+        _append_leads_csv per-row date-format branch exactly, rather than
+        leaving a client's configured date format silently unapplied for
+        Google Sheets Lead Delivery.
+        """
+        strftime_fmt, _, dayfirst = date_fmt
+        if (isinstance(raw_value, (int, float, np.integer, np.floating))
+                and not isinstance(raw_value, bool) and pd.notna(raw_value)):
+            # Bare Excel serial number -- must be checked before the
+            # generic pd.to_datetime() call below (see _append_leads_csv's
+            # identical check for why).
+            parsed = pd.to_datetime(raw_value, unit="D", origin="1899-12-30", errors="coerce")
+        else:
+            # An ISO-shaped string is unambiguous already -- never let
+            # dayfirst=True swap it (see _ISO_DATE_PREFIX_RE).
+            effective_dayfirst = dayfirst and not (
+                isinstance(raw_value, str) and _ISO_DATE_PREFIX_RE.match(raw_value.strip()))
+            parsed = pd.to_datetime(raw_value, errors="coerce", dayfirst=effective_dayfirst)
+        if pd.notna(parsed):
+            return parsed.strftime(strftime_fmt)
+        return str(raw_value) if raw_value not in (None, "") and pd.notna(raw_value) else ""
+
     def _finalize_write(valid_leads_df, refund_leads_df, refund_reasons):
         """Backs up, writes valid_leads_df/refund_leads_df to the Accumulated
         Report (and valid_leads_df to the Lead Template(s) if configured),
@@ -840,6 +873,46 @@ if "run_result" in st.session_state:
             f"Refund tab updated — valid leads ready for {_upload_tools_label}, see below."
             if _upload_tools_enabled else "Accumulated Report updated."
         )
+
+        if profile.google_sheets.enabled and not valid_leads_df.empty:
+            _gs_key_path = get_google_sheets_key_path()
+            if not _gs_key_path:
+                st.error("Set the Google Sheets service account key path on the ⚙️ Settings page first.")
+            else:
+                _gs_manual_overrides, _gs_date_formats = resolve_lead_template_rules(profile.google_sheets.mapping)
+                _gs_tab_by_cid = {t.cid: t for t in profile.google_sheets.tabs}
+                _gs_unmatched_cids = []
+                for cid, group in valid_leads_df.groupby(valid_leads_df[profile.field_mapping.cid].astype(str)):
+                    tab = _gs_tab_by_cid.get(cid)
+                    if tab is None:
+                        _gs_unmatched_cids.append(cid)
+                        continue
+                    try:
+                        _gs_headers = google_sheets_client.read_sheet_headers(_gs_key_path, tab.sheet_id, tab.worksheet_name)
+                        _gs_col_source, _ = _resolve_passthrough_columns(
+                            _gs_headers, group, profile.field_mapping, None, set(),
+                            manual_overrides=_gs_manual_overrides)
+                        _gs_rows = []
+                        for _, lead_row in group.iterrows():
+                            _row = {}
+                            for _idx, _header in enumerate(_gs_headers, start=1):
+                                _source_col = _gs_col_source.get(_idx)
+                                _date_fmt = _gs_date_formats.get(normalize_header_text(_header))
+                                if _date_fmt is not None and _source_col is not None:
+                                    _row[_header] = _format_gs_date_value(lead_row.get(_source_col, ""), _date_fmt)
+                                else:
+                                    _row[_header] = str(lead_row.get(_source_col, "") or "") if _source_col else ""
+                            _gs_rows.append(_row)
+                        google_sheets_client.append_rows(_gs_key_path, tab.sheet_id, tab.worksheet_name, _gs_rows)
+                    except GoogleSheetsError as exc:
+                        render_error(exc)
+                if _gs_unmatched_cids:
+                    st.warning(
+                        f"⚠️ {len(_gs_unmatched_cids)} valid lead(s) had a CID with no matching Google Sheet "
+                        f"(CIDs: {', '.join(sorted(_gs_unmatched_cids))}) — skipped for Google Sheets delivery, "
+                        "but still added to the Accumulated Report."
+                    )
+
         return lead_template_links_used
 
     def _finalize_jira_summary(total_leads_in, valid_count, refund_count, lead_template_links_used):
