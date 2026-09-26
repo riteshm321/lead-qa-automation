@@ -7,6 +7,7 @@ from core.app_settings import (
     load_app_settings, save_app_settings, save_jira_settings,
     get_enhancio_client_id, save_enhancio_client_id,
     get_integrate_credentials, save_integrate_credentials,
+    get_google_sheets_key_path, save_google_sheets_key_path,
 )
 from core.activity_tracker import load_all_activity, get_user_stats, format_minutes
 from core.auth import create_user, delete_user, load_users, update_user_role
@@ -137,6 +138,21 @@ with st.expander("🔑 Integrate API credentials (private to this machine)", exp
         "Integrate API Secret", value=_integrate_secret, type="password", key="integrate_api_secret_input")
     if st.button("Save Integrate credentials", key="integrate_credentials_save"):
         save_integrate_credentials(integrate_api_key, integrate_api_secret)
+        queue_toast_before_rerun("Saved.")
+        st.rerun()
+
+with st.expander("🔑 Google Sheets service account (private to this machine)", expanded=False):
+    st.caption(
+        "Used by any client with Google Sheets Lead Delivery enabled. One shared service-account key file "
+        "for the whole org — each individual Sheet still needs to be shared with that service account's "
+        "email as Editor. This is a live credential, so only its local file path is stored here, never "
+        "inside the shared clients folder above."
+    )
+    google_sheets_key_path = st.text_input(
+        "Path to the service account JSON key file", value=get_google_sheets_key_path(),
+        key="google_sheets_key_path_input")
+    if st.button("Save Google Sheets key path", key="google_sheets_key_path_save"):
+        save_google_sheets_key_path(google_sheets_key_path)
         queue_toast_before_rerun("Saved.")
         st.rerun()
 

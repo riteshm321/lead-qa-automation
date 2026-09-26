@@ -174,6 +174,18 @@ def test_saving_integrate_credentials_persists_them(tmp_path, monkeypatch):
     assert get_integrate_credentials() == ("key123", "secret456")
 
 
+def test_saving_google_sheets_key_path_persists_it(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    at.text_input(key="google_sheets_key_path_input").set_value(str(tmp_path / "key.json")).run()
+    next(b for b in at.button if "Save Google Sheets key path" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_google_sheets_key_path
+    assert get_google_sheets_key_path() == str(tmp_path / "key.json")
+
+
 def test_admin_can_add_a_new_user_account(tmp_path, monkeypatch):
     # tests/conftest.py's autouse bypass logs every page test in as an
     # admin, so the "Manage user accounts" panel is always available here.
