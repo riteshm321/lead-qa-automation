@@ -791,6 +791,17 @@ _DATE_FORMAT_PRESETS = {
 # so dayfirst=False is correct for them.
 _DAYFIRST_PRESETS = {"DD/MM/YYYY", "DD-MMM-YY"}
 
+# An ISO-shaped date string ("2026-03-04", year-month-day) is unambiguous by
+# construction and must never be parsed with dayfirst=True, even under a
+# day-first preset above. Under pandas 3.0.2, pd.to_datetime(..., dayfirst=
+# True) on an already-unambiguous ISO string SILENTLY SWAPS day and month
+# whenever the day is <=12 (e.g. "2026-03-04" -> 2026-04-03 instead of the
+# correct 2026-03-04) -- confirmed root cause of ISO-formatted leadfile date
+# TEXT (common in CSV leadfiles and text cells in xlsx leadfiles -- anything
+# not already a real Excel date-typed cell) being corrupted for any client
+# configured with a DD/MM/YYYY or DD-MMM-YY output format.
+_ISO_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
 
 # strftime directive -> Excel number-format token. strftime and Excel's
 # number-format syntax share no characters in common ("%d %b %Y" vs
@@ -1008,7 +1019,11 @@ def _append_leads_csv(
                         # built-in int in numpy 2.x.
                         parsed = pd.to_datetime(raw_value, unit="D", origin="1899-12-30", errors="coerce")
                     else:
-                        parsed = pd.to_datetime(raw_value, errors="coerce", dayfirst=dayfirst)
+                        # An ISO-shaped string is unambiguous already -- never
+                        # let dayfirst=True swap it (see _ISO_DATE_PREFIX_RE).
+                        effective_dayfirst = dayfirst and not (
+                            isinstance(raw_value, str) and _ISO_DATE_PREFIX_RE.match(raw_value.strip()))
+                        parsed = pd.to_datetime(raw_value, errors="coerce", dayfirst=effective_dayfirst)
                     value = parsed.strftime(strftime_fmt) if pd.notna(parsed) else (
                         str(raw_value) if raw_value not in (None, "") and pd.notna(raw_value) else "")
                 else:
@@ -1179,7 +1194,11 @@ def append_leads(
                         # are required alongside int/float.
                         parsed = pd.to_datetime(raw_value, unit="D", origin="1899-12-30", errors="coerce")
                     else:
-                        parsed = pd.to_datetime(raw_value, errors="coerce", dayfirst=dayfirst)
+                        # An ISO-shaped string is unambiguous already -- never
+                        # let dayfirst=True swap it (see _ISO_DATE_PREFIX_RE).
+                        effective_dayfirst = dayfirst and not (
+                            isinstance(raw_value, str) and _ISO_DATE_PREFIX_RE.match(raw_value.strip()))
+                        parsed = pd.to_datetime(raw_value, errors="coerce", dayfirst=effective_dayfirst)
                     if pd.notna(parsed):
                         cell.value = parsed.to_pydatetime()
                         cell.number_format = excel_fmt

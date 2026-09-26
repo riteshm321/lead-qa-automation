@@ -569,6 +569,36 @@ def test_append_leads_day_first_preset_parses_ambiguous_date_as_day_first(tmp_pa
     assert cell.value.strftime("%Y-%m-%d") == "2026-04-03"
 
 
+def test_append_leads_day_first_preset_does_not_swap_an_iso_shaped_date(tmp_path):
+    # Regression test: the Finding 7 dayfirst=True fix above is correct for
+    # genuinely ambiguous strings like "03/04/2026", but it also used to fire
+    # for already-unambiguous ISO-shaped strings ("2026-03-04", year-month-day
+    # by construction). Under pandas 3.0.2, pd.to_datetime("2026-03-04",
+    # dayfirst=True) SWAPS day and month and returns 2026-04-03 instead of the
+    # correct 2026-03-04, silently corrupting any ISO-formatted leadfile date
+    # TEXT (common in CSV leadfiles and text cells in xlsx leadfiles) whenever
+    # the day is <=12. An ISO-shaped string must always parse without
+    # dayfirst, even under a DD/MM/YYYY-configured column.
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Capture Date"])
+    wb.save(path)
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([{"Email": "a@x.com", "Capture Date": "2026-03-04"}])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="DD/MM/YYYY"),
+    ])
+
+    append_leads(path, "Sheet1", leads_df, fm, run_date="2026-08-08", lead_template_mapping=ltm)
+
+    wb2 = openpyxl.load_workbook(path)
+    cell = wb2["Sheet1"].cell(row=2, column=2)
+    assert cell.value.strftime("%Y-%m-%d") == "2026-03-04"
+
+
 def test_append_leads_month_first_preset_parses_ambiguous_date_as_month_first(tmp_path):
     # Counterpart of the dayfirst test above: MM/DD/YYYY (and every other
     # non-day-first preset/custom format) must keep parsing the same
@@ -1273,6 +1303,28 @@ def test_append_leads_day_first_preset_parses_ambiguous_date_as_day_first_for_cs
 
     result = pd.read_csv(path, dtype=str, keep_default_na=False)
     assert result.loc[0, "Capture Date"] == "03-Apr-26"
+
+
+def test_append_leads_day_first_preset_does_not_swap_an_iso_shaped_date_for_csv(tmp_path):
+    # CSV counterpart of test_append_leads_day_first_preset_does_not_swap_an_iso_shaped_date
+    # -- "2026-03-04" is ISO-shaped (year-month-day) and therefore unambiguous;
+    # it must parse as March 4th ("04/03/2026" under DD/MM/YYYY) even though
+    # the configured format is day-first, not get its day/month silently
+    # swapped to April 3rd the way pandas 3.0.2's dayfirst=True does for a
+    # bare ISO string.
+    path = tmp_path / "template.csv"
+    path.write_text("Email,Capture Date\n", encoding="utf-8")
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([{"Email": "a@x.com", "Capture Date": "2026-03-04"}])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="DD/MM/YYYY"),
+    ])
+
+    append_leads(str(path), "(CSV file)", leads_df, fm, run_date="2026-08-13", lead_template_mapping=ltm)
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert result.loc[0, "Capture Date"] == "04/03/2026"
 
 
 def test_append_leads_reformats_a_bare_excel_serial_number_date_for_csv(tmp_path):
