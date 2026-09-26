@@ -9,6 +9,7 @@ from core.models import (
     DuplicateConfig, DedupeListConfig, ReferenceSource, LeadTemplateTab, ComplexAccountConfig,
     BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping, EnhancioConfig, EnhancioAllocationMapping,
     IntegrateConfig, LeadTemplateColumnRule, LeadTemplateMappingConfig,
+    GoogleSheetTab, GoogleSheetsConfig,
 )
 
 
@@ -57,6 +58,15 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
     lead_template_mapping = LeadTemplateMappingConfig(
         rules=[LeadTemplateColumnRule(**r) for r in _ltm_data.get("rules", [])])
 
+    _gs_data = data.get("google_sheets") or {}
+    _gs_mapping_data = _gs_data.get("mapping") or {}
+    google_sheets = GoogleSheetsConfig(
+        enabled=_gs_data.get("enabled", False),
+        tabs=[GoogleSheetTab(**t) for t in _gs_data.get("tabs", [])],
+        mapping=LeadTemplateMappingConfig(
+            rules=[LeadTemplateColumnRule(**r) for r in _gs_mapping_data.get("rules", [])]),
+    )
+
     convertr = data.get("convertr") or {}
     # "publisher_id" used to live per-campaign; it moved up to ConvertrConfig
     # (one fixed value per account) -- drop it here so a profile saved
@@ -93,6 +103,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         lead_template_multi_tab=data.get("lead_template_multi_tab", False),
         lead_template_tabs=lead_template_tabs,
         lead_template_mapping=lead_template_mapping,
+        google_sheets=google_sheets,
         lead_template_clear_existing=data.get("lead_template_clear_existing", False),
         field_mapping=field_mapping,
         accumulated_field_mapping=accumulated_field_mapping,

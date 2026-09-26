@@ -138,6 +138,29 @@ class LeadTemplateMappingConfig:
 
 
 @dataclass
+class GoogleSheetTab:
+    # Which CID's leads go to this Sheet -- same per-CID routing shape as
+    # LeadTemplateTab, for a client whose Lead Template destination is a
+    # Google Sheet instead of (or, in the future, alongside) an Excel file.
+    cid: str
+    sheet_id: str
+    worksheet_name: str = "Sheet1"
+
+
+@dataclass
+class GoogleSheetsConfig:
+    enabled: bool = False
+    tabs: list[GoogleSheetTab] = field(default_factory=list)
+    # A SEPARATE LeadTemplateMappingConfig instance from
+    # ClientProfile.lead_template_mapping -- a client's Sheet(s) can have
+    # entirely different headers/mandatory rules than its Excel template
+    # (if it even has one). One mapping shared across all this client's
+    # Sheet tabs, same as lead_template_mapping is shared across all
+    # lead_template_tabs today.
+    mapping: LeadTemplateMappingConfig = field(default_factory=LeadTemplateMappingConfig)
+
+
+@dataclass
 class ComplexAccountConfig:
     # A "complex account" needs a batch of highly specific, largely
     # non-transferable enrichment rules (TAL account-ID mapping, per-CID
@@ -308,6 +331,7 @@ class ClientProfile:
     lead_template_multi_tab: bool = False
     lead_template_tabs: list[LeadTemplateTab] = field(default_factory=list)
     lead_template_mapping: LeadTemplateMappingConfig = field(default_factory=LeadTemplateMappingConfig)
+    google_sheets: GoogleSheetsConfig = field(default_factory=GoogleSheetsConfig)
     lead_template_clear_existing: bool = False
     field_mapping: Optional[FieldMapping] = None
     accumulated_field_mapping: Optional[FieldMapping] = None

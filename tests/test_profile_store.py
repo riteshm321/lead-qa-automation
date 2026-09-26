@@ -486,3 +486,34 @@ def test_lead_template_mapping_rules_round_trip_through_save_and_load(tmp_path):
     loaded = load_profile("Basware", clients_dir=clients_dir)
 
     assert loaded.lead_template_mapping.rules == profile.lead_template_mapping.rules
+
+
+def test_google_sheets_config_round_trips_through_save_and_load(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import get_clients_dir
+    from core.models import (
+        ClientProfile, GoogleSheetTab, GoogleSheetsConfig,
+        LeadTemplateColumnRule, LeadTemplateMappingConfig,
+    )
+    from core.profile_store import save_profile, load_profile
+
+    profile = ClientProfile(
+        name="China Webinar Client", accumulated_report_path="acc.xlsx",
+        google_sheets=GoogleSheetsConfig(
+            enabled=True,
+            tabs=[
+                GoogleSheetTab(cid="119999", sheet_id="1o_v7oMh6Y5VcX0COIjWQ_y00IVKGbwbznCEzNGcyhpU"),
+                GoogleSheetTab(cid="120000", sheet_id="1zU6rm9EvksfJUA91JrLIOPneWTNRgjK6jpm4Ukb2PPA", worksheet_name="Leads"),
+            ],
+            mapping=LeadTemplateMappingConfig(rules=[
+                LeadTemplateColumnRule(template_column="Work Email", mandatory=True),
+            ]),
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+
+    loaded = load_profile("China Webinar Client", get_clients_dir())
+
+    assert loaded.google_sheets.enabled is True
+    assert loaded.google_sheets.tabs == profile.google_sheets.tabs
+    assert loaded.google_sheets.mapping.rules == profile.google_sheets.mapping.rules

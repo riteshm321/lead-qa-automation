@@ -96,3 +96,17 @@ def test_lead_template_column_rule_defaults():
     assert rule.source_column == ""
     assert rule.mandatory is False
     assert rule.date_format == ""
+
+
+def test_client_profile_defaults_to_a_disabled_google_sheets_config():
+    from core.models import GoogleSheetsConfig
+    profile = ClientProfile(name="X", accumulated_report_path="acc.xlsx")
+    assert profile.google_sheets.enabled is False
+    assert profile.google_sheets.tabs == []
+    assert profile.google_sheets.mapping.rules == []
+
+
+def test_google_sheet_tab_defaults():
+    from core.models import GoogleSheetTab
+    tab = GoogleSheetTab(cid="119999", sheet_id="1o_v7oMh6Y5VcX0COIjWQ_y00IVKGbwbznCEzNGcyhpU")
+    assert tab.worksheet_name == "Sheet1"
