@@ -1189,3 +1189,63 @@ def test_saving_when_google_sheet_is_unreadable_does_not_wipe_existing_rules(tmp
     resaved = load_profile("GS Unreadable Client", get_clients_dir())
     rule2 = next(r for r in resaved.google_sheets.mapping.rules if r.template_column == "Work Email")
     assert rule2.mandatory is True
+
+
+def test_a_custom_gs_date_format_survives_a_reload_and_resave(tmp_path, monkeypatch):
+    # Regression test, matching the fix already applied to the sibling Lead
+    # Template Column Mapping section (see
+    # test_a_custom_date_format_survives_a_reload_and_resave in this same
+    # file): the "Custom..." entry in _GS_DATE_FORMAT_OPTIONS previously had
+    # no free-text input behind it at all, so selecting it saved the
+    # literal string "Custom..." as date_format instead of a real strftime
+    # format -- and even once fixed, the date-format selectbox's index
+    # lookup on reload must land on "Custom..." (not silently fall back to
+    # index 0) with the custom text box pre-filled, or a saved custom
+    # format would be silently dropped on the very next save.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, save_google_sheets_key_path
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_google_sheets_key_path(str(tmp_path / "fake-key.json"))
+
+    with patch("core.google_sheets_client.read_sheet_headers", return_value=["Capture Date"]):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(t for t in at.text_input if t.label == "Client name").set_value("GS Custom Format Client").run()
+        at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+        at.checkbox(key="gs_enabled").set_value(True).run()
+        at.text_area(key="gs_tabs_input").set_value(
+            "119999,https://docs.google.com/spreadsheets/d/1o_v7oMh6Y5VcX0COIjWQ_y00IVKGbwbznCEzNGcyhpU/edit"
+        ).run()
+
+        at.selectbox(key="gs_fmt_Capture Date").set_value("Custom...").run()
+        at.text_input(key="gs_fmt_custom_Capture Date").set_value("%d %b %Y").run()
+
+        next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+        assert not at.exception
+
+        from core.app_settings import get_clients_dir
+        from core.profile_store import load_profile
+
+        saved = load_profile("GS Custom Format Client", get_clients_dir())
+        rule = next(r for r in saved.google_sheets.mapping.rules if r.template_column == "Capture Date")
+        assert rule.date_format == "%d %b %Y"
+
+        # Reopen the SAME client in a fresh session -- the selectbox must
+        # land on "Custom..." (not silently fall back to index 0) and the
+        # custom text box must be pre-filled with the saved value.
+        at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at2.run()
+        next(r for r in at2.radio if r.label == "Mode").set_value("Edit existing client").run()
+        next(s for s in at2.selectbox if s.label == "Client").set_value("GS Custom Format Client").run()
+
+        fmt_select = at2.selectbox(key="gs_fmt_Capture Date")
+        assert fmt_select.value == "Custom..."
+        custom_input = next(t for t in at2.text_input if t.key == "gs_fmt_custom_Capture Date")
+        assert custom_input.value == "%d %b %Y"
+
+        next(b for b in at2.button if "Save Client Profile" in b.label).click().run()
+        assert not at2.exception
+
+    resaved = load_profile("GS Custom Format Client", get_clients_dir())
+    rule2 = next(r for r in resaved.google_sheets.mapping.rules if r.template_column == "Capture Date")
+    assert rule2.date_format == "%d %b %Y"

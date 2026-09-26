@@ -928,10 +928,30 @@ with tab_basics:
                         "Mandatory", value=_existing_rule.mandatory if _existing_rule else False,
                         key=f"gs_mandatory_{_gs_col}")
                     _default_fmt = _existing_rule.date_format if _existing_rule else ""
-                    _fmt_idx = _GS_DATE_FORMAT_OPTIONS.index(_default_fmt) if _default_fmt in _GS_DATE_FORMAT_OPTIONS else 0
+                    if _default_fmt in _GS_DATE_FORMAT_OPTIONS:
+                        _fmt_idx = _GS_DATE_FORMAT_OPTIONS.index(_default_fmt)
+                    elif _default_fmt:
+                        # A saved custom format (not one of the presets) must
+                        # still select "Custom..." here -- otherwise this
+                        # falls through to index 0 ("(no special formatting)")
+                        # and the custom text box below is never shown/
+                        # pre-filled, silently dropping the saved value the
+                        # next time this profile is saved. Same fix as the
+                        # Lead Template Column Mapping section's ltm_fmt_*.
+                        _fmt_idx = _GS_DATE_FORMAT_OPTIONS.index("Custom...")
+                    else:
+                        _fmt_idx = 0
                     _gs_fmt_selected = st.selectbox(
                         "Date format", _GS_DATE_FORMAT_OPTIONS, index=_fmt_idx, key=f"gs_fmt_{_gs_col}")
-                    _gs_date_format = "" if _gs_fmt_selected == "(no special formatting)" else _gs_fmt_selected
+                    if _gs_fmt_selected == "Custom...":
+                        _gs_date_format = st.text_input(
+                            "Custom date format (Python strftime, e.g. %d %b %Y)",
+                            value=_default_fmt if _default_fmt not in _GS_DATE_FORMAT_OPTIONS else "",
+                            key=f"gs_fmt_custom_{_gs_col}")
+                    elif _gs_fmt_selected == "(no special formatting)":
+                        _gs_date_format = ""
+                    else:
+                        _gs_date_format = _gs_fmt_selected
                 if _gs_mandatory or _gs_date_format:
                     gs_mapping_rules.append(LeadTemplateColumnRule(
                         template_column=_gs_col, mandatory=_gs_mandatory, date_format=_gs_date_format))
