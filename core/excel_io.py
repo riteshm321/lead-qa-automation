@@ -852,6 +852,27 @@ def _resolve_date_format(value: str) -> tuple[str, str, bool]:
     return value, _strftime_to_excel_number_format(value), False
 
 
+def resolve_lead_template_rules(
+    lead_template_mapping: LeadTemplateMappingConfig | None,
+) -> tuple[dict[str, str], dict[str, tuple[str, str, bool]]]:
+    """(manual_overrides, date_formats) exactly as append_leads' xlsx and
+    CSV branches each used to compute inline -- factored out here so
+    core.google_sheets_client can resolve the SAME rules against a
+    Google Sheet's headers without a third copy of this logic.
+    """
+    manual_overrides = {
+        normalize_header_text(r.template_column): r.source_column
+        for r in (lead_template_mapping.rules if lead_template_mapping else [])
+        if r.source_column
+    }
+    date_formats = {
+        normalize_header_text(r.template_column): _resolve_date_format(r.date_format)
+        for r in (lead_template_mapping.rules if lead_template_mapping else [])
+        if r.date_format
+    }
+    return manual_overrides, date_formats
+
+
 def resolve_one_header_source(
     header: str, leads_df: pd.DataFrame, field_mapping: FieldMapping,
     target_field_mapping: FieldMapping | None,
@@ -966,16 +987,7 @@ def _append_leads_csv(
         headers = headers + ["Refund Reason"]
         existing_data_rows = [row + [""] for row in existing_data_rows]
 
-    manual_overrides = {
-        normalize_header_text(r.template_column): r.source_column
-        for r in (lead_template_mapping.rules if lead_template_mapping else [])
-        if r.source_column
-    }
-    date_formats = {
-        normalize_header_text(r.template_column): _resolve_date_format(r.date_format)
-        for r in (lead_template_mapping.rules if lead_template_mapping else [])
-        if r.date_format
-    }
+    manual_overrides, date_formats = resolve_lead_template_rules(lead_template_mapping)
 
     skip_normalized = {"date", "comment", "status"} | _REASON_HEADER_NAMES
     column_source, unmatched_passthrough_headers = _resolve_passthrough_columns(
@@ -1127,16 +1139,7 @@ def append_leads(
         # Which lead column (if any) feeds each header only depends on the
         # header/column identity, never on a specific row — resolve it once
         # per column rather than once per (row, column) pair.
-        manual_overrides = {
-            normalize_header_text(r.template_column): r.source_column
-            for r in (lead_template_mapping.rules if lead_template_mapping else [])
-            if r.source_column
-        }
-        date_formats = {
-            normalize_header_text(r.template_column): _resolve_date_format(r.date_format)
-            for r in (lead_template_mapping.rules if lead_template_mapping else [])
-            if r.date_format
-        }
+        manual_overrides, date_formats = resolve_lead_template_rules(lead_template_mapping)
 
         skip_normalized = (
             {"date", "comment", "status"} | _REASON_HEADER_NAMES

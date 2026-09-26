@@ -1443,3 +1443,25 @@ def test_set_status_by_row_index_for_csv(tmp_path):
 
     result = pd.read_csv(path, dtype=str, keep_default_na=False)
     assert list(result["Status"]) == ["Uploaded to Enhancio", ""]
+
+
+def test_resolve_lead_template_rules_returns_overrides_and_date_formats():
+    from core.excel_io import resolve_lead_template_rules
+
+    config = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Company Size", source_column="Employee Count"),
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="YYYY-MM-DD"),
+        LeadTemplateColumnRule(template_column="Untouched Column"),
+    ])
+
+    overrides, date_formats = resolve_lead_template_rules(config)
+
+    assert overrides == {"companysize": "Employee Count"}
+    assert "capturedate" in date_formats
+    assert date_formats["capturedate"][0] == "%Y-%m-%d"
+
+
+def test_resolve_lead_template_rules_handles_none_config():
+    from core.excel_io import resolve_lead_template_rules
+    overrides, date_formats = resolve_lead_template_rules(None)
+    assert overrides == {} and date_formats == {}
