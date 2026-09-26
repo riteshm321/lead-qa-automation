@@ -11,13 +11,15 @@ from core.excel_io import (
 )
 from core.app_settings import (
     get_clients_dir, get_convertr_account_credentials, save_convertr_account_credentials,
-    get_enhancio_client_id,
+    get_enhancio_client_id, get_google_sheets_key_path,
 )
 from core.branding import configure_page
 from core import convertr_client
 from core.convertr_client import ConvertrError
 from core import enhancio_client
 from core.enhancio_client import EnhancioError
+from core import google_sheets_client
+from core.google_sheets_client import GoogleSheetsError
 from core.file_browser import browse_for_file
 from core.jira_client import extract_ticket_key
 from core.models import (
@@ -25,6 +27,7 @@ from core.models import (
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
     LeadTemplateTab, ComplexAccountConfig, BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
     EnhancioConfig, EnhancioAllocationMapping, IntegrateConfig, LeadTemplateColumnRule, LeadTemplateMappingConfig,
+    GoogleSheetTab, GoogleSheetsConfig,
 )
 from core.profile_store import save_profile, load_profile, list_profile_names
 from core.toast import show_pending_toast
@@ -482,6 +485,19 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
     for _ltm_stale_key in [k for k in st.session_state if k.startswith("ltm_")]:
         del st.session_state[_ltm_stale_key]
 
+    # Google Sheets Lead Delivery section keyed widgets (gs_enabled,
+    # gs_tabs_input, and the per-column gs_mandatory_<col>/gs_fmt_<col>)
+    # need the exact same treatment as the ltm_ keys just above -- cleared
+    # here from the start rather than bolted on later, since this section
+    # ships alongside the same known failure mode: a Google Sheets column
+    # name is very often the same text across different clients (e.g.
+    # "Email", "Work Email"), so without this, switching to a different
+    # client could silently keep showing the previous client's checkbox/
+    # format value (or even its gs_enabled/gs_tabs_input state) under the
+    # same key.
+    for _gs_stale_key in [k for k in st.session_state if k.startswith("gs_")]:
+        del st.session_state[_gs_stale_key]
+
 client_name = st.text_input("Client name", value=profile.name if profile else "")
 
 st.divider()
@@ -848,6 +864,94 @@ with tab_basics:
                 if normalize_header_text(r.template_column) not in _ltm_rendered_normalized
             ]
             lead_template_mapping_rules = _ltm_preserved_rules + lead_template_mapping_rules
+
+        st.divider()
+        st.markdown("**Google Sheets Lead Delivery (optional)**")
+        st.caption(
+            "Route this client's valid leads straight to a Google Sheet per CID, instead of (or alongside) "
+            "an Excel Lead Template. Requires the Google Sheets service account key to be set on the "
+            "⚙️ Settings page, and each Sheet to be individually shared with that service account's email "
+            "as Editor."
+        )
+        gs_enabled = st.checkbox(
+            "This client delivers leads to Google Sheets", value=profile.google_sheets.enabled if profile else False,
+            key="gs_enabled")
+        gs_tabs: list[GoogleSheetTab] = []
+        gs_mapping_rules: list[LeadTemplateColumnRule] = []
+        if gs_enabled:
+            st.caption(
+                "CID → Sheet mapping, one per line, format `CID,Sheet URL` or `CID,Sheet URL,worksheet name` "
+                "(worksheet name defaults to \"Sheet1\") — paste the exact URL from your browser's address bar:"
+            )
+            _existing_gs_tabs_text = "\n".join(
+                f"{t.cid},https://docs.google.com/spreadsheets/d/{t.sheet_id}/edit"
+                + (f",{t.worksheet_name}" if t.worksheet_name != "Sheet1" else "")
+                for t in (profile.google_sheets.tabs if profile else [])
+            )
+            _gs_tabs_text = st.text_area(
+                "CID to Google Sheet mapping", value=_existing_gs_tabs_text,
+                key="gs_tabs_input", label_visibility="collapsed", height=100)
+            import re as _re
+            for _line in _gs_tabs_text.splitlines():
+                _line = _line.strip()
+                if not _line or "," not in _line:
+                    continue
+                _parts = [p.strip() for p in _line.split(",")]
+                _cid, _url = _parts[0], _parts[1]
+                _worksheet = _parts[2] if len(_parts) > 2 and _parts[2] else "Sheet1"
+                _match = _re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", _url)
+                if _cid and _match:
+                    gs_tabs.append(GoogleSheetTab(cid=_cid, sheet_id=_match.group(1), worksheet_name=_worksheet))
+
+            _gs_key_path = get_google_sheets_key_path()
+            _gs_sample_headers: list[str] = []
+            if not _gs_key_path:
+                st.caption("No Google Sheets service account key configured yet — set one on the ⚙️ Settings page.")
+            elif gs_tabs:
+                try:
+                    _first_tab = gs_tabs[0]
+                    _gs_sample_headers = google_sheets_client.read_sheet_headers(
+                        _gs_key_path, _first_tab.sheet_id, _first_tab.worksheet_name)
+                except GoogleSheetsError as exc:
+                    render_error(exc)
+
+            _existing_gs_rules = {r.template_column: r for r in (profile.google_sheets.mapping.rules if profile else [])}
+            _GS_DATE_FORMAT_OPTIONS = [
+                "(no special formatting)", "MM/DD/YYYY", "DD/MM/YYYY", "DD-MMM-YY",
+                "YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS", "Custom...",
+            ]
+            for _gs_col in _gs_sample_headers:
+                _existing_rule = _existing_gs_rules.get(_gs_col)
+                with st.container(border=True):
+                    st.write(f"**{_gs_col}**")
+                    _gs_mandatory = st.checkbox(
+                        "Mandatory", value=_existing_rule.mandatory if _existing_rule else False,
+                        key=f"gs_mandatory_{_gs_col}")
+                    _default_fmt = _existing_rule.date_format if _existing_rule else ""
+                    _fmt_idx = _GS_DATE_FORMAT_OPTIONS.index(_default_fmt) if _default_fmt in _GS_DATE_FORMAT_OPTIONS else 0
+                    _gs_fmt_selected = st.selectbox(
+                        "Date format", _GS_DATE_FORMAT_OPTIONS, index=_fmt_idx, key=f"gs_fmt_{_gs_col}")
+                    _gs_date_format = "" if _gs_fmt_selected == "(no special formatting)" else _gs_fmt_selected
+                if _gs_mandatory or _gs_date_format:
+                    gs_mapping_rules.append(LeadTemplateColumnRule(
+                        template_column=_gs_col, mandatory=_gs_mandatory, date_format=_gs_date_format))
+
+            # Never silently drop a saved rule for a column that simply
+            # wasn't RENDERED this run (no key path configured yet, the
+            # Sheet read failed, or no tabs are configured yet) -- that's
+            # "couldn't check", not "user cleared it". Same preservation
+            # policy as the Lead Template Column Mapping section above (see
+            # _ltm_preserved_rules) -- without this, saving while e.g. the
+            # service-account key isn't set up yet would silently wipe every
+            # previously-saved Google Sheets mapping rule.
+            _gs_rendered_normalized = {normalize_header_text(h) for h in _gs_sample_headers}
+            _gs_preserved_rules = [
+                r for r in (profile.google_sheets.mapping.rules if profile else [])
+                if normalize_header_text(r.template_column) not in _gs_rendered_normalized
+            ]
+            gs_mapping_rules = _gs_preserved_rules + gs_mapping_rules
+        else:
+            st.caption("Google Sheets delivery is disabled for this client.")
 
     with st.container(border=True):
         st.subheader("Duplicate Check")
@@ -1400,6 +1504,11 @@ if st.button("💾 Save Client Profile", type="primary"):
             lead_template_tabs=(
                 lead_template_tabs_result if client_mode == "Lead QA" and lead_template_multi_tab else []),
             lead_template_mapping=LeadTemplateMappingConfig(rules=lead_template_mapping_rules),
+            google_sheets=GoogleSheetsConfig(
+                enabled=gs_enabled,
+                tabs=gs_tabs if gs_enabled else [],
+                mapping=LeadTemplateMappingConfig(rules=gs_mapping_rules if gs_enabled else []),
+            ),
             lead_template_clear_existing=(
                 lead_template_clear_existing if client_mode == "Lead QA" else False),
             field_mapping=profile.field_mapping if profile else None,
