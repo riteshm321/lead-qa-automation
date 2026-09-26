@@ -782,20 +782,106 @@ _DATE_FORMAT_PRESETS = {
     "YYYY-MM-DD HH:MM:SS": ("%Y-%m-%d %H:%M:%S", "yyyy\\-mm\\-dd\\ hh:mm:ss"),
 }
 
+# A day-first-style preset must parse its raw leadfile date value with
+# pd.to_datetime(..., dayfirst=True) -- otherwise "03/04/2026" (meant as
+# 3 April) silently parses as March 4th, since pandas' default (dayfirst=
+# False) always prefers the US month-first reading for an ambiguous
+# numeric date. Every OTHER preset (month-first, ISO, or a custom format)
+# is unambiguous enough already (ISO) or explicitly month-first (MM/DD),
+# so dayfirst=False is correct for them.
+_DAYFIRST_PRESETS = {"DD/MM/YYYY", "DD-MMM-YY"}
 
-def _resolve_date_format(value: str) -> tuple[str, str]:
+
+# strftime directive -> Excel number-format token. strftime and Excel's
+# number-format syntax share no characters in common ("%d %b %Y" vs
+# "dd mmm yyyy"), so a custom date_format's strftime string can't just be
+# escaped like the hand-written presets above -- each known directive is
+# substituted for its Excel equivalent instead. Known limitation: any
+# strftime directive NOT in this table (e.g. "%A", the weekday name) has
+# no Excel equivalent at all and is left as literal text (escaped like any
+# other character) rather than raising -- an imperfect custom format is
+# better than a crash on save.
+_STRFTIME_TO_EXCEL_TOKENS = {
+    "%Y": "yyyy", "%y": "yy", "%m": "mm", "%d": "dd",
+    "%H": "hh", "%M": "mm", "%S": "ss", "%b": "mmm", "%B": "mmmm",
+}
+
+
+def _strftime_to_excel_number_format(value: str) -> str:
+    """Best-effort translation of a strftime-style custom date_format into
+    an Excel number-format code -- see _STRFTIME_TO_EXCEL_TOKENS above.
+    Tokens are substituted longest-first so a shorter token's replacement
+    text can never accidentally clobber part of a longer one still waiting
+    to be matched. Whatever's left (literal separators, plus any strftime
+    directive with no Excel equivalent) is escaped the same way the
+    hand-written presets escape "/"/"-", so it renders as literal text
+    rather than a locale-dependent date separator.
+    """
+    result = value
+    for token in sorted(_STRFTIME_TO_EXCEL_TOKENS, key=len, reverse=True):
+        result = result.replace(token, _STRFTIME_TO_EXCEL_TOKENS[token])
+    return result.replace("/", "\\/").replace("-", "\\-")
+
+
+def _resolve_date_format(value: str) -> tuple[str, str, bool]:
     """Resolves a LeadTemplateColumnRule.date_format value to
-    (strftime_string, excel_number_format). A known preset name resolves
-    to its pair above; anything else is treated as a raw strftime string
-    directly (the "Custom..." UI option), with its Excel number format
-    approximated by escaping every "/"/"-" the same way the presets do --
-    good enough for a custom format, since Excel's own format-code syntax
-    and Python's strftime syntax mostly overlap for date tokens anyway.
+    (strftime_string, excel_number_format, dayfirst). A known preset name
+    resolves to its hand-written Excel format above, plus whether IT (not
+    a custom format) requires dayfirst=True for parsing the raw leadfile
+    value (_DAYFIRST_PRESETS). Anything else is treated as a raw strftime
+    string directly (the "Custom..." UI option): its Excel number format
+    is translated token-by-token (_strftime_to_excel_number_format), and it
+    always parses with dayfirst=False -- a custom format's day/month order
+    isn't reliably inferable from the strftime string alone, so this is a
+    deliberately scoped fix for the two known day-first presets only.
     """
     if value in _DATE_FORMAT_PRESETS:
-        return _DATE_FORMAT_PRESETS[value]
-    escaped = value.replace("/", "\\/").replace("-", "\\-")
-    return value, escaped
+        strftime_fmt, excel_fmt = _DATE_FORMAT_PRESETS[value]
+        return strftime_fmt, excel_fmt, value in _DAYFIRST_PRESETS
+    return value, _strftime_to_excel_number_format(value), False
+
+
+def resolve_one_header_source(
+    header: str, leads_df: pd.DataFrame, field_mapping: FieldMapping,
+    target_field_mapping: FieldMapping | None,
+    manual_overrides: dict[str, str] | None = None,
+) -> str | None:
+    """Resolves which leadfile column supplies ONE target header, using the
+    exact same priority chain _resolve_passthrough_columns uses per header
+    (manual override -> target field-mapping role -> known synonym ->
+    fuzzy match) -- shared so callers other than append_leads (the
+    mandatory-column check, the Client Setup auto-match preview) get an
+    identical answer to what would actually be written, not a
+    reimplementation that can silently disagree.
+
+    manual_overrides ({normalized header: leadfile column name}) takes
+    priority over every other resolution source when the named leadfile
+    column actually exists in leads_df -- an override naming a column that
+    doesn't exist in THIS leadfile falls back to the normal auto-match
+    chain below rather than silently resolving to nothing.
+    """
+    manual_overrides = manual_overrides or {}
+    header_norm = normalize_header_text(header)
+
+    override_col = manual_overrides.get(header_norm)
+    if override_col and override_col in leads_df.columns:
+        return override_col
+
+    target_role_by_header: dict[str, str] = {}
+    if target_field_mapping is not None:
+        for attr in ("email", "first_name", "last_name", "company", "cid"):
+            target_header = getattr(target_field_mapping, attr, "")
+            if target_header:
+                target_role_by_header[normalize_header_text(target_header)] = attr
+    if header_norm in target_role_by_header:
+        return getattr(field_mapping, target_role_by_header[header_norm])
+
+    attr = _resolve_field_attr(header_norm)
+    if attr:
+        return getattr(field_mapping, attr)
+
+    lead_headers_norm = {normalize_header_text(h): h for h in leads_df.columns}
+    return find_passthrough_lead_column(header_norm, lead_headers_norm)
 
 
 def _resolve_passthrough_columns(
@@ -803,36 +889,22 @@ def _resolve_passthrough_columns(
     target_field_mapping: FieldMapping | None, skip_normalized: set[str],
     manual_overrides: dict[str, str] | None = None,
 ) -> tuple[dict[int, str | None], list[str]]:
-    """Resolves which leadfile column (if any) feeds each target header:
-    the target role (email/first name/... via target_field_mapping) ->
-    field_mapping, a known field synonym, or a best-effort passthrough
-    match (find_passthrough_lead_column) -- in that order of confidence.
-    Shared by append_leads' xlsx and CSV branches, since which leadfile
-    column a header maps to never depends on the target file's format.
+    """Resolves which leadfile column (if any) feeds each target header --
+    see resolve_one_header_source for the per-header priority chain this
+    applies (manual override -> target role -> known synonym -> fuzzy
+    passthrough match). Shared by append_leads' xlsx and CSV branches,
+    since which leadfile column a header maps to never depends on the
+    target file's format.
 
     skip_normalized excludes headers a caller handles as its own special
     case (Date/Comment/Status/Refund Reason always; a formula column,
     xlsx only) from passthrough resolution and the unmatched-headers
     report -- those headers' values never come from column_source at all.
 
-    manual_overrides ({normalized template header: leadfile column name})
-    takes priority over every other resolution source when the named
-    leadfile column actually exists in leads_df -- an override naming a
-    column that doesn't exist in THIS leadfile falls back to the normal
-    auto-match chain below rather than silently resolving to nothing.
-
     Returns (column_source keyed by 1-based column position, matching
     enumerate(headers, start=1); unmatched_passthrough_headers).
     """
     manual_overrides = manual_overrides or {}
-    lead_headers_norm = {normalize_header_text(h): h for h in leads_df.columns}
-    target_role_by_header: dict[str, str] = {}
-    if target_field_mapping is not None:
-        for attr in ("email", "first_name", "last_name", "company", "cid"):
-            target_header = getattr(target_field_mapping, attr, "")
-            if target_header:
-                target_role_by_header[normalize_header_text(target_header)] = attr
-
     column_source: dict[int, str | None] = {}
     unmatched_passthrough_headers: list[str] = []
     for col_idx, header in enumerate(headers, start=1):
@@ -841,18 +913,7 @@ def _resolve_passthrough_columns(
         header_norm = normalize_header_text(header)
         if header_norm in skip_normalized:
             continue
-        override_col = manual_overrides.get(header_norm)
-        if override_col and override_col in leads_df.columns:
-            column_source[col_idx] = override_col
-            continue
-        if header_norm in target_role_by_header:
-            column_source[col_idx] = getattr(field_mapping, target_role_by_header[header_norm])
-            continue
-        attr = _resolve_field_attr(header_norm)
-        if attr:
-            column_source[col_idx] = getattr(field_mapping, attr)
-            continue
-        source_col = find_passthrough_lead_column(header_norm, lead_headers_norm)
+        source_col = resolve_one_header_source(header, leads_df, field_mapping, target_field_mapping, manual_overrides)
         column_source[col_idx] = source_col
         if source_col is None:
             unmatched_passthrough_headers.append(header)
@@ -924,7 +985,7 @@ def _append_leads_csv(
                 source_col = column_source.get(col_idx)
                 date_fmt = date_formats.get(header_norm)
                 if date_fmt is not None and source_col is not None:
-                    strftime_fmt, _ = date_fmt
+                    strftime_fmt, _, dayfirst = date_fmt
                     raw_value = lead_row.get(source_col, "")
                     if (isinstance(raw_value, (int, float, np.integer, np.floating))
                             and not isinstance(raw_value, bool) and pd.notna(raw_value)):
@@ -947,7 +1008,7 @@ def _append_leads_csv(
                         # built-in int in numpy 2.x.
                         parsed = pd.to_datetime(raw_value, unit="D", origin="1899-12-30", errors="coerce")
                     else:
-                        parsed = pd.to_datetime(raw_value, errors="coerce")
+                        parsed = pd.to_datetime(raw_value, errors="coerce", dayfirst=dayfirst)
                     value = parsed.strftime(strftime_fmt) if pd.notna(parsed) else (
                         str(raw_value) if raw_value not in (None, "") and pd.notna(raw_value) else "")
                 else:
@@ -1106,7 +1167,7 @@ def append_leads(
                     # regardless of whether the cell started as "General" --
                     # handled entirely here instead of falling through to the
                     # generic passthrough branch below.
-                    _, excel_fmt = date_formats[header_norm]
+                    _, excel_fmt, dayfirst = date_formats[header_norm]
                     source_col = column_source[col_idx]
                     raw_value = lead_row.get(source_col, "")
                     if (isinstance(raw_value, (int, float, np.integer, np.floating))
@@ -1118,7 +1179,7 @@ def append_leads(
                         # are required alongside int/float.
                         parsed = pd.to_datetime(raw_value, unit="D", origin="1899-12-30", errors="coerce")
                     else:
-                        parsed = pd.to_datetime(raw_value, errors="coerce")
+                        parsed = pd.to_datetime(raw_value, errors="coerce", dayfirst=dayfirst)
                     if pd.notna(parsed):
                         cell.value = parsed.to_pydatetime()
                         cell.number_format = excel_fmt

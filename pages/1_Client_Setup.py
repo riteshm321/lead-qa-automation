@@ -6,7 +6,7 @@ import streamlit as st
 from core.errors import render_error
 from core.excel_io import (
     list_sheet_names, read_sheet_as_dataframe, detect_cids_from_pacing_overview, guess_target_field_mapping,
-    find_header_row, read_sheet_headers, find_passthrough_lead_column, normalize_header_text, read_leadfile,
+    find_header_row, read_sheet_headers, resolve_one_header_source, normalize_header_text, read_leadfile,
     detect_formula_columns,
 )
 from core.app_settings import (
@@ -466,6 +466,22 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
     st.session_state.pop("_acc_mapping_for", None)
     st.session_state.pop("_tmpl_mapping_for", None)
 
+    # Lead Template Column Mapping widget keys are dynamic per Lead Template
+    # column name (ltm_mandatory_<col>, ltm_source_<col>/ltm_source_text_<col>,
+    # ltm_fmt_<col>, ltm_fmt_custom_<col>), not a fresh per-item uuid like
+    # lead_template_tabs'/the reference-source sections' row keys above --
+    # those naturally get a brand new key on every profile switch (a fresh
+    # uuid4() per row in _tabs_to_state/_sources_to_state), so switching
+    # profiles can never reuse a stale value under the same key. A Lead
+    # Template column name is very often the SAME text across different
+    # clients (e.g. "Email", "Company Size"), so without this, switching to
+    # a different client could silently keep showing the previous client's
+    # checkbox/override/format value for a same-named column. Clear every
+    # key with this prefix rather than a fixed list, since the set of column
+    # names is different for every client/template.
+    for _ltm_stale_key in [k for k in st.session_state if k.startswith("ltm_")]:
+        del st.session_state[_ltm_stale_key]
+
 client_name = st.text_input("Client name", value=profile.name if profile else "")
 
 st.divider()
@@ -691,10 +707,18 @@ with tab_basics:
                 "manually override a column's source, or set a specific date format for a column. Every "
                 "column left untouched here keeps working exactly as it does today."
             )
+            # Reads from _header_source_path/_header_source_sheet (same as the
+            # field-mapping preview section just above) instead of
+            # lead_template_path/lead_template_sheet_name directly -- in
+            # multi-tab mode lead_template_sheet_name is always "" (each tab
+            # has its own sheet), so guarding on it here made this whole
+            # section always render zero columns for a multi-tab client, and
+            # since lead_template_mapping_rules starts as [] with nothing to
+            # append to, saving silently wiped that client's existing rules.
             _ltm_template_headers: list[str] = []
-            if lead_template_path and lead_template_sheet_name:
+            if _header_source_path and _header_source_sheet:
                 _ltm_template_headers, _ltm_err = _safe_read_template_headers(
-                    lead_template_path, lead_template_sheet_name)
+                    _header_source_path, _header_source_sheet)
                 if _ltm_err is not None:
                     render_error(_ltm_err)
 
@@ -708,9 +732,9 @@ with tab_basics:
             _ltm_skip = {normalize_header_text(s) for s in ("date", "comment", "status", "reason", "refund reason")}
 
             _ltm_formula_headers: set[str] = set()
-            if lead_template_path and lead_template_sheet_name:
+            if _header_source_path and _header_source_sheet:
                 try:
-                    _ltm_formula_headers = detect_formula_columns(lead_template_path, lead_template_sheet_name)
+                    _ltm_formula_headers = detect_formula_columns(_header_source_path, _header_source_sheet)
                 except Exception as exc:
                     render_error(exc)
             _ltm_formula_headers_norm = {normalize_header_text(h) for h in _ltm_formula_headers if h is not None}
@@ -724,14 +748,22 @@ with tab_basics:
                 "Sample leadfile (optional — lets this preview show real auto-match results and pick a source "
                 "column from a dropdown instead of typing it)",
                 type=["xlsx", "csv"], key="ltm_sample_file")
+            _ltm_sample_df = None
             _ltm_sample_headers: list[str] = []
             if _ltm_sample_file is not None:
                 try:
-                    _ltm_sample_headers = list(read_leadfile(_ltm_sample_file).columns)
+                    _ltm_sample_df = read_leadfile(_ltm_sample_file)
+                    _ltm_sample_headers = list(_ltm_sample_df.columns)
                 except Exception as exc:
                     render_error(exc)
+            # This client's real field mappings — used so the preview's
+            # auto-match resolves exactly the way append_leads/the mandatory
+            # check would (target role -> synonym -> fuzzy), not a
+            # fuzzy-match-only reimplementation that can silently disagree.
+            _ltm_preview_fm = profile.field_mapping if profile else FieldMapping(
+                email="", first_name="", last_name="", company="", cid="")
+            _ltm_preview_target_fm = profile.lead_template_field_mapping if profile else None
 
-            _ltm_sample_headers_norm = {normalize_header_text(h): h for h in _ltm_sample_headers}
             _existing_ltm_rules = {r.template_column: r for r in (profile.lead_template_mapping.rules if profile else [])}
             _DATE_FORMAT_OPTIONS = [
                 "(no special formatting)", "MM/DD/YYYY", "DD/MM/YYYY", "DD-MMM-YY",
@@ -745,8 +777,8 @@ with tab_basics:
                 _existing_rule = _existing_ltm_rules.get(_ltm_col)
                 with st.container(border=True):
                     if _ltm_sample_headers:
-                        _auto_match = find_passthrough_lead_column(
-                            normalize_header_text(_ltm_col), _ltm_sample_headers_norm)
+                        _auto_match = resolve_one_header_source(
+                            _ltm_col, _ltm_sample_df, _ltm_preview_fm, _ltm_preview_target_fm)
                         st.write(
                             f"**{_ltm_col}** — auto-matches: *{_auto_match}*" if _auto_match
                             else f"**{_ltm_col}** — ⚠️ no auto-match found")
@@ -772,7 +804,18 @@ with tab_basics:
                             key=f"ltm_source_text_{_ltm_col}")
 
                     _default_fmt = _existing_rule.date_format if _existing_rule else ""
-                    _fmt_idx = _DATE_FORMAT_OPTIONS.index(_default_fmt) if _default_fmt in _DATE_FORMAT_OPTIONS else 0
+                    if _default_fmt in _DATE_FORMAT_OPTIONS:
+                        _fmt_idx = _DATE_FORMAT_OPTIONS.index(_default_fmt)
+                    elif _default_fmt:
+                        # A saved custom format (not one of the presets) must
+                        # still select "Custom..." here -- otherwise this
+                        # falls through to index 0 ("(no special formatting)")
+                        # and the custom text box below is never shown/
+                        # pre-filled, silently dropping the saved value the
+                        # next time this profile is saved.
+                        _fmt_idx = _DATE_FORMAT_OPTIONS.index("Custom...")
+                    else:
+                        _fmt_idx = 0
                     _ltm_fmt_selected = st.selectbox(
                         "Date format", _DATE_FORMAT_OPTIONS, index=_fmt_idx, key=f"ltm_fmt_{_ltm_col}")
                     if _ltm_fmt_selected == "Custom...":
@@ -790,6 +833,21 @@ with tab_basics:
                         template_column=_ltm_col, source_column=_ltm_source,
                         mandatory=_ltm_mandatory, date_format=_ltm_date_format,
                     ))
+
+            # Never silently drop a saved rule for a column that simply
+            # wasn't RENDERED this run (the template couldn't be read at all,
+            # or this particular column isn't among the currently-read
+            # headers) -- that's an unrelated save, not the user removing the
+            # rule. Start from every existing saved rule and only add/replace
+            # entries for columns that actually rendered above; a rendered
+            # column left at every default is still correctly absent (it's
+            # simply never added to lead_template_mapping_rules above).
+            _ltm_rendered_normalized = {normalize_header_text(h) for h in _ltm_template_headers}
+            _ltm_preserved_rules = [
+                r for r in (profile.lead_template_mapping.rules if profile else [])
+                if normalize_header_text(r.template_column) not in _ltm_rendered_normalized
+            ]
+            lead_template_mapping_rules = _ltm_preserved_rules + lead_template_mapping_rules
 
     with st.container(border=True):
         st.subheader("Duplicate Check")

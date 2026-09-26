@@ -514,6 +514,86 @@ def test_append_leads_reformats_a_numpy_dtype_excel_serial_number_date_for_xlsx(
     assert float_cell.number_format == "yyyy\\-mm\\-dd"
 
 
+def test_append_leads_translates_a_custom_strftime_date_format_to_excel_number_format(tmp_path):
+    # Regression test (Finding 6, final review): a custom (non-preset)
+    # date_format string used to be treated as BOTH the strftime format AND
+    # (with only "/"/"-" escaped) the Excel number format directly --
+    # strftime's "%d %b %Y" and Excel's number-format code share no syntax,
+    # so the cell used to get the literal, meaningless format code
+    # "%d %b %Y" instead of "dd mmm yyyy".
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Capture Date"])
+    wb.save(path)
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([{"Email": "a@x.com", "Capture Date": "2026-03-15"}])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="%d %b %Y"),
+    ])
+
+    append_leads(path, "Sheet1", leads_df, fm, run_date="2026-08-08", lead_template_mapping=ltm)
+
+    wb2 = openpyxl.load_workbook(path)
+    cell = wb2["Sheet1"].cell(row=2, column=2)
+    assert cell.value.strftime("%Y-%m-%d") == "2026-03-15"
+    assert cell.number_format == "dd mmm yyyy"
+
+
+def test_append_leads_day_first_preset_parses_ambiguous_date_as_day_first(tmp_path):
+    # Regression test (Finding 7, final review): a raw leadfile date value
+    # was always parsed with pd.to_datetime(..., errors="coerce") with no
+    # day/month control at all, even when the CONFIGURED output format is
+    # explicitly day-first (DD/MM/YYYY). "03/04/2026" is ambiguous -- pandas'
+    # default (dayfirst=False) reads it as March 4th; a DD/MM/YYYY-configured
+    # column must read it as April 3rd instead.
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Capture Date"])
+    wb.save(path)
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([{"Email": "a@x.com", "Capture Date": "03/04/2026"}])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="DD/MM/YYYY"),
+    ])
+
+    append_leads(path, "Sheet1", leads_df, fm, run_date="2026-08-08", lead_template_mapping=ltm)
+
+    wb2 = openpyxl.load_workbook(path)
+    cell = wb2["Sheet1"].cell(row=2, column=2)
+    assert cell.value.strftime("%Y-%m-%d") == "2026-04-03"
+
+
+def test_append_leads_month_first_preset_parses_ambiguous_date_as_month_first(tmp_path):
+    # Counterpart of the dayfirst test above: MM/DD/YYYY (and every other
+    # non-day-first preset/custom format) must keep parsing the same
+    # ambiguous value as month-first -- this scoped fix must not flip every
+    # date column to dayfirst, only the two day-first-style presets.
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Capture Date"])
+    wb.save(path)
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([{"Email": "a@x.com", "Capture Date": "03/04/2026"}])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="MM/DD/YYYY"),
+    ])
+
+    append_leads(path, "Sheet1", leads_df, fm, run_date="2026-08-08", lead_template_mapping=ltm)
+
+    wb2 = openpyxl.load_workbook(path)
+    cell = wb2["Sheet1"].cell(row=2, column=2)
+    assert cell.value.strftime("%Y-%m-%d") == "2026-03-04"
+
+
 def test_append_leads_highlight_fill_clears_previous_run_highlight(tmp_path):
     path = str(tmp_path / "lead_report.xlsx")
     wb = openpyxl.Workbook()
@@ -1173,6 +1253,26 @@ def test_append_leads_applies_a_configured_date_format_to_csv(tmp_path):
 
     result = pd.read_csv(path, dtype=str, keep_default_na=False)
     assert result.loc[0, "Capture Date"] == "15/03/2026"
+
+
+def test_append_leads_day_first_preset_parses_ambiguous_date_as_day_first_for_csv(tmp_path):
+    # CSV counterpart of test_append_leads_day_first_preset_parses_ambiguous_date_as_day_first
+    # -- "03/04/2026" is ambiguous; DD-MMM-YY is configured as day-first, so
+    # it must parse as April 3rd ("03-Apr-26"), not pandas' month-first
+    # default reading (which would give March 4th, "04-Mar-26").
+    path = tmp_path / "template.csv"
+    path.write_text("Email,Capture Date\n", encoding="utf-8")
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([{"Email": "a@x.com", "Capture Date": "03/04/2026"}])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Capture Date", date_format="DD-MMM-YY"),
+    ])
+
+    append_leads(str(path), "(CSV file)", leads_df, fm, run_date="2026-08-13", lead_template_mapping=ltm)
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert result.loc[0, "Capture Date"] == "03-Apr-26"
 
 
 def test_append_leads_reformats_a_bare_excel_serial_number_date_for_csv(tmp_path):

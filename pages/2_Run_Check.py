@@ -237,6 +237,7 @@ _enabled_checks = ", ".join(
         ("Duplicate", profile.duplicate.enabled), ("Leadcap", profile.leadcap.enabled),
         ("Exclusion", profile.exclusion.enabled), ("TAL", profile.tal.enabled),
         ("Suppression", profile.suppression.enabled), ("Dedupe list", profile.dedupe_list.enabled),
+        ("Lead Template Mapping", any(r.mandatory for r in profile.lead_template_mapping.rules)),
     ] if on
 ) or "None"
 st.caption(f"Mode: **{profile.client_mode}** · Enabled checks: {_enabled_checks}")

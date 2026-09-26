@@ -3,7 +3,7 @@ import pandas as pd
 from core.pipeline import run_pipeline, apply_refund_overrides, PipelineResult
 from core.models import (
     ClientProfile, FieldMapping, DuplicateConfig, ExclusionConfig, ReferenceSource,
-    SuppressionConfig, DedupeListConfig,
+    SuppressionConfig, DedupeListConfig, LeadTemplateMappingConfig, LeadTemplateColumnRule,
 )
 
 FM = FieldMapping(email="emailaddress", first_name="firstname", last_name="lastname",
@@ -160,6 +160,34 @@ def test_run_pipeline_with_no_mandatory_lead_template_rules_is_unaffected():
 
     assert result.valid_indices == [0]
     assert result.refund_reasons == {}
+    assert result.review_reasons == {}
+
+
+def test_run_pipeline_passes_lead_template_field_mapping_to_the_mandatory_check():
+    # Regression test (Finding 1, final review): run_pipeline must pass
+    # profile.lead_template_field_mapping through to
+    # check_lead_template_mandatory_columns as its target_field_mapping --
+    # otherwise the mandatory check can never resolve a column via the
+    # Lead Template's own target role, only field_mapping's plain synonyms,
+    # and would wrongly flag every lead for a column resolvable ONLY via
+    # that target-role tier. "Primary Email" is deliberately not a known
+    # field synonym (unlike e.g. "Email Address") -- it resolves ONLY
+    # through the Lead Template's own target_field_mapping.email == "Primary
+    # Email" pointing at field_mapping.email == "Email", exactly the tier
+    # this test exists to prove run_pipeline actually wires up.
+    profile = _profile(
+        field_mapping=FieldMapping(email="Email", first_name="", last_name="", company="", cid=""),
+        lead_template_field_mapping=FieldMapping(
+            email="Primary Email", first_name="", last_name="", company="", cid=""),
+        lead_template_mapping=LeadTemplateMappingConfig(rules=[
+            LeadTemplateColumnRule(template_column="Primary Email", mandatory=True),
+        ]),
+    )
+    new_leads = pd.DataFrame([{"Email": "a@x.com"}])
+    accumulated = pd.DataFrame(columns=["Email"])
+
+    result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[])
+
     assert result.review_reasons == {}
 
 

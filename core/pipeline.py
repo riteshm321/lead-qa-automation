@@ -68,7 +68,7 @@ def run_pipeline(
     if any(r.mandatory for r in profile.lead_template_mapping.rules):
         report("Checking Lead Template Mandatory Columns")
         merge(lead_template_mapping.check_lead_template_mandatory_columns(
-            new_leads, fm, profile.lead_template_mapping))
+            new_leads, fm, profile.lead_template_mapping, profile.lead_template_field_mapping))
 
     refund_reasons = {idx: "; ".join(reasons) for idx, reasons in fail.items()}
     review_reasons = {idx: reasons for idx, reasons in review.items() if idx not in fail}

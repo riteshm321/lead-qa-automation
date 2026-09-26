@@ -1399,6 +1399,33 @@ def test_completed_checks_status_shown_for_enabled_checks_only(tmp_path, monkeyp
     assert "Leadcap" not in status_captions[0]  # not enabled for this client
 
 
+def test_enabled_checks_caption_includes_lead_template_mapping(tmp_path, monkeypatch):
+    # Regression test (Minor, final review): the pre-run "Enabled checks:
+    # ..." caption (_enabled_checks, distinct from _stage_labels/
+    # _completed_checks, which already included this) had no entry at all
+    # for Lead Template Mapping, even when a mandatory rule is configured.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        lead_template_mapping=LeadTemplateMappingConfig(rules=[
+            LeadTemplateColumnRule(template_column="Company Size", mandatory=True),
+        ]),
+    )
+    save_profile(profile, get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+
+    enabled_caption = next(c for c in at.caption if "Enabled checks" in c.value)
+    assert "Lead Template Mapping" in enabled_caption.value
+
+
 def test_complex_account_flags_asset_url_mismatch_for_review_check_does_not_mutate(tmp_path, monkeypatch):
     # Regression test: at Run Check time, a mismatch against the
     # specifications file must only be flagged for review, never silently

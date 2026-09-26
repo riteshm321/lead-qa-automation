@@ -286,6 +286,200 @@ def test_saving_a_date_format_alone_persists_a_rule(tmp_path, monkeypatch):
     assert rule.source_column == ""
 
 
+def test_switching_client_clears_stale_ltm_widget_state_for_same_named_column(tmp_path, monkeypatch):
+    # Regression test (Finding 2, final review): ltm_mandatory_*/ltm_source_*/
+    # ltm_source_text_*/ltm_fmt_*/ltm_fmt_custom_* widget keys are dynamic
+    # per Lead Template COLUMN NAME, not a fresh per-item uuid the way
+    # lead_template_tabs'/reference-source rows are -- so switching to a
+    # DIFFERENT client whose template happens to use the exact same column
+    # name ("Company Size") used to keep showing the previous client's
+    # checkbox value under that same key.
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Company Size"])
+    wb.save(template_path)
+
+    at1 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at1.run()
+    next(t for t in at1.text_input if t.label == "Client name").set_value("LTM Switch Client One").run()
+    at1.text_input(key="accumulated_path_input").set_value(str(tmp_path / "acc1.xlsx")).run()
+    at1.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at1.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+    at1.checkbox(key="ltm_mandatory_Company Size").set_value(True).run()
+    next(b for b in at1.button if "Save Client Profile" in b.label).click().run()
+    assert not at1.exception
+
+    at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at2.run()
+    next(t for t in at2.text_input if t.label == "Client name").set_value("LTM Switch Client Two").run()
+    at2.text_input(key="accumulated_path_input").set_value(str(tmp_path / "acc2.xlsx")).run()
+    at2.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at2.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+    next(b for b in at2.button if "Save Client Profile" in b.label).click().run()
+    assert not at2.exception
+
+    at3 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at3.run()
+    next(r for r in at3.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at3.selectbox if s.label == "Client").set_value("LTM Switch Client One").run()
+    assert at3.checkbox(key="ltm_mandatory_Company Size").value is True
+
+    next(s for s in at3.selectbox if s.label == "Client").set_value("LTM Switch Client Two").run()
+    assert at3.checkbox(key="ltm_mandatory_Company Size").value is False
+
+
+def test_a_custom_date_format_survives_a_reload_and_resave(tmp_path, monkeypatch):
+    # Regression test (Finding 3, final review): the date-format selectbox's
+    # index lookup fell through to index 0 ("(no special formatting)")
+    # whenever the saved date_format wasn't one of the preset strings,
+    # instead of selecting "Custom..." and pre-filling the custom text box
+    # -- so re-saving after reopening a client silently dropped its custom
+    # format.
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Capture Date"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Custom Format Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+
+    at.selectbox(key="ltm_fmt_Capture Date").set_value("Custom...").run()
+    at.text_input(key="ltm_fmt_custom_Capture Date").set_value("%d %b %Y").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("LTM Custom Format Client", get_clients_dir())
+    rule = next(r for r in saved.lead_template_mapping.rules if r.template_column == "Capture Date")
+    assert rule.date_format == "%d %b %Y"
+
+    # Reopen the SAME client in a fresh session -- the selectbox must land
+    # on "Custom..." (not silently fall back to index 0) and the custom
+    # text box must be pre-filled with the saved value.
+    at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at2.run()
+    next(r for r in at2.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at2.selectbox if s.label == "Client").set_value("LTM Custom Format Client").run()
+
+    fmt_select = at2.selectbox(key="ltm_fmt_Capture Date")
+    assert fmt_select.value == "Custom..."
+    custom_input = next(t for t in at2.text_input if t.key == "ltm_fmt_custom_Capture Date")
+    assert custom_input.value == "%d %b %Y"
+
+    next(b for b in at2.button if "Save Client Profile" in b.label).click().run()
+    assert not at2.exception
+
+    resaved = load_profile("LTM Custom Format Client", get_clients_dir())
+    rule2 = next(r for r in resaved.lead_template_mapping.rules if r.template_column == "Capture Date")
+    assert rule2.date_format == "%d %b %Y"
+
+
+def test_multi_tab_client_can_configure_and_save_lead_template_column_mapping(tmp_path, monkeypatch):
+    # Regression test (Finding 4, final review): in multi-tab mode,
+    # lead_template_sheet_name is always "" (each tab has its own sheet), so
+    # the guard `if lead_template_path and lead_template_sheet_name:` around
+    # reading template headers for this section never passed -- it always
+    # rendered zero columns for a multi-tab client, and since
+    # lead_template_mapping_rules starts as [] with nothing appended,
+    # saving silently wiped any previously-saved rules.
+    monkeypatch.chdir(tmp_path)
+
+    tab_file = str(tmp_path / "tab.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "EMEA"
+    ws.append(["Email", "Company Size"])
+    wb.save(tab_file)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Multi Tab Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+
+    multi_tab_checkbox = next(c for c in at.checkbox if "Route different CIDs" in c.label)
+    multi_tab_checkbox.set_value(True).run()
+
+    add_tab_button = next(b for b in at.button if b.key == "lead_template_tabs_add")
+    add_tab_button.click().run()
+
+    tab_file_input = next(t for t in at.text_input if t.label.startswith("File for this tab"))
+    tab_file_input.set_value(tab_file).run()
+
+    sheet_select = next(s for s in at.selectbox if s.label == "Tab (sheet) name")
+    sheet_select.set_value("EMEA").run()
+
+    assert any(c.key == "ltm_mandatory_Company Size" for c in at.checkbox)
+    at.checkbox(key="ltm_mandatory_Company Size").set_value(True).run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("LTM Multi Tab Client", get_clients_dir())
+    rule = next(r for r in saved.lead_template_mapping.rules if r.template_column == "Company Size")
+    assert rule.mandatory is True
+
+
+def test_saving_when_template_is_unreadable_does_not_wipe_existing_rules(tmp_path, monkeypatch):
+    # Regression test (Finding 5, final review): if the template can't be
+    # read at all (missing file, un-synced OneDrive placeholder, renamed
+    # sheet), this section renders zero columns -- saving for a completely
+    # unrelated reason must not silently drop every previously-saved rule.
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Company Size"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Unreadable Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+    at.checkbox(key="ltm_mandatory_Company Size").set_value(True).run()
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    os.remove(template_path)
+
+    at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at2.run()
+    next(r for r in at2.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at2.selectbox if s.label == "Client").set_value("LTM Unreadable Client").run()
+
+    next(b for b in at2.button if "Save Client Profile" in b.label).click().run()
+    assert not at2.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("LTM Unreadable Client", get_clients_dir())
+    rule = next(r for r in saved.lead_template_mapping.rules if r.template_column == "Company Size")
+    assert rule.mandatory is True
+
+
 def test_saving_in_lead_qa_and_upload_mode_does_not_raise_and_saves_no_rules(tmp_path, monkeypatch):
     # Regression test for a previously-fixed NameError risk:
     # lead_template_mapping_rules used to only be defined inside the

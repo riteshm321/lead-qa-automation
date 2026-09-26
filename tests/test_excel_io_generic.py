@@ -460,6 +460,39 @@ def test_resolve_passthrough_columns_manual_override_of_nonexistent_column_falls
     assert unmatched == []
 
 
+def test_resolve_date_format_translates_custom_strftime_to_excel_number_format():
+    from core.excel_io import _resolve_date_format
+
+    strftime_fmt, excel_fmt, dayfirst = _resolve_date_format("%d %b %Y")
+
+    assert strftime_fmt == "%d %b %Y"
+    assert excel_fmt == "dd mmm yyyy"
+    assert dayfirst is False
+
+
+def test_resolve_date_format_leaves_unknown_strftime_directive_as_literal_text():
+    # %A (weekday name) has no Excel number-format equivalent -- a known,
+    # documented limitation. It's left as literal text (escaped like any
+    # other non-token character) instead of crashing or producing a bogus
+    # format code.
+    from core.excel_io import _resolve_date_format
+
+    strftime_fmt, excel_fmt, dayfirst = _resolve_date_format("%A, %d %b %Y")
+
+    assert strftime_fmt == "%A, %d %b %Y"
+    assert excel_fmt == "%A, dd mmm yyyy"
+    assert dayfirst is False
+
+
+def test_resolve_date_format_presets_are_unaffected_by_the_strftime_translation():
+    from core.excel_io import _resolve_date_format
+
+    assert _resolve_date_format("YYYY-MM-DD") == ("%Y-%m-%d", "yyyy\\-mm\\-dd", False)
+    assert _resolve_date_format("DD/MM/YYYY") == ("%d/%m/%Y", "dd\\/mm\\/yyyy", True)
+    assert _resolve_date_format("DD-MMM-YY") == ("%d-%b-%y", "dd\\-mmm\\-yy", True)
+    assert _resolve_date_format("MM/DD/YYYY") == ("%m/%d/%Y", "mm\\/dd\\/yyyy", False)
+
+
 def test_append_leads_preserves_external_link_parts_byte_for_byte(tmp_path):
     path = str(tmp_path / "template.xlsx")
     wb = openpyxl.Workbook()

@@ -64,3 +64,40 @@ def test_empty_config_produces_no_flags():
     new_leads = pd.DataFrame([{"Email": "a@x.com", "CID": "1"}])
     outcome = check_lead_template_mandatory_columns(new_leads, FM, LeadTemplateMappingConfig())
     assert outcome.review == {} and outcome.fail == {}
+
+
+def test_mandatory_column_resolves_via_known_field_synonym_like_append_leads_does():
+    # Regression test (Finding 1, final review): the mandatory-column check
+    # previously only tried a manual source_column override, then jumped
+    # straight to find_passthrough_lead_column's fuzzy-match chain -- it
+    # never tried the plain field-synonym tier append_leads' own
+    # _resolve_passthrough_columns (via resolve_one_header_source) tries
+    # first. Marking "Email Address" mandatory with a leadfile column
+    # literally named "Email" used to flag every lead as unresolvable
+    # ("no leadfile column found") even though append_leads would
+    # correctly write it via the email synonym.
+    new_leads = pd.DataFrame([{"Email": "a@x.com", "CID": "1"}])
+    config = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Email Address", mandatory=True),
+    ])
+
+    outcome = check_lead_template_mandatory_columns(new_leads, FM, config)
+
+    assert outcome.review == {}
+
+
+def test_mandatory_column_resolves_via_target_field_mapping_role_like_append_leads_does():
+    # Same bug, exercised via the OTHER tier append_leads tries before
+    # fuzzy matching: the Lead Template's own target_field_mapping role
+    # (e.g. its "email" field mapped to header "Email Address"), which
+    # resolves through field_mapping.email regardless of any synonym text
+    # match at all.
+    new_leads = pd.DataFrame([{"Email": "a@x.com", "CID": "1"}])
+    target_fm = FieldMapping(email="Email Address", first_name="", last_name="", company="", cid="")
+    config = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Email Address", mandatory=True),
+    ])
+
+    outcome = check_lead_template_mandatory_columns(new_leads, FM, config, target_fm)
+
+    assert outcome.review == {}
