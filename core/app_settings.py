@@ -118,3 +118,20 @@ def save_integrate_credentials(api_key: str, api_secret: str) -> None:
     updated["integrate_api_key"] = api_key.strip()
     updated["integrate_api_secret"] = api_secret.strip()
     save_app_settings(updated)
+
+
+def get_google_sheets_key_path() -> str:
+    # A Google service-account JSON key is a live credential file --
+    # only its local filesystem PATH is stored here, in the plain local
+    # app_settings.json, same reasoning as get_jira_settings/
+    # get_integrate_credentials. The key file's actual CONTENT is never
+    # read or copied by this function -- core.google_sheets_client reads
+    # it directly from this path at call time.
+    settings = load_app_settings()
+    return settings.get("google_sheets_key_path", "")
+
+
+def save_google_sheets_key_path(path: str) -> None:
+    updated = load_app_settings()
+    updated["google_sheets_key_path"] = path.strip()
+    save_app_settings(updated)

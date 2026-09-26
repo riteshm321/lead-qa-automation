@@ -165,3 +165,11 @@ def test_save_and_get_integrate_credentials_round_trip(tmp_path, monkeypatch):
     assert get_integrate_credentials() == ("", "")
     save_integrate_credentials("  key123  ", "secret456")
     assert get_integrate_credentials() == ("key123", "secret456")
+
+
+def test_save_and_get_google_sheets_key_path_round_trip(tmp_path, monkeypatch):
+    from core.app_settings import get_google_sheets_key_path, save_google_sheets_key_path
+    monkeypatch.chdir(tmp_path)
+    assert get_google_sheets_key_path() == ""
+    save_google_sheets_key_path("  C:\\keys\\service-account.json  ")
+    assert get_google_sheets_key_path() == "C:\\keys\\service-account.json"

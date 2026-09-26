@@ -3,5 +3,6 @@ pandas>=2.2
 openpyxl>=3.1
 rapidfuzz>=3.9
 requests>=2.31
+gspread
 pywin32>=306; sys_platform == "win32"
 psutil>=5.9; sys_platform == "win32"
