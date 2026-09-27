@@ -43,3 +43,46 @@ def test_sidebar_time_saved_card_reflects_recorded_activity(tmp_path, monkeypatc
     sidebar_markdown = "\n".join(m.value for m in at.sidebar.markdown)
     assert "2" in sidebar_markdown  # 2 total processes across both users
     assert "30m" in sidebar_markdown  # 2 * 15 min saved = 30m
+
+
+def test_sidebar_shows_quit_app_button(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+
+    assert not at.exception
+    assert any(b.label == "Quit App" for b in at.sidebar.button)
+
+
+def test_quit_app_button_requires_confirmation_before_exiting(tmp_path, monkeypatch):
+    # The actual quit is os._exit(0), which would kill the test process
+    # itself -- patch it out and assert on whether it was called, the same
+    # way the real button only calls it after a second, explicit click.
+    calls = []
+    monkeypatch.setattr("core.branding._quit_app", lambda: calls.append(True))
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(b for b in at.sidebar.button if b.label == "Quit App").click().run()
+
+    assert not calls
+    assert any("quit" in w.value.lower() for w in at.sidebar.warning)
+
+    next(b for b in at.sidebar.button if b.label == "Confirm quit").click().run()
+    assert calls == [True]
+
+
+def test_quit_app_cancel_dismisses_the_confirmation_without_exiting(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("core.branding._quit_app", lambda: calls.append(True))
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(b for b in at.sidebar.button if b.label == "Quit App").click().run()
+    next(b for b in at.sidebar.button if b.label == "Cancel").click().run()
+
+    assert not calls
+    assert not any("quit" in w.value.lower() for w in at.sidebar.warning)
+    assert any(b.label == "Quit App" for b in at.sidebar.button)

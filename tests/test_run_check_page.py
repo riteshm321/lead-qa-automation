@@ -1832,7 +1832,108 @@ def test_finalize_writes_valid_leads_to_google_sheets_with_date_format_applied(t
             "Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee",
             "Company_Name": "Beta", "CID": "1", "Opt-In Date": "03/05/2026",
         }],
+        clear_existing=False,
     )
+
+
+def test_finalize_google_sheets_write_passes_clear_existing_from_profile(tmp_path, monkeypatch):
+    # profile.google_sheets.clear_existing=True must reach append_rows as
+    # clear_existing=True -- proves the Client Setup checkbox (gs_clear_existing)
+    # actually controls write-time behavior, not just gets saved and ignored.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_google_sheets_key_path
+    key_path = str(tmp_path / "key.json")
+    save_google_sheets_key_path(key_path)
+
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        google_sheets=GoogleSheetsConfig(
+            enabled=True,
+            tabs=[GoogleSheetTab(cid="1", sheet_id="sheet123", worksheet_name="Sheet1")],
+            clear_existing=True,
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta", "CID": "1"},
+    ])
+    result = PipelineResult(valid_indices=[0], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    with patch("core.google_sheets_client.read_sheet_headers", return_value=[
+        "Email_Address", "First_Name", "Last_Name", "Company_Name", "CID",
+    ]), patch("core.google_sheets_client.append_rows") as mock_append_rows:
+        finalize_button = next(b for b in at.button if b.label == "Finalize")
+        finalize_button.click().run()
+    assert not at.exception
+
+    assert mock_append_rows.call_args.kwargs["clear_existing"] is True
+
+
+def test_finalize_google_sheets_clear_existing_only_clears_once_per_shared_sheet_target(tmp_path, monkeypatch):
+    # Two different CIDs routed to the SAME sheet_id/worksheet_name (an
+    # unusual but valid config) must not clear twice in one run -- a second
+    # clear_existing=True call would wipe out the first CID's rows this
+    # exact run just wrote, before Finalize even finishes. Mirrors the
+    # multi-target-clear trap Box Tracker's own clear_existing already
+    # guards against.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_google_sheets_key_path
+    key_path = str(tmp_path / "key.json")
+    save_google_sheets_key_path(key_path)
+
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        google_sheets=GoogleSheetsConfig(
+            enabled=True,
+            tabs=[
+                GoogleSheetTab(cid="1", sheet_id="sheet123", worksheet_name="Sheet1"),
+                GoogleSheetTab(cid="2", sheet_id="sheet123", worksheet_name="Sheet1"),
+            ],
+            clear_existing=True,
+        ),
+    )
+    save_profile(profile, get_clients_dir())
+
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta", "CID": "1"},
+        {"Email_Address": "amy@new.com", "First_Name": "Amy", "Last_Name": "Ng", "Company_Name": "Gamma", "CID": "2"},
+    ])
+    result = PipelineResult(valid_indices=[0, 1], refund_reasons={})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = result
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+
+    with patch("core.google_sheets_client.read_sheet_headers", return_value=[
+        "Email_Address", "First_Name", "Last_Name", "Company_Name", "CID",
+    ]), patch("core.google_sheets_client.append_rows") as mock_append_rows:
+        finalize_button = next(b for b in at.button if b.label == "Finalize")
+        finalize_button.click().run()
+    assert not at.exception
+
+    assert mock_append_rows.call_count == 2
+    clear_flags = [c.kwargs["clear_existing"] for c in mock_append_rows.call_args_list]
+    assert clear_flags.count(True) == 1
+    assert clear_flags.count(False) == 1
 
 
 def test_finalize_skips_google_sheets_write_when_key_path_not_set(tmp_path, monkeypatch):

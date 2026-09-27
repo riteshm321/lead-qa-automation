@@ -1,4 +1,5 @@
 import gspread
+from gspread.utils import rowcol_to_a1
 
 
 class GoogleSheetsError(Exception):
@@ -36,7 +37,10 @@ def read_sheet_headers(key_path: str, sheet_id: str, worksheet_name: str) -> lis
         raise GoogleSheetsError(f"Couldn't read headers from Sheet \"{sheet_id}\": {exc}") from exc
 
 
-def append_rows(key_path: str, sheet_id: str, worksheet_name: str, rows: list[dict[str, str]]) -> int:
+def append_rows(
+    key_path: str, sheet_id: str, worksheet_name: str, rows: list[dict[str, str]],
+    clear_existing: bool = False,
+) -> int:
     """Appends each row (already resolved to {header: value} by the
     caller, via core.excel_io.resolve_lead_template_rules +
     _resolve_passthrough_columns) after the Sheet's last real row, using
@@ -46,16 +50,32 @@ def append_rows(key_path: str, sheet_id: str, worksheet_name: str, rows: list[di
     value, not left as plain text, matching how append_leads' xlsx branch
     requires a genuine date value rather than text.
 
+    clear_existing defaults to False: a second run against the same Sheet
+    preserves whatever leads are already there and adds the new ones after
+    them, same as append_leads' own clear_existing default for Excel. Set
+    it to True to wipe every data row (everything below the header) before
+    appending -- e.g. for a client who wants each run's Sheet to reflect
+    only that run's leads, not an ever-growing accumulation.
+
     Raises GoogleSheetsError on any failure -- a lead this function
     believes it sent is never silently dropped.
     """
-    if not rows:
+    if not rows and not clear_existing:
         return 0
     worksheet = _open_worksheet(key_path, sheet_id, worksheet_name)
     try:
         headers = worksheet.row_values(1)
-        values = [[row.get(header, "") for header in headers] for row in rows]
-        worksheet.append_rows(values, value_input_option="USER_ENTERED")
+        if clear_existing:
+            # batch_clear only clears cell VALUES in the given range -- it
+            # never deletes/resizes rows or touches formatting, so this
+            # can't accidentally remove the header row (start=row 2) or
+            # shrink the sheet the way Worksheet.clear() or delete_rows()
+            # would.
+            end_cell = rowcol_to_a1(max(worksheet.row_count, 2), max(worksheet.col_count, len(headers) or 1))
+            worksheet.batch_clear([f"A2:{end_cell}"])
+        if rows:
+            values = [[row.get(header, "") for header in headers] for row in rows]
+            worksheet.append_rows(values, value_input_option="USER_ENTERED")
         return len(rows)
     except Exception as exc:
         raise GoogleSheetsError(f"Failed to append {len(rows)} lead(s) to Sheet \"{sheet_id}\": {exc}") from exc

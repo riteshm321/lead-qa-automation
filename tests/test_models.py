@@ -104,6 +104,10 @@ def test_client_profile_defaults_to_a_disabled_google_sheets_config():
     assert profile.google_sheets.enabled is False
     assert profile.google_sheets.tabs == []
     assert profile.google_sheets.mapping.rules == []
+    # Preserve-and-append is the safe default -- a second run against the
+    # same Sheet must never silently wipe leads a colleague already sent,
+    # same reasoning as lead_template_clear_existing's own False default.
+    assert profile.google_sheets.clear_existing is False
 
 
 def test_google_sheet_tab_defaults():

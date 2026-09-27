@@ -508,6 +508,7 @@ def test_google_sheets_config_round_trips_through_save_and_load(tmp_path, monkey
             mapping=LeadTemplateMappingConfig(rules=[
                 LeadTemplateColumnRule(template_column="Work Email", mandatory=True),
             ]),
+            clear_existing=True,
         ),
     )
     save_profile(profile, get_clients_dir())
@@ -517,3 +518,24 @@ def test_google_sheets_config_round_trips_through_save_and_load(tmp_path, monkey
     assert loaded.google_sheets.enabled is True
     assert loaded.google_sheets.tabs == profile.google_sheets.tabs
     assert loaded.google_sheets.mapping.rules == profile.google_sheets.mapping.rules
+    assert loaded.google_sheets.clear_existing is True
+
+
+def test_load_profile_defaults_google_sheets_clear_existing_for_old_schema_json(tmp_path, monkeypatch):
+    # A profile saved before clear_existing existed has no such key in its
+    # google_sheets JSON block at all -- must default to False (preserve),
+    # not crash on the missing key.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    clients_dir = get_clients_dir()
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "Old Schema Client.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "Old Schema Client", "accumulated_report_path": "acc.xlsx",
+            "google_sheets": {"enabled": True, "tabs": [], "mapping": {"rules": []}},
+        }, f)
+
+    loaded = load_profile("Old Schema Client", clients_dir)
+    assert loaded.google_sheets.clear_existing is False

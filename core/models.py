@@ -158,6 +158,12 @@ class GoogleSheetsConfig:
     # Sheet tabs, same as lead_template_mapping is shared across all
     # lead_template_tabs today.
     mapping: LeadTemplateMappingConfig = field(default_factory=LeadTemplateMappingConfig)
+    # Defaults to False (preserve-and-append) for the same reason
+    # ClientProfile.lead_template_clear_existing does: append_rows already
+    # appends after the Sheet's existing rows, so a second run never wipes
+    # a colleague's leads unless a client explicitly opts into a fresh
+    # Sheet each run.
+    clear_existing: bool = False
 
 
 @dataclass

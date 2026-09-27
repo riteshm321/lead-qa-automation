@@ -882,6 +882,13 @@ if "run_result" in st.session_state:
                 _gs_manual_overrides, _gs_date_formats = resolve_lead_template_rules(profile.google_sheets.mapping)
                 _gs_tab_by_cid = {t.cid: t for t in profile.google_sheets.tabs}
                 _gs_unmatched_cids = []
+                # Two different CIDs can point at the same Sheet tab -- track
+                # which (sheet_id, worksheet_name) targets this run has already
+                # cleared so a later CID's clear_existing=True doesn't wipe out
+                # an earlier CID's rows this same run just wrote (the same
+                # multi-target-clear trap Box Tracker's own clear_existing
+                # handling already has to guard against).
+                _gs_cleared_targets: set[tuple[str, str]] = set()
                 for cid, group in valid_leads_df.groupby(valid_leads_df[profile.field_mapping.cid].astype(str)):
                     tab = _gs_tab_by_cid.get(cid)
                     if tab is None:
@@ -903,7 +910,12 @@ if "run_result" in st.session_state:
                                 else:
                                     _row[_header] = str(lead_row.get(_source_col, "") or "") if _source_col else ""
                             _gs_rows.append(_row)
-                        google_sheets_client.append_rows(_gs_key_path, tab.sheet_id, tab.worksheet_name, _gs_rows)
+                        _gs_target = (tab.sheet_id, tab.worksheet_name)
+                        _gs_should_clear = profile.google_sheets.clear_existing and _gs_target not in _gs_cleared_targets
+                        google_sheets_client.append_rows(
+                            _gs_key_path, tab.sheet_id, tab.worksheet_name, _gs_rows,
+                            clear_existing=_gs_should_clear)
+                        _gs_cleared_targets.add(_gs_target)
                     except GoogleSheetsError as exc:
                         render_error(exc)
                 if _gs_unmatched_cids:

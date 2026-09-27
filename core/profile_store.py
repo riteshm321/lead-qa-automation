@@ -65,6 +65,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         tabs=[GoogleSheetTab(**t) for t in _gs_data.get("tabs", [])],
         mapping=LeadTemplateMappingConfig(
             rules=[LeadTemplateColumnRule(**r) for r in _gs_mapping_data.get("rules", [])]),
+        clear_existing=_gs_data.get("clear_existing", False),
     )
 
     convertr = data.get("convertr") or {}

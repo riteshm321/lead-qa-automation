@@ -1,3 +1,4 @@
+import os
 import textwrap
 
 import streamlit as st
@@ -62,12 +63,44 @@ def configure_page(page_title: str) -> dict:
         auth_gate.logout()
         st.rerun()
 
+    _render_quit_app_button()
+
     st.sidebar.divider()
     with st.sidebar.container(border=True):
         st.caption("Tool Made By")
         st.caption("👤 Ritesh Majumdar")
         st.caption("💼 Sr. Client Reporting Specialist")
     return user
+
+
+_PENDING_QUIT_KEY = "_pending_quit_app"
+
+
+def _quit_app() -> None:
+    # os._exit bypasses normal interpreter teardown (atexit hooks, thread
+    # joins) and kills the process immediately -- needed because this is a
+    # packaged, one-process-per-window desktop-style app (see launcher.py):
+    # a plain sys.exit() inside a Streamlit script rerun is caught by
+    # Streamlit's own script-runner machinery and would just end that one
+    # rerun, not stop the server process or close the console window.
+    os._exit(0)
+
+
+def _render_quit_app_button() -> None:
+    # Two-step confirm, same pattern as Settings' "Remove account" button --
+    # this ends the whole app process, not just the current page, so a
+    # stray click deserves a confirmation, not an instant exit.
+    if st.session_state.get(_PENDING_QUIT_KEY):
+        st.sidebar.warning("⚠️ Quit the app? Close any open browser tab afterward.")
+        _col_confirm, _col_cancel = st.sidebar.columns(2)
+        if _col_confirm.button("Confirm quit", key="_confirm_quit_button", type="primary", use_container_width=True):
+            _quit_app()
+        if _col_cancel.button("Cancel", key="_cancel_quit_button", use_container_width=True):
+            st.session_state.pop(_PENDING_QUIT_KEY, None)
+            st.rerun()
+    elif st.sidebar.button("Quit App", key="_quit_app_button", use_container_width=True):
+        st.session_state[_PENDING_QUIT_KEY] = True
+        st.rerun()
 
 
 @st.cache_data(ttl=30, show_spinner=False)

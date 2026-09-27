@@ -878,6 +878,7 @@ with tab_basics:
             key="gs_enabled")
         gs_tabs: list[GoogleSheetTab] = []
         gs_mapping_rules: list[LeadTemplateColumnRule] = []
+        gs_clear_existing = False
         if gs_enabled:
             st.caption(
                 "CID → Sheet mapping, one per line, format `CID,Sheet URL` or `CID,Sheet URL,worksheet name` "
@@ -902,6 +903,15 @@ with tab_basics:
                 _match = _re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", _url)
                 if _cid and _match:
                     gs_tabs.append(GoogleSheetTab(cid=_cid, sheet_id=_match.group(1), worksheet_name=_worksheet))
+
+            gs_clear_existing = st.checkbox(
+                "Clear existing leads before adding new ones",
+                value=profile.google_sheets.clear_existing if profile else False,
+                key="gs_clear_existing",
+                help="On: wipes every data row in each Sheet (keeping the header row) before adding this "
+                     "run's leads — for a Sheet that's re-sent fresh each time rather than accumulated. "
+                     "Off (default): new leads are appended below whatever's already there.",
+            )
 
             _gs_key_path = get_google_sheets_key_path()
             _gs_sample_headers: list[str] = []
@@ -1528,6 +1538,7 @@ if st.button("💾 Save Client Profile", type="primary"):
                 enabled=gs_enabled,
                 tabs=gs_tabs if gs_enabled else [],
                 mapping=LeadTemplateMappingConfig(rules=gs_mapping_rules if gs_enabled else []),
+                clear_existing=gs_clear_existing if gs_enabled else False,
             ),
             lead_template_clear_existing=(
                 lead_template_clear_existing if client_mode == "Lead QA" else False),
