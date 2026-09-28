@@ -624,6 +624,90 @@ def test_reuploading_the_same_file_skips_leads_already_uploaded_to_that_allocati
     assert all("already uploaded to this allocation previously" in r for r in results_df["Result"])
 
 
+def test_rejected_lead_can_be_resent_without_resending_already_accepted_leads(tmp_path, monkeypatch):
+    # Real, reported bug: Enhancio's immediate import response marks EVERY
+    # lead "submitted" (that's just "received, will be decided later"), so
+    # both an eventually-accepted and an eventually-rejected lead get
+    # recorded as "already uploaded" for their allocation at upload time.
+    # Reconciling ("Write to Accumulated & Refund") must free up a
+    # REJECTED lead's email from that memory -- otherwise re-uploading the
+    # same file skips it right alongside the genuinely-accepted lead, and
+    # the only way to resend it is the "resend duplicates" checkbox, which
+    # also resends the already-accepted lead right back to Enhancio.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_enhancio_client_id("CID123")
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([
+        {"CID": "120022", "Email": "accepted@x.com", "First Name": "A", "Last Name": "One", "Company": "Acme"},
+        {"CID": "120028", "Email": "rejected@x.com", "First Name": "B", "Last Name": "Two", "Company": "Acme"},
+    ]).to_csv(leads_csv, index=False)
+
+    import_calls = []
+
+    def _fake_import_leads(token, allocation_uid, leads):
+        import_calls.append((allocation_uid, leads))
+        return {"submitted": [
+            {"leadId": f"lead-{allocation_uid}-{i}", "status": "Submitted", "email": lead["Email Address"]}
+            for i, lead in enumerate(leads)
+        ], "errors": []}
+
+    def _fake_get_lead_status(token, lead_ids):
+        return [
+            {"leadId": lead_id, "status": "Accepted", "email": "accepted@x.com"}
+            if "L-22256" in lead_id else
+            {"leadId": lead_id, "status": "Rejected", "email": "rejected@x.com", "rejectionReason": "Lead Duplicate"}
+            for lead_id in lead_ids
+        ]
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
+         patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads), \
+         patch("core.enhancio_client.get_lead_status", side_effect=_fake_get_lead_status):
+        # First upload: both leads go through, Enhancio "submits" both.
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+        assert not at.exception
+        assert len(import_calls) == 2
+
+        # Reconcile: one accepted, one rejected.
+        next(b for b in at.button if b.label == "Fetch decisions from Enhancio").click().run()
+        assert not at.exception
+        next(b for b in at.button if b.label == "Write to Accumulated & Refund").click().run()
+        assert not at.exception
+
+        import_calls.clear()
+
+        # Second upload of the SAME file: the accepted lead must still be
+        # skipped as a duplicate, but the rejected (now refunded) lead must
+        # go out again -- without the "resend duplicates" checkbox.
+        at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at2.run()
+        next(s for s in at2.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at2.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at2.button if b.label == "Upload to Enhancio").click().run()
+        assert not at2.exception
+
+    assert len(import_calls) == 1
+    resent_allocation, resent_leads = import_calls[0]
+    assert resent_allocation == "L-22257"
+    assert len(resent_leads) == 1
+    assert resent_leads[0]["Email Address"] == "rejected@x.com"
+
+    results_df = at2.session_state["enhancio_upload_results"]
+    skipped = results_df[results_df["Result"].str.startswith("⏭️")]
+    assert len(skipped) == 1
+    assert skipped.iloc[0]["Email"] == "accepted@x.com"
+
+
 def test_reupload_checkbox_lets_you_resend_an_already_uploaded_lead(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")

@@ -6,7 +6,8 @@ from core.app_settings import save_app_settings
 from core.enhancio_sync import (
     rejection_reason_from_status_entry, select_rows_for_test_mode, filter_already_uploaded,
     load_pending_leads, save_pending_leads, remove_pending_leads,
-    load_uploaded_emails, save_uploaded_emails, clear_uploaded_emails, format_enhancio_field_value,
+    load_uploaded_emails, save_uploaded_emails, remove_uploaded_emails, clear_uploaded_emails,
+    format_enhancio_field_value,
 )
 
 
@@ -149,6 +150,17 @@ def test_clear_uploaded_emails_resets_an_allocations_memory(tmp_path, monkeypatc
 
     clear_uploaded_emails("Amazon Business EMEA", "L-22256")
     assert load_uploaded_emails("Amazon Business EMEA", "L-22256") == set()
+
+
+def test_remove_uploaded_emails_drops_only_the_given_emails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    save_uploaded_emails("Amazon Business EMEA", "L-22256", {"a@x.com", "b@x.com", "c@x.com"})
+
+    remove_uploaded_emails("Amazon Business EMEA", "L-22256", {" A@X.com ", "z@x.com"})
+
+    assert load_uploaded_emails("Amazon Business EMEA", "L-22256") == {"b@x.com", "c@x.com"}
 
 
 def test_filter_already_uploaded_splits_by_normalized_email():

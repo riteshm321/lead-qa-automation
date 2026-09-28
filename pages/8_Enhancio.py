@@ -18,8 +18,8 @@ from core.enhancio_client import EnhancioError
 from core.errors import render_error
 from core.enhancio_sync import (
     rejection_reason_from_status_entry, load_pending_leads, save_pending_leads, remove_pending_leads,
-    load_uploaded_emails, save_uploaded_emails, clear_uploaded_emails, filter_already_uploaded,
-    select_rows_for_test_mode, format_enhancio_field_value,
+    load_uploaded_emails, save_uploaded_emails, remove_uploaded_emails, clear_uploaded_emails,
+    filter_already_uploaded, select_rows_for_test_mode, format_enhancio_field_value,
 )
 from core.excel_io import (
     read_leadfile, append_leads, read_sheet_as_dataframe, set_status_for_emails, dataframe_to_excel_bytes,
@@ -633,6 +633,19 @@ if _accepted_rows or _rejected_rows:
                 profile.accumulated_report_path, profile.refund_tab_name,
                 rejected_df, _leadfile_mapping, today, reasons=reasons,
             )
+            # A rejected lead was only ever "submitted" to Enhancio (received
+            # for evaluation), never actually accepted -- free its email back
+            # up from the allocation's already-uploaded memory so the next
+            # upload of the same file resends just this lead, not every
+            # already-accepted lead alongside it (see remove_uploaded_emails).
+            _rejected_emails_by_allocation: dict[str, set[str]] = defaultdict(set)
+            for _, _row in rejected_df.iterrows():
+                _allocation_uid = _allocation_by_cid.get(str(_row.get(_leadfile_mapping.cid, "")))
+                _email = _row.get(_leadfile_mapping.email, "")
+                if _allocation_uid and _email:
+                    _rejected_emails_by_allocation[_allocation_uid].add(str(_email))
+            for _allocation_uid, _emails in _rejected_emails_by_allocation.items():
+                remove_uploaded_emails(client_name, _allocation_uid, _emails)
 
         remove_pending_leads(client_name, resolved_ids)
         st.session_state["enhancio_reconcile_summary"] = {

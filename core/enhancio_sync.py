@@ -237,6 +237,25 @@ def save_uploaded_emails(client_name: str, allocation_uid: str, emails: set[str]
     atomic_write_json(path, sorted(existing))
 
 
+def remove_uploaded_emails(client_name: str, allocation_uid: str, emails: set[str]) -> None:
+    """Frees up specific emails from an allocation's already-uploaded
+    memory -- called when reconciling a REJECTED lead (see
+    rejection_reason_from_status_entry's caller), since "submitted" at
+    upload time only means Enhancio received the lead for evaluation, not
+    that it was accepted. Without this, a rejected lead's email stays
+    marked already-uploaded forever, so re-uploading the same file skips
+    it right alongside genuinely-accepted leads -- the only way to resend
+    it becomes the "resend duplicates" checkbox, which also resends every
+    already-accepted lead in the file right back to Enhancio.
+    """
+    path = _uploaded_emails_path(client_name, allocation_uid)
+    if not path:
+        return
+    existing = load_uploaded_emails(client_name, allocation_uid)
+    to_remove = {_normalize_email(e) for e in emails}
+    atomic_write_json(path, sorted(existing - to_remove))
+
+
 def clear_uploaded_emails(client_name: str, allocation_uid: str) -> None:
     """Wipes this allocation's already-uploaded-email memory, so the next
     upload treats every lead as new again -- for a deliberate re-test (test
