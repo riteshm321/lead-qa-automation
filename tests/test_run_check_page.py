@@ -2120,3 +2120,127 @@ def test_summary_shows_four_bordered_metric_cards(tmp_path, monkeypatch):
     assert [m.proto.icon for m in cards] == [
         ":material/group:", ":material/check_circle:", ":material/undo:", ":material/flag:"]
     assert all(m.proto.show_border for m in cards)
+
+
+def _two_review_leads_page(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    save_profile(ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm),
+                 get_clients_dir())
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+        {"Email_Address": "b@x.com", "First_Name": "B", "Last_Name": "Two", "Company_Name": "Y", "CID": "1"},
+    ])
+    at.session_state["run_result"] = PipelineResult(valid_indices=[], refund_reasons={}, review_reasons={
+        0: [ReviewDetail(check="Duplicate", message="reason a")],
+        1: [ReviewDetail(check="Duplicate", message="reason b")],
+    })
+    at.session_state["run_result_for"] = "Test Client"
+    return at, acc_path
+
+
+def _review_only_editor(edited_review):
+    # patch("streamlit.data_editor") replaces BOTH editors on the page. Hand
+    # the canned table back only to the Needs Review editor (the only one
+    # with a "Select" column) and pass every other table (e.g. the Refund
+    # Reasons editor that appears after a lead is refunded) through unedited.
+    def _editor(data, *args, **kwargs):
+        return edited_review if "Select" in data.columns else data
+    return _editor
+
+
+def test_review_bulk_refund_selected_leads(tmp_path, monkeypatch):
+    at, _ = _two_review_leads_page(tmp_path, monkeypatch)
+    at.run()
+    assert not at.exception
+    edited = pd.DataFrame([
+        {"Select": True, "Row": 2, "Email": "a@x.com", "Company": "X", "CID": "1", "Reasons": "Duplicate - reason a"},
+        {"Select": False, "Row": 3, "Email": "b@x.com", "Company": "Y", "CID": "1", "Reasons": "Duplicate - reason b"},
+    ])
+    with patch("streamlit.data_editor", side_effect=_review_only_editor(edited)):
+        next(b for b in at.button if b.key == "review_bulk_refund").click().run()
+    assert not at.exception
+
+    result = at.session_state["run_result"]
+    assert result.refund_reasons == {0: "Duplicate - reason a"}
+    assert list(result.review_reasons) == [1]
+    assert result.valid_indices == []
+
+
+def test_needs_review_table_offers_a_per_row_action_column(tmp_path, monkeypatch):
+    at, _ = _two_review_leads_page(tmp_path, monkeypatch)
+    calls = []
+
+    def _spy(data, *args, **kwargs):
+        calls.append((data, kwargs))
+        return data
+
+    with patch("streamlit.data_editor", side_effect=_spy):
+        at.run()
+    assert not at.exception
+
+    review_data, review_kwargs = next((d, k) for d, k in calls if "Select" in d.columns)
+    assert list(review_data.columns) == ["Select", "Row", "Email", "Company", "CID", "Reasons", "Action"]
+    assert review_data["Action"].isna().all()  # blank by default
+    assert "Action" not in review_kwargs["disabled"]
+    assert review_kwargs["column_config"]["Action"]["type_config"] == {
+        "type": "selectbox", "options": ["Approve as valid", "Mark as refund"]}
+
+    apply_button = next(b for b in at.button if b.key == "review_apply_row_actions")
+    assert apply_button.label == "Apply 0 row decision(s)"
+    assert apply_button.disabled is True
+    # The bulk select-and-act flow stays alongside it, untouched.
+    assert {"review_select_all", "review_clear_all", "review_bulk_approve", "review_bulk_refund"} <= {
+        b.key for b in at.button}
+
+
+def test_row_decisions_approve_and_refund_in_one_click_then_finalize_writes_both(tmp_path, monkeypatch):
+    at, acc_path = _two_review_leads_page(tmp_path, monkeypatch)
+    at.run()
+    edited = pd.DataFrame([
+        {"Select": False, "Row": 2, "Email": "a@x.com", "Company": "X", "CID": "1",
+         "Reasons": "Duplicate - reason a", "Action": "Approve as valid"},
+        {"Select": False, "Row": 3, "Email": "b@x.com", "Company": "Y", "CID": "1",
+         "Reasons": "Duplicate - reason b", "Action": "Mark as refund"},
+    ])
+    with patch("streamlit.data_editor", side_effect=_review_only_editor(edited)):
+        next(b for b in at.button if b.key == "review_apply_row_actions").click().run()
+    assert not at.exception
+
+    result = at.session_state["run_result"]
+    assert result.valid_indices == [0]
+    assert result.refund_reasons == {1: "Duplicate - reason b"}
+    assert result.review_reasons == {}
+
+    # The existing write path is unchanged: Finalize sends each lead where
+    # the row decision put it.
+    next(b for b in at.button if b.label == "Finalize").click().run()
+    assert not at.exception
+    wb = openpyxl.load_workbook(acc_path)
+    acc_emails = {r[0] for r in wb["Accumulated"].iter_rows(min_row=2, values_only=True) if r[0] is not None}
+    refund_emails = {r[0] for r in wb["Refund"].iter_rows(min_row=2, values_only=True) if r[0] is not None}
+    assert "a@x.com" in acc_emails
+    assert refund_emails == {"b@x.com"}
+
+
+def test_row_decisions_ignore_select_ticks_and_leave_undecided_rows_in_review(tmp_path, monkeypatch):
+    at, _ = _two_review_leads_page(tmp_path, monkeypatch)
+    at.run()
+    edited = pd.DataFrame([
+        {"Select": True, "Row": 2, "Email": "a@x.com", "Company": "X", "CID": "1",
+         "Reasons": "Duplicate - reason a", "Action": None},
+        {"Select": False, "Row": 3, "Email": "b@x.com", "Company": "Y", "CID": "1",
+         "Reasons": "Duplicate - reason b", "Action": "Approve as valid"},
+    ])
+    with patch("streamlit.data_editor", side_effect=_review_only_editor(edited)):
+        next(b for b in at.button if b.key == "review_apply_row_actions").click().run()
+    assert not at.exception
+
+    result = at.session_state["run_result"]
+    assert result.valid_indices == [1]
+    assert list(result.review_reasons) == [0]  # ticked but undecided -> still needs review
+    assert result.refund_reasons == {}

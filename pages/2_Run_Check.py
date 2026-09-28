@@ -34,6 +34,7 @@ from core.matching import load_alias_groups, add_alias_pair
 from core.models import FieldMapping
 from core.pipeline import run_pipeline, apply_refund_overrides
 from core.profile_store import load_profile, save_profile
+from core.review_actions import REVIEW_ACTIONS, approve_review_leads, refund_review_leads, split_row_actions
 from core.toast import queue_toast_before_rerun, show_pending_toast
 from core.ui_components import render_metric_cards, render_stepper
 from core.upload_cache import resolve_upload
@@ -579,7 +580,8 @@ if "run_result" in st.session_state:
 
     if result.review_reasons:
         st.subheader("Needs Review")
-        st.caption("Tick leads below, then act on them in bulk.")
+        st.caption("Pick an **Action** for individual leads and click **Apply row decisions**, or tick "
+                   "**Select** on several and act on them in bulk. Either one resets the other's picks.")
         fm = profile.field_mapping
         review_indices = list(result.review_reasons.keys())
 
@@ -620,29 +622,49 @@ if "run_result" in st.session_state:
                 "Company": new_leads.loc[idx].get(fm.company, ""),
                 "CID": new_leads.loc[idx].get(fm.cid, ""),
                 "Reasons": "; ".join(str(d) for d in result.review_reasons[idx]),
+                "Action": None,
             }
             for idx in review_indices
         ])
+        # An all-None column would serialise as Arrow's null type; a string
+        # column gives the Action selectbox a blank, editable start.
+        review_table["Action"] = review_table["Action"].astype("string")
         edited_review_table = st.data_editor(
             review_table,
             key=f"review_editor_{st.session_state['review_editor_nonce']}",
             hide_index=True,
             use_container_width=True,
             disabled=["Row", "Email", "Company", "CID", "Reasons"],
-            column_config={"Select": st.column_config.CheckboxColumn(required=True)},
+            column_config={
+                "Select": st.column_config.CheckboxColumn(required=True),
+                "Action": st.column_config.SelectboxColumn(
+                    options=list(REVIEW_ACTIONS), required=False,
+                    help="Decide just this lead, then click Apply row decisions below."),
+            },
         )
         selected_review_indices = [
             idx for idx, selected in zip(review_indices, edited_review_table["Select"]) if selected
         ]
+
+        # .get(): a returned table with no Action column (as the page's
+        # existing st.data_editor-patching tests produce) means no row decisions.
+        row_approve_indices, row_refund_indices = split_row_actions(
+            review_indices, edited_review_table.get("Action", []))
+        row_decision_count = len(row_approve_indices) + len(row_refund_indices)
+        if st.button(f"Apply {row_decision_count} row decision(s)", key="review_apply_row_actions",
+                     use_container_width=True, disabled=not row_decision_count):
+            approve_review_leads(result, row_approve_indices)
+            refund_review_leads(result, row_refund_indices)
+            st.session_state["review_all_selected_default"] = False
+            st.session_state["review_editor_nonce"] += 1
+            st.rerun()
 
         col_bulk_valid, col_bulk_refund = st.columns(2)
         with col_bulk_valid:
             if st.button(f"Approve {len(selected_review_indices)} selected as valid",
                          key="review_bulk_approve", use_container_width=True,
                          disabled=not selected_review_indices):
-                for idx in selected_review_indices:
-                    result.valid_indices.append(idx)
-                    del result.review_reasons[idx]
+                approve_review_leads(result, selected_review_indices)
                 st.session_state["review_all_selected_default"] = False
                 st.session_state["review_editor_nonce"] += 1
                 st.rerun()
@@ -650,9 +672,7 @@ if "run_result" in st.session_state:
             if st.button(f"Mark {len(selected_review_indices)} selected as refund",
                          key="review_bulk_refund", use_container_width=True,
                          disabled=not selected_review_indices):
-                for idx in selected_review_indices:
-                    result.refund_reasons[idx] = "; ".join(str(d) for d in result.review_reasons[idx])
-                    del result.review_reasons[idx]
+                refund_review_leads(result, selected_review_indices)
                 st.session_state["review_all_selected_default"] = False
                 st.session_state["review_editor_nonce"] += 1
                 st.rerun()
