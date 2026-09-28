@@ -3,12 +3,15 @@ import streamlit as st
 
 from core.activity_tracker import load_all_activity, get_user_stats, format_minutes
 from core.branding import configure_page
+from core.errors import render_problem
+from core.ui_components import render_empty_state
 
 _current_user = configure_page("Activity Log")
-st.title("📊 Activity Log")
+st.title(":material/bar_chart: Activity Log")
 
 if not _current_user["is_admin"]:
-    st.warning("This page is only available to admins.")
+    render_problem("This page is only available to admins.",
+                   "Ask an admin to open it for you.", level="warning")
     st.stop()
 
 st.caption(
@@ -18,7 +21,8 @@ st.caption(
 
 _activity = load_all_activity()
 if not _activity:
-    st.caption("No client processes completed yet.")
+    render_empty_state("No client processes completed yet.",
+                       "Every successful Finalize/Confirm & Write on Run Check is logged here.", icon="history")
     st.stop()
 
 _usernames = sorted(_activity.keys())
@@ -45,29 +49,32 @@ for _username, _record in _activity.items():
             "_sort_key": _timestamp,
         })
 
-st.subheader("Process log")
-if not _rows:
-    st.caption(
-        "No logged processes yet for this filter -- processes completed before per-client logging "
-        "existed won't have individual entries here (see the per-user totals below instead)."
-    )
-else:
-    _log_df = pd.DataFrame(sorted(_rows, key=lambda r: r["_sort_key"], reverse=True)).drop(columns=["_sort_key"])
-    st.dataframe(_log_df, hide_index=True, width="stretch")
+with st.container(border=True):
+    st.subheader(":material/list_alt: Process log")
+    if not _rows:
+        render_empty_state(
+            "No logged processes yet for this filter.",
+            "Processes completed before per-client logging existed won't have individual entries here "
+            "(see the per-user totals below instead).",
+            icon="filter_list_off",
+        )
+    else:
+        _log_df = pd.DataFrame(sorted(_rows, key=lambda r: r["_sort_key"], reverse=True)).drop(columns=["_sort_key"])
+        st.dataframe(_log_df, hide_index=True, width="stretch")
 
-st.divider()
-st.subheader("Per-user totals")
-for _username, _record in sorted(_activity.items()):
-    if _selected_user != "All users" and _username != _selected_user:
-        continue
-    _stats = get_user_stats(_record)
-    _count = _record.get("process_count", 0)
-    st.markdown(
-        f"**{_username}** — {_count} process(es), {format_minutes(_stats['total_saved_minutes'])} saved "
-        f"(last: {_record.get('last_updated', '—')})"
-    )
-    st.caption(
-        f"Avg {format_minutes(_stats['avg_automated_minutes'])}/process · "
-        f"{_stats['plain_count']} Lead QA, {_stats['complex_account_count']} Complex Account · "
-        f"{_stats['distinct_clients']} distinct client(s)"
-    )
+with st.container(border=True):
+    st.subheader(":material/groups: Per-user totals")
+    for _username, _record in sorted(_activity.items()):
+        if _selected_user != "All users" and _username != _selected_user:
+            continue
+        _stats = get_user_stats(_record)
+        _count = _record.get("process_count", 0)
+        st.markdown(
+            f"**{_username}** — {_count} process(es), {format_minutes(_stats['total_saved_minutes'])} saved "
+            f"(last: {_record.get('last_updated', '—')})"
+        )
+        st.caption(
+            f"Avg {format_minutes(_stats['avg_automated_minutes'])}/process · "
+            f"{_stats['plain_count']} Lead QA, {_stats['complex_account_count']} Complex Account · "
+            f"{_stats['distinct_clients']} distinct client(s)"
+        )

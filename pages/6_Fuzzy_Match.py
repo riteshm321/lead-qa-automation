@@ -8,9 +8,10 @@ from core.branding import configure_page
 from core.errors import render_error
 from core.excel_io import read_leadfile
 from core.fuzzy_match import compare_columns, apply_match_column_colors, MATCH_COLUMN
+from core.ui_components import render_empty_state
 
 _current_user = configure_page("Fuzzy Match")
-st.title("🔍 Fuzzy Match")
+st.title(":material/search: Fuzzy Match")
 st.caption(
     "Scores how closely two columns in the same file match (e.g. the leadfile's own Job Title "
     "against a LinkedIn-derived Job Title), so you can review weak matches before sending the file "
@@ -26,23 +27,28 @@ if uploaded:
         render_error(exc)
         st.stop()
 
-    headers = list(df.columns)
-    col_a, col_b = st.columns(2)
-    column_a = col_a.selectbox("Column A (e.g. Job Title)", headers, index=0)
-    column_b = col_b.selectbox("Column B (e.g. LinkedIn Job Title)", headers, index=min(1, len(headers) - 1))
+    with st.container(border=True):
+        st.subheader(":material/compare_arrows: Compare columns")
+        headers = list(df.columns)
+        col_a, col_b = st.columns(2)
+        column_a = col_a.selectbox("Column A (e.g. Job Title)", headers, index=0)
+        column_b = col_b.selectbox("Column B (e.g. LinkedIn Job Title)", headers, index=min(1, len(headers) - 1))
 
-    if st.button("Run comparison", type="primary"):
-        result_df = compare_columns(df, column_a, column_b)
+        if st.button("Run comparison", type="primary"):
+            result_df = compare_columns(df, column_a, column_b)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = str(Path(tmp_dir) / "fuzzy_match_output.xlsx")
-            result_df.to_excel(tmp_path, index=False)
-            apply_match_column_colors(tmp_path)
-            output_bytes = Path(tmp_path).read_bytes()
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = str(Path(tmp_dir) / "fuzzy_match_output.xlsx")
+                result_df.to_excel(tmp_path, index=False)
+                apply_match_column_colors(tmp_path)
+                output_bytes = Path(tmp_path).read_bytes()
 
-        st.session_state["fuzzy_match_output"] = output_bytes
-        st.success(f"Compared {len(result_df)} row(s). Green ≥90%, yellow ≥75%, red below.")
-        st.dataframe(result_df[[column_a, column_b, MATCH_COLUMN]], hide_index=True)
+            st.session_state["fuzzy_match_output"] = output_bytes
+            st.success(f"Compared {len(result_df)} row(s). Green ≥90%, yellow ≥75%, red below.")
+            st.dataframe(result_df[[column_a, column_b, MATCH_COLUMN]], hide_index=True)
+else:
+    render_empty_state("No file uploaded yet.", "Upload an .xlsx or .csv above to compare two of its columns.",
+                       icon="upload_file")
 
 if st.session_state.get("fuzzy_match_output"):
     st.download_button(

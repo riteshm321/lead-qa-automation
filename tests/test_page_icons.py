@@ -27,6 +27,8 @@ _ALLOWED_LINE = re.compile(r'"Result"|\.str\.startswith\(|📋 Preview leads to 
 
 SWEPT_PAGES = [
     "3_Settings.py",
+    "4_Activity_Log.py",
+    "6_Fuzzy_Match.py",
 ]
 
 
