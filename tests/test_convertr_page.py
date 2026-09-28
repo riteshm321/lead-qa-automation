@@ -503,3 +503,80 @@ def test_write_to_accumulated_shows_a_toast_that_survives_the_rerun(tmp_path, mo
         assert not at.exception
 
     assert any("1 accepted" in t.value and "0 rejected" in t.value for t in at.toast)
+
+
+def test_convertr_status_strip_shows_credentials_and_jira_state(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _save_profile(str(tmp_path / "accumulated.xlsx"))  # no account credentials, no Jira ticket
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    strip = next(m.value for m in at.markdown if "badge[Account credentials" in m.value)
+    assert ":orange-badge[Account credentials ⚠ Needs setup]" in strip
+    assert ":gray-badge[Jira ticket ○ Off]" in strip
+
+    save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+    at.run()
+    strip = next(m.value for m in at.markdown if "badge[Account credentials" in m.value)
+    assert ":blue-badge[Account credentials ✓ Configured]" in strip
+
+
+def test_convertr_sections_are_icon_titled_cards_and_icons_replace_emoji(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _save_profile(str(tmp_path / "accumulated.xlsx"), jira_ticket_key="PROJ-1234")
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert at.title[0].value == ":material/link: Convertr"
+    assert [s.value for s in at.subheader] == [
+        ":material/upload: 1. Upload leads to Convertr",
+        ":material/sync: 2. Reconcile accepted/rejected leads",
+        ":material/forum: Post to Jira",
+    ]
+    post = at.button(key="convertr_jira_post")
+    assert post.label == "Post to PROJ-1234"
+    assert post.proto.icon == ":material/send:"
+
+
+def test_convertr_upload_summary_uses_icon_metric_cards(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _save_profile(str(tmp_path / "accumulated.xlsx"))
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["convertr_upload_results"] = pd.DataFrame([
+        {"CID": "44709", "Email": "a@x.com", "Result": "✅ Lead ID 1"},
+        {"CID": "44709", "Email": "b@x.com", "Result": "❌ Convertr returned 400: bad email"},
+        {"CID": "44709", "Email": "c@x.com", "Result": "⏭️ Skipped (already uploaded previously)"},
+    ])
+    at.run()
+    assert not at.exception
+    assert [m.label for m in at.metric] == ["Uploaded", "Failed", "Skipped"]
+    assert [m.value for m in at.metric] == ["1", "1", "1"]
+    assert [m.proto.icon for m in at.metric] == [
+        ":material/check_circle:", ":material/error:", ":material/skip_next:"]
+
+
+def test_convertr_download_button_and_no_credentials_error_use_icons(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _save_profile(str(tmp_path / "accumulated.xlsx"))
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([{"Email": "a@x.com", "First Name": "A", "Last Name": "One", "Company": "Acme",
+                   "CID": "120022"}]).to_csv(leads_csv, index=False)
+    with open(leads_csv, "rb") as f:
+        at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+    assert not at.exception
+    download = next(d for d in at.download_button if d.key == "convertr_preview_download")
+    assert download.proto.label == "Download these leads (.xlsx)"
+    assert download.proto.icon == ":material/download:"
+
+    next(b for b in at.button if b.label == "Upload to Convertr").click().run()
+    assert not at.exception
+    err = next(e for e in at.error if "Convertr account username/password" in e.value)
+    assert err.icon == ":material/error:"
+    assert not err.value.startswith("❌")

@@ -30,6 +30,7 @@ SWEPT_PAGES = [
     "4_Activity_Log.py",
     "6_Fuzzy_Match.py",
     "5_Box_Tracker.py",
+    "7_Convertr.py",
 ]
 
 
