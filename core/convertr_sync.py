@@ -134,3 +134,21 @@ def save_uploaded_emails(client_name: str, emails: set[str]) -> None:
     existing = load_uploaded_emails(client_name)
     existing.update(_normalize_email(e) for e in emails if _normalize_email(e))
     atomic_write_json(path, sorted(existing))
+
+
+def remove_uploaded_emails(client_name: str, emails: set[str]) -> None:
+    """Frees up specific emails from this client's already-uploaded
+    memory -- called when reconciling a REJECTED lead, since "submitted"
+    at upload time only means Convertr received the lead for evaluation,
+    not that it was accepted. Without this, a rejected lead's email stays
+    marked already-uploaded forever, so re-uploading the same file skips
+    it right alongside genuinely-accepted leads -- the only way to resend
+    it becomes the "resend duplicates" checkbox, which also resends every
+    already-accepted lead in the file right back to Convertr.
+    """
+    path = _uploaded_emails_path(client_name)
+    if not path:
+        return
+    existing = load_uploaded_emails(client_name)
+    to_remove = {_normalize_email(e) for e in emails}
+    atomic_write_json(path, sorted(existing - to_remove))

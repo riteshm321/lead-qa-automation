@@ -102,6 +102,79 @@ def test_reupload_checkbox_lets_you_resend_an_already_uploaded_lead(tmp_path, mo
     assert len(submit_calls) == 2
 
 
+def test_rejected_lead_can_be_resent_without_resending_already_accepted_leads(tmp_path, monkeypatch):
+    # Same bug class as Enhancio: Convertr's own "submitted" step 1 just
+    # means the lead was received for evaluation, not that it was
+    # accepted. Reconciling a rejected lead must free its email back up
+    # from the already-uploaded memory, so re-uploading the same file
+    # resends just that lead -- not every already-accepted lead in the
+    # file too (the only alternative being the blanket "resend
+    # duplicates" checkbox).
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([
+        {"CID": "120022", "Email": "accepted@x.com", "First Name": "A", "Last Name": "One"},
+        {"CID": "120028", "Email": "rejected@x.com", "First Name": "B", "Last Name": "Two"},
+    ]).to_csv(leads_csv, index=False)
+
+    submit_calls = []
+
+    def _fake_submit(enterprise, token, publisher_id, campaign_id, form_id, form_data, link_id=""):
+        submit_calls.append(form_data)
+        return {"data": len(submit_calls), "message": "ok"}
+
+    def _fake_get_lead_result(enterprise, token, publisher_id, lead_id):
+        if lead_id == "1":
+            return {"status": "valid"}
+        return {"status": "invalid", "reasons": ["Unable to Contact"], "lead_data": {}}
+
+    with patch("core.convertr_client.login", return_value={"access_token": "tok"}), \
+         patch("core.convertr_client.submit_lead_as_publisher", side_effect=_fake_submit), \
+         patch("core.convertr_client.get_lead_result", side_effect=_fake_get_lead_result):
+        # First upload: both leads go through, Convertr "submits" both.
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at.button if b.label == "Upload to Convertr").click().run()
+        assert not at.exception
+        assert len(submit_calls) == 2
+
+        # Reconcile: lead "1" accepted, lead "2" rejected.
+        next(b for b in at.button if b.label == "Fetch decisions from Convertr").click().run()
+        assert not at.exception
+        next(b for b in at.button if b.label == "Write to Accumulated & Refund").click().run()
+        assert not at.exception
+
+        submit_calls.clear()
+
+        # Second upload of the SAME file: the accepted lead must still be
+        # skipped as a duplicate, but the rejected (now refunded) lead must
+        # go out again -- without the "resend duplicates" checkbox.
+        at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at2.run()
+        next(s for s in at2.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
+        with open(leads_csv, "rb") as f:
+            at2.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+        next(b for b in at2.button if b.label == "Upload to Convertr").click().run()
+        assert not at2.exception
+
+    assert len(submit_calls) == 1
+    assert submit_calls[0]["email"] == "rejected@x.com"
+
+    results_df = at2.session_state["convertr_upload_results"]
+    skipped = results_df[results_df["Result"].str.startswith("⏭️")]
+    assert len(skipped) == 1
+    assert skipped.iloc[0]["Email"] == "accepted@x.com"
+
+
 def test_preview_shows_leads_to_send_without_calling_the_api(tmp_path, monkeypatch):
     # The user must be able to see exactly what would be sent, and
     # download it, before ever clicking "Upload to Convertr" -- this

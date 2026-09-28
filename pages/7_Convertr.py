@@ -12,7 +12,8 @@ from core import convertr_client
 from core.convertr_client import ConvertrError
 from core.convertr_sync import (
     rejection_reason_from_result, load_pending_leads, save_pending_leads, remove_pending_leads,
-    load_uploaded_emails, save_uploaded_emails, filter_already_uploaded, select_rows_for_test_mode,
+    load_uploaded_emails, save_uploaded_emails, remove_uploaded_emails, filter_already_uploaded,
+    select_rows_for_test_mode,
 )
 from core.errors import render_error
 from core.excel_io import read_leadfile, append_leads, dataframe_to_excel_bytes
@@ -413,6 +414,17 @@ if _accepted_rows or _rejected_rows:
                 profile.accumulated_report_path, profile.refund_tab_name,
                 rejected_df, _leadfile_mapping, today, reasons=reasons,
             )
+            # A rejected lead was only ever "submitted" to Convertr
+            # (received for evaluation), never actually accepted -- free
+            # its email back up from the already-uploaded memory so the
+            # next upload of the same file resends just this lead, not
+            # every already-accepted lead alongside it (see
+            # remove_uploaded_emails).
+            _rejected_emails = {
+                str(_email) for _email in rejected_df[_leadfile_mapping.email] if _email
+            }
+            if _rejected_emails:
+                remove_uploaded_emails(client_name, _rejected_emails)
 
         remove_pending_leads(client_name, resolved_ids)
         st.session_state["convertr_reconcile_summary"] = {

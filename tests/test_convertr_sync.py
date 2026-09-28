@@ -4,7 +4,7 @@ from core.app_settings import save_app_settings
 from core.convertr_sync import (
     rejection_reason_from_result, select_rows_for_test_mode, filter_already_uploaded,
     load_pending_leads, save_pending_leads, remove_pending_leads,
-    load_uploaded_emails, save_uploaded_emails,
+    load_uploaded_emails, save_uploaded_emails, remove_uploaded_emails,
 )
 
 
@@ -118,6 +118,17 @@ def test_uploaded_emails_round_trip_and_normalizes(tmp_path, monkeypatch):
 
     save_uploaded_emails("Amazon Business EMEA", {"c@x.com"})
     assert load_uploaded_emails("Amazon Business EMEA") == {"a@x.com", "b@x.com", "c@x.com"}
+
+
+def test_remove_uploaded_emails_drops_only_the_given_emails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    save_uploaded_emails("Amazon Business EMEA", {"a@x.com", "b@x.com", "c@x.com"})
+
+    remove_uploaded_emails("Amazon Business EMEA", {" A@X.com ", "z@x.com"})
+
+    assert load_uploaded_emails("Amazon Business EMEA") == {"b@x.com", "c@x.com"}
 
 
 def test_uploaded_emails_empty_when_no_shared_root_configured(tmp_path, monkeypatch):
