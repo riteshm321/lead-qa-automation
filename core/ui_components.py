@@ -36,6 +36,15 @@ def chip_state(enabled: bool, needs_setup: bool = False) -> ChipState:
     return "needs_setup" if needs_setup else "on"
 
 
+def setup_state(configured: bool, required: bool = True) -> ChipState:
+    """A credential/config item (not an on/off feature -- see chip_state):
+    "configured" when it's set; when it's missing, "needs_setup" if the page
+    can't do its job without it, or just "off" if it's optional."""
+    if configured:
+        return "configured"
+    return "needs_setup" if required else "off"
+
+
 def render_status_strip(items: list[tuple[str, ChipState]]) -> None:
     """One row of labeled chips, in a single markdown element."""
     st.markdown("&nbsp; ".join(chip_markdown(state, label) for label, state in items))

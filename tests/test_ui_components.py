@@ -107,3 +107,12 @@ def test_render_metric_cards_renders_bordered_icon_metrics_in_order():
     assert [m.value for m in at.metric] == ["3", "1"]
     assert [m.proto.icon for m in at.metric] == [":material/group:", ":material/check_circle:"]
     assert all(m.proto.show_border for m in at.metric)
+
+
+def test_setup_state_mapping():
+    from core.ui_components import setup_state
+
+    assert setup_state(True) == "configured"
+    assert setup_state(True, required=False) == "configured"
+    assert setup_state(False) == "needs_setup"
+    assert setup_state(False, required=False) == "off"
