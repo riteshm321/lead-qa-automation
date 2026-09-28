@@ -423,15 +423,21 @@ def test_add_lead_template_columns_uses_the_fixed_cid_map():
 
 
 def test_add_lead_template_columns_copies_the_leadfiles_own_micro_audience_for_digisov():
-    # IN DigiSov (120131) is the only CID that isn't a fixed value -- the
-    # leadfile carries its own micro_audience column directly, which
-    # passes straight through under the same header name.
-    leads_df = pd.DataFrame([{"CID": "120131", "micro_audience": "Security Leaders"}])
+    # IN DigiSov (120131) and AU/IN Concert (120653/120654) aren't fixed
+    # values -- their leadfiles carry their own micro_audience column
+    # directly, which passes straight through under the same header name.
+    leads_df = pd.DataFrame([
+        {"CID": "120131", "micro_audience": "Security Leaders"},
+        {"CID": "120653", "micro_audience": "AU Concert Segment"},
+        {"CID": "120654", "micro_audience": "IN Concert Segment"},
+    ])
 
     result = add_lead_template_columns(leads_df, "CID")
 
     assert result.loc[0, "micro_audience"] == "Security Leaders"
-    assert result.loc[0, "Industry"] == "All"
+    assert result.loc[1, "micro_audience"] == "AU Concert Segment"
+    assert result.loc[2, "micro_audience"] == "IN Concert Segment"
+    assert list(result["Industry"]) == ["All"] * 3
 
 
 def test_add_lead_template_columns_blank_for_unmapped_cid():
@@ -524,6 +530,8 @@ def test_has_asset_title_override_is_true_only_for_cids_with_a_known_campaign_ty
     assert has_asset_title_override("118741") is True   # Bob, 2T
     assert has_asset_title_override("120129") is True   # AU CXO, 1T
     assert has_asset_title_override("119751") is True   # AU LOB, 2T -- confirmed by the user
+    assert has_asset_title_override("120653") is True   # AU Concert, 1T
+    assert has_asset_title_override("120654") is True   # IN Concert, 1T
     assert has_asset_title_override("999999") is False  # not a known CID at all
 
 
@@ -556,6 +564,8 @@ def test_has_industry_override_is_true_only_for_cids_with_a_known_campaign_type(
 def test_industry_for_lead_is_always_the_fixed_value_for_a_known_cid():
     assert industry_for_lead("118741") == "All"
     assert industry_for_lead("120131") == "All"
+    assert industry_for_lead("120653") == "All"  # AU Concert
+    assert industry_for_lead("120654") == "All"  # IN Concert
     assert industry_for_lead("999999") == ""  # not a known CID at all
 
 
@@ -576,6 +586,8 @@ def test_micro_audience_for_lead_matches_a_float64_upcast_cid():
 def test_has_micro_audience_override_matches_a_float64_upcast_cid():
     assert has_micro_audience_override("119750.0") is True  # IN LOB
     assert has_micro_audience_override("120131.0") is True  # IN DigiSov (own-column passthrough)
+    assert has_micro_audience_override("120653.0") is True  # AU Concert (own-column passthrough)
+    assert has_micro_audience_override("120654.0") is True  # IN Concert (own-column passthrough)
 
 
 def test_add_lead_template_columns_fills_micro_audience_when_cid_column_is_upcast_to_float64():
@@ -687,6 +699,8 @@ def test_project_code_for_cid_overrides_newly_live_segments():
     assert project_code_for_cid("120129", "") == "CXOAP"   # AU CXO
     assert project_code_for_cid("120130", "") == "CXOAP"   # IN CXO
     assert project_code_for_cid("120131", "") == "SNCAP"   # IN DigiSov
+    assert project_code_for_cid("120653", "") == "CONAP"   # AU Concert
+    assert project_code_for_cid("120654", "") == "CONAP"   # IN Concert
     assert project_code_for_cid("118743", "PAIAP") == "PAIAP"  # not overridden -- leadfile value passes through
 
 
@@ -697,6 +711,8 @@ def test_campaign_type_for_cid_known_campaigns():
     assert campaign_type_for_cid("120129") == "1T"  # AU CXO
     assert campaign_type_for_cid("120130") == "1T"  # IN CXO
     assert campaign_type_for_cid("120131") == "1T"  # IN DigiSov
+    assert campaign_type_for_cid("120653") == "1T"  # AU Concert
+    assert campaign_type_for_cid("120654") == "1T"  # IN Concert
 
 
 def test_campaign_type_for_cid_unknown_cid_is_blank():

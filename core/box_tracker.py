@@ -327,6 +327,8 @@ _PROJECT_CODE_OVERRIDE_BY_CID = {
     "120129": "CXOAP",  # AU CXO
     "120130": "CXOAP",  # IN CXO
     "120131": "SNCAP",  # IN DigiSov
+    "120653": "CONAP",  # AU Concert
+    "120654": "CONAP",  # IN Concert
 }
 
 # Response Details' Campaign Type is a fixed tactic abbreviation per
@@ -342,6 +344,8 @@ _CAMPAIGN_TYPE_BY_CID = {
     "120129": "1T",  # AU CXO
     "120130": "1T",  # IN CXO
     "120131": "1T",  # IN DigiSov
+    "120653": "1T",  # AU Concert
+    "120654": "1T",  # IN Concert
 }
 
 
@@ -389,8 +393,10 @@ _MICRO_AUDIENCE_BY_CID = {
     "119751": "LOB",           # AU LOB
 }
 # IN DigiSov's leadfile carries its own micro_audience column directly
-# (not a fixed value) -- passed through as-is.
-_MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS = {"120131"}  # IN DigiSov
+# (not a fixed value) -- passed through as-is. AU/IN Concert are the same:
+# micro_audience is populated in the Accumulated Report from the leadfile
+# itself, not a fixed per-CID value.
+_MICRO_AUDIENCE_FROM_OWN_COLUMN_CIDS = {"120131", "120653", "120654"}  # IN DigiSov, AU Concert, IN Concert
 _INDUSTRY_OVERRIDE_VALUE = "All"
 
 
