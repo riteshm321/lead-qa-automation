@@ -1,5 +1,6 @@
 import os
 import textwrap
+import time
 
 import streamlit as st
 
@@ -94,6 +95,24 @@ def _render_quit_app_button() -> None:
         st.sidebar.warning("⚠️ Quit the app? Close any open browser tab afterward.")
         _col_confirm, _col_cancel = st.sidebar.columns(2)
         if _col_confirm.button("Confirm quit", key="_confirm_quit_button", type="primary", use_container_width=True):
+            # window.close() only works if the browser considers this tab
+            # script-opened -- ours was opened by launcher.py's plain
+            # webbrowser.open(), the same as a user navigating there by
+            # hand, so most browsers silently refuse it. Still worth
+            # attempting (harmless, and it does work in a few browser/
+            # kiosk configs), but the visible message is the real
+            # fallback -- it must render regardless of whether the script
+            # actually closes anything.
+            st.sidebar.markdown(
+                "<script>window.close();</script>"
+                "<p style='font-size:0.85rem;'>App is quitting — you can close this browser tab now.</p>",
+                unsafe_allow_html=True,
+            )
+            # Give Streamlit's server a moment to push the markdown above
+            # to the browser over its websocket before os._exit(0) kills
+            # the process outright -- without this the process can die
+            # before that last frame is ever sent.
+            time.sleep(0.3)
             _quit_app()
         if _col_cancel.button("Cancel", key="_cancel_quit_button", use_container_width=True):
             st.session_state.pop(_PENDING_QUIT_KEY, None)

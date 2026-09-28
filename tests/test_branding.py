@@ -60,6 +60,7 @@ def test_quit_app_button_requires_confirmation_before_exiting(tmp_path, monkeypa
     # way the real button only calls it after a second, explicit click.
     calls = []
     monkeypatch.setattr("core.branding._quit_app", lambda: calls.append(True))
+    monkeypatch.setattr("core.branding.time.sleep", lambda *_a, **_k: None)
     monkeypatch.chdir(tmp_path)
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
@@ -71,6 +72,29 @@ def test_quit_app_button_requires_confirmation_before_exiting(tmp_path, monkeypa
 
     next(b for b in at.sidebar.button if b.label == "Confirm quit").click().run()
     assert calls == [True]
+
+
+def test_confirm_quit_attempts_to_close_the_browser_tab_before_exiting(tmp_path, monkeypatch):
+    # window.close() only works if the browser considers this tab
+    # script-opened -- ours is opened by launcher.py's plain
+    # webbrowser.open(), so most browsers silently refuse it. Still worth
+    # attempting (harmless, works in a few browser/kiosk configs), but the
+    # visible "close this tab" message is the real fallback that must
+    # always render regardless of whether the script actually works.
+    calls = []
+    monkeypatch.setattr("core.branding._quit_app", lambda: calls.append(True))
+    monkeypatch.setattr("core.branding.time.sleep", lambda *_a, **_k: None)
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(b for b in at.sidebar.button if b.label == "Quit App").click().run()
+    next(b for b in at.sidebar.button if b.label == "Confirm quit").click().run()
+
+    assert calls == [True]
+    rendered_html = "\n".join(m.value for m in at.sidebar.markdown)
+    assert "window.close()" in rendered_html
+    assert "close this" in rendered_html.lower()
 
 
 def test_quit_app_cancel_dismisses_the_confirmation_without_exiting(tmp_path, monkeypatch):
