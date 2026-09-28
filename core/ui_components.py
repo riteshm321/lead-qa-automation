@@ -79,3 +79,11 @@ def stepper_markdown(steps: list[str], current: int) -> str:
 
 def render_stepper(steps: list[str], current: int) -> None:
     st.markdown(stepper_markdown(steps, current))
+
+
+def render_metric_cards(items: list[tuple[str, int, str]]) -> None:
+    """A row of bordered metric cards, one per (label, value, icon) --
+    instead of bare numbers (UI redesign spec, section 5). `icon` is a
+    Material Symbols name, e.g. "check_circle"."""
+    for col, (label, value, icon) in zip(st.columns(len(items)), items):
+        col.metric(label, value, icon=f":material/{icon}:", border=True)

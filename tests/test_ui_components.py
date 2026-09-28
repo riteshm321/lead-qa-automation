@@ -93,3 +93,17 @@ def test_render_stepper_renders_one_markdown_element():
     assert len(at.markdown) == 1
     assert at.markdown[0].value.startswith(":blue-badge[:material/arrow_circle_right: 1. Run Check]")
     assert len(at.caption) == 0  # never a caption -- see Run Check's "completed" caption test
+
+
+def test_render_metric_cards_renders_bordered_icon_metrics_in_order():
+    def _app():
+        from core.ui_components import render_metric_cards
+        render_metric_cards([("Leads In", 3, "group"), ("Valid", 1, "check_circle")])
+
+    at = AppTest.from_function(_app)
+    at.run()
+    assert not at.exception
+    assert [m.label for m in at.metric] == ["Leads In", "Valid"]
+    assert [m.value for m in at.metric] == ["3", "1"]
+    assert [m.proto.icon for m in at.metric] == [":material/group:", ":material/check_circle:"]
+    assert all(m.proto.show_border for m in at.metric)
