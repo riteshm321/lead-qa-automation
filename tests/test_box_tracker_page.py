@@ -742,3 +742,80 @@ def test_upload_reconciliation_requires_a_reason_for_rejected_leads(tmp_path, mo
     assert any("lead1@x.com" in e.value for e in at.error)
     refund_df = pd.read_excel(acc_path, sheet_name="Refund")
     assert refund_df.empty
+
+
+def test_box_tracker_steps_are_icon_titled_cards_with_shared_empty_states(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    # One already-finished lead: not blank, not sent, not cleared -- so all
+    # three step lists are empty and each shows its empty state.
+    _make_accumulated(acc_path, [
+        {"Email": "done@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
+         "Status": "Accepted - Uploaded 01-Sep"},
+    ])
+    _make_mirror(mirror_path)
+    _save_profile(acc_path, mirror_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert at.title[0].value == ":material/inventory_2: Box Tracker"
+    assert [s.value for s in at.subheader] == [
+        ":material/outgoing_mail: 1. Send leads for approval",
+        ":material/edit_document: 2. Write cleared leads to the Lead Template",
+        ":material/fact_check: 3. Reconcile portal upload status",
+    ]
+    # st.expander(..., icon=...) is exposed by AppTest as at.status, not at.expander.
+    expanders = [(e.label, e.icon) for e in at.status]
+    assert expanders.count(("How this works", ":material/info:")) == 3
+    assert ("Or: I already added these leads to the real Approval Sheet myself", ":material/back_hand:") in expanders
+    captions = [c.value for c in at.caption]
+    assert any(c.startswith(":material/task_alt: No blank-Status leads available to mark.") for c in captions)
+    assert any(c.startswith(':material/inbox: No leads currently marked "Sent for Approval" or') for c in captions)
+    assert any(c.startswith(':material/inbox: No leads currently marked "Cleared for Upload".') for c in captions)
+
+
+def test_missing_rejection_reason_error_uses_the_shared_problem_helper(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
+         "Status": "Cleared for Upload - 07-Sep"},
+    ])
+    _make_mirror(mirror_path)
+    _save_profile(acc_path, mirror_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(cb for cb in at.checkbox if cb.label == "Reject lead1@x.com").set_value(True).run()
+    at.button(key="reconcile_upload_button").click().run()
+    assert not at.exception
+    err = next(e for e in at.error if "lead1@x.com" in e.value)
+    assert err.icon == ":material/error:"
+    assert "**Suggested fix:**" in err.value
+
+
+def test_unfilled_column_warning_uses_the_shared_helper_not_an_emoji_prefix(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    mirror_path = str(tmp_path / "mirror.xlsx")
+    _make_accumulated(acc_path, [
+        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
+         "Status": "Cleared for Upload - 07-Sep"},
+    ])
+    _make_mirror(mirror_path)
+    wb = openpyxl.load_workbook(mirror_path)
+    ws = wb["Response Details"]
+    ws.cell(row=2, column=ws.max_column + 1, value="Extra Client Tracking Column")
+    wb.save(mirror_path)
+    _save_profile(acc_path, mirror_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    at.button(key="reconcile_upload_button").click().run()
+    assert not at.exception
+    warn = next(w for w in at.warning if "Extra Client Tracking Column" in w.value)
+    assert warn.icon == ":material/warning:"
+    assert not warn.value.startswith("⚠️")
