@@ -1288,3 +1288,32 @@ def test_edit_existing_client_picker_still_selects_by_exact_name_when_ungrouped(
     assert len(client_boxes) == 1
     client_boxes[0].set_value("Existing Client").run()
     assert not at.exception
+
+
+def test_switching_clients_resets_the_client_group_field(tmp_path, monkeypatch):
+    # Regression test: client_group_input is a keyed widget (like
+    # accumulated_path_input), so it must be re-seeded in the profile-switch
+    # reset block below -- otherwise switching from a grouped profile to an
+    # ungrouped one would leave the previous profile's group name showing,
+    # and saving would silently put the new profile into the wrong group.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_profile(ClientProfile(name="Autodesk APAC", accumulated_report_path="a.xlsx",
+                                client_group="Autodesk"), get_clients_dir())
+    save_profile(ClientProfile(name="Autodesk EMEA", accumulated_report_path="a.xlsx",
+                                client_group="Autodesk"), get_clients_dir())
+    save_profile(ClientProfile(name="Ungrouped Client", accumulated_report_path="b.xlsx"), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    group_box = next(s for s in at.selectbox if s.label == "Client")
+    assert group_box.options == ["Autodesk (2 regions)", "Ungrouped Client"]
+    group_box.set_value("Autodesk (2 regions)").run()
+    assert at.text_input(key="client_group_input").value == "Autodesk"
+
+    next(s for s in at.selectbox if s.label == "Client").set_value("Ungrouped Client").run()
+    assert at.text_input(key="client_group_input").value == ""

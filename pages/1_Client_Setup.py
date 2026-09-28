@@ -442,6 +442,7 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
     st.session_state["lead_template_tabs"] = _tabs_to_state(profile.lead_template_tabs) if profile else []
     st.session_state["accumulated_path_input"] = profile.accumulated_report_path if profile else ""
     st.session_state["lead_template_path_input"] = profile.lead_template_path if profile else ""
+    st.session_state["client_group_input"] = profile.client_group if profile else ""
     st.session_state["leadcap_segments_text"] = (
         "\n".join(f"{', '.join(s.cids)} - {s.cap}" for s in profile.leadcap.segments) if profile else ""
     )
