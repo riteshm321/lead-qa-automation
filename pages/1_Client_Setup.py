@@ -3,7 +3,7 @@ import uuid
 
 import streamlit as st
 
-from core.errors import render_error
+from core.errors import render_error, render_problem
 from core.excel_io import (
     list_sheet_names, read_sheet_as_dataframe, detect_cids_from_pacing_overview, guess_target_field_mapping,
     find_header_row, read_sheet_headers, resolve_one_header_source, normalize_header_text, read_leadfile,
@@ -32,7 +32,7 @@ from core.models import (
 from core.client_picker import render_client_picker
 from core.profile_store import save_profile, load_profile
 from core.toast import show_pending_toast
-from core.ui_components import chip_markdown, chip_state, render_status_strip
+from core.ui_components import chip_markdown, chip_state, render_empty_state, render_status_strip
 
 # Integrate's own documented set of real lead attribute names -- confirmed
 # from the account's Import -> API tab, same source as core/integrate_client.py's
@@ -174,7 +174,8 @@ def _render_sources_section(
 ) -> list[ReferenceSource]:
     result: list[ReferenceSource] = []
     if not st.session_state[section_key]:
-        st.caption(f"📭 No {label} sources configured yet — click **➕ Add {label} Source** below to create one.")
+        render_empty_state(f"No {label} sources configured yet.",
+                            f"Click **➕ Add {label} Source** below to create one.")
     if st.button(f"➕ Add {label} Source", key=f"{section_key}_add"):
         st.session_state[section_key].append({
             "id": str(uuid.uuid4()), "name": "", "file_path": "", "sheet_name": "", "cids": "",
@@ -434,9 +435,10 @@ if selected_name:
         # another machine when this read hit it, or a transient OneDrive
         # lock -- both real possibilities for a file under the shared
         # OneDrive clients folder, previously an unhandled crash here.
-        st.error(f"Could not load the profile for '{selected_name}' — it may be in an older format, or the "
-                 "file may have been mid-write on another machine (try again in a moment). If it keeps "
-                 f"happening, delete and re-create it in Client Setup. (Technical detail: {exc})")
+        render_problem(f"Could not load the profile for '{selected_name}' — it may be in an older format, or the "
+                       "file may have been mid-write on another machine (try again in a moment). If it keeps "
+                       f"happening, delete and re-create it in Client Setup. (Technical detail: {exc})",
+                       "Try again in a moment. If it keeps happening, delete and re-create it in Client Setup.")
         st.stop()
 else:
     profile = None
@@ -1043,7 +1045,8 @@ with tab_leadcap:
                 else:
                     leadcap_segments.append(LeadcapSegment(name=segment_name, cids=cids, cap=int(cap_str)))
         if not leadcap_enabled:
-            st.caption("Leadcap check is disabled.")
+            render_empty_state("Leadcap check is off.", "Tick **Enable Leadcap check** above to configure it.",
+                                icon="toggle_off")
 
 with tab_exclusion:
     with st.container(border=True):
@@ -1055,9 +1058,12 @@ with tab_exclusion:
             exclusion_sources_result = _render_sources_section(
                 "exclusion_sources", "Exclusion", check_domain=True, check_company=exclusion_check_company, check_email=False)
             if not exclusion_sources_result:
-                st.warning("Exclusion is enabled but no sources are configured — this check will do nothing.")
+                render_problem("Exclusion is enabled but no sources are configured — this check will do nothing.",
+                                "Click **➕ Add Exclusion Source** above, or untick **Enable Exclusion check**.",
+                                level="warning")
         else:
-            st.caption("Exclusion check is disabled.")
+            render_empty_state("Exclusion check is off.", "Tick **Enable Exclusion check** above to configure it.",
+                                icon="toggle_off")
 
 with tab_tal:
     with st.container(border=True):
@@ -1068,9 +1074,12 @@ with tab_tal:
             tal_sources_result = _render_sources_section(
                 "tal_sources", "TAL", check_domain=True, check_company=tal_check_company, check_email=False)
             if not tal_sources_result:
-                st.warning("TAL is enabled but no sources are configured — this check will do nothing.")
+                render_problem("TAL is enabled but no sources are configured — this check will do nothing.",
+                                "Click **➕ Add TAL Source** above, or untick **Enable TAL check**.",
+                                level="warning")
         else:
-            st.caption("TAL check is disabled.")
+            render_empty_state("TAL check is off.", "Tick **Enable TAL check** above to configure it.",
+                                icon="toggle_off")
 
 with tab_suppression:
     with st.container(border=True):
@@ -1087,9 +1096,12 @@ with tab_suppression:
                 "suppression_sources", "Suppression", check_domain=suppression_check_domain,
                 check_company=suppression_check_company, check_email=suppression_check_email)
             if not suppression_sources_result:
-                st.warning("Suppression is enabled but no sources are configured — this check will do nothing.")
+                render_problem("Suppression is enabled but no sources are configured — this check will do nothing.",
+                                "Click **➕ Add Suppression Source** above, or untick **Enable Suppression check**.",
+                                level="warning")
         else:
-            st.caption("Suppression check is disabled.")
+            render_empty_state("Suppression check is off.", "Tick **Enable Suppression check** above to configure it.",
+                                icon="toggle_off")
 
 with tab_dedupe:
     with st.container(border=True):
@@ -1100,9 +1112,12 @@ with tab_dedupe:
             dedupe_sources_result = _render_sources_section(
                 "dedupe_sources", "Dedupe List", check_domain=False, check_company=False, check_email=True)
             if not dedupe_sources_result:
-                st.warning("Dedupe list is enabled but no sources are configured — this check will do nothing.")
+                render_problem("Dedupe list is enabled but no sources are configured — this check will do nothing.",
+                                "Click **➕ Add Dedupe List Source** above, or untick **Enable Dedupe list check**.",
+                                level="warning")
         else:
-            st.caption("Dedupe list check is disabled.")
+            render_empty_state("Dedupe list check is off.", "Tick **Enable Dedupe list check** above to configure it.",
+                                icon="toggle_off")
 
 with tab_complex:
     with st.container(border=True):
@@ -1132,7 +1147,8 @@ with tab_complex:
             st.caption("The Installed Technologies and Predictive Buying Stage files are uploaded fresh on "
                        "the Run Check page each time, like the Purchased Lead Report — not configured here.")
         else:
-            st.caption("Complex Account rules are disabled for this client.")
+            render_empty_state("Complex Account rules are off.",
+                                "Tick **This is a complex account** above to configure it.", icon="toggle_off")
 
 with tab_delivery:
     with st.container(border=True):
@@ -1528,24 +1544,26 @@ if st.button("💾 Save Client Profile", type="primary"):
 
     _client_name_invalid_chars = set('/\\') & set(client_name)
     if not client_name:
-        st.error("Client name is required.")
+        render_problem("Client name is required.", "Enter one in **Basics → Client name**.")
     elif _client_name_invalid_chars or ".." in client_name:
         # The name becomes a bare filename ("<name>.json") under clients_dir
         # with no further sanitizing — a "/" or "\" silently creates a
         # nested, orphaned profile that list_profile_names()'s flat scan can
         # never show again, and ".." can escape clients_dir entirely onto
         # an arbitrary path on disk.
-        st.error("Client name can't contain a slash, a backslash, or \"..\" — these would break "
-                 "how the profile is saved to disk.")
+        render_problem("Client name can't contain a slash, a backslash, or \"..\" — these would break "
+                       "how the profile is saved to disk.", "Remove those characters from **Basics → Client name**.")
     elif leadcap_enabled and leadcap_segmented and leadcap_blank_cap_segments:
-        st.error("Leadcap segments are missing a cap: " + ", ".join(leadcap_blank_cap_segments) +
-                  ". Fill in a cap for every segment before saving (this is required after using "
-                  "'Detect CIDs from Accumulated Report', which leaves caps blank).")
+        render_problem("Leadcap segments are missing a cap: " + ", ".join(leadcap_blank_cap_segments) +
+                       ". Fill in a cap for every segment before saving (this is required after using "
+                       "'Detect CIDs from Accumulated Report', which leaves caps blank).",
+                       "Open **Checks → Leadcap** and fill in a cap for every segment.")
     elif lead_template_multi_tab and _blank_tab_count:
-        st.error(f"{_blank_tab_count} Lead Template tab(s) are missing a sheet name. "
-                 "Pick a sheet for every tab before saving.")
+        render_problem(f"{_blank_tab_count} Lead Template tab(s) are missing a sheet name. "
+                       "Pick a sheet for every tab before saving.",
+                       "Open **Delivery → Client Mode** and pick a sheet for every tab.")
     elif _name_error:
-        st.error(_name_error)
+        render_problem(_name_error, "Give every source in that check a non-empty, unique name.")
     else:
         new_profile = ClientProfile(
             name=client_name,

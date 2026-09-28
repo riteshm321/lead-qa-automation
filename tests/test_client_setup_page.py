@@ -1397,3 +1397,30 @@ def test_check_tab_label_shows_configured_chip_for_saved_profile(tmp_path, monke
     labels = [t.label for t in at.tabs]
     assert "Duplicate :blue-badge[✓ Configured]" in labels
     assert "Leadcap" in labels  # off in the saved profile -> no chip
+
+
+def test_blank_client_name_error_carries_a_suggestion(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    err = next(e for e in at.error if "Client name is required." in e.value)
+    assert "**Suggested fix:**" in err.value and "Basics" in err.value
+
+
+def test_enabled_check_with_no_sources_warns_with_a_next_step(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "Enable TAL check").check().run()
+    warn = next(w for w in at.warning if "TAL is enabled but no sources are configured" in w.value)
+    assert "Add TAL Source" in warn.value
+    assert any(c.value.startswith(":material/inbox: No TAL sources configured yet") for c in at.caption)
+
+
+def test_disabled_check_shows_an_empty_state_pointing_at_its_toggle(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert any(c.value.startswith(":material/toggle_off: Exclusion check is off.")
+               and "Enable Exclusion check" in c.value for c in at.caption)
