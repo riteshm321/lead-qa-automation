@@ -539,3 +539,35 @@ def test_load_profile_defaults_google_sheets_clear_existing_for_old_schema_json(
 
     loaded = load_profile("Old Schema Client", clients_dir)
     assert loaded.google_sheets.clear_existing is False
+
+
+def test_client_group_round_trips_through_save_and_load(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile, load_profile
+
+    profile = ClientProfile(
+        name="Autodesk APAC", accumulated_report_path="acc.xlsx", client_group="Autodesk",
+    )
+    save_profile(profile, get_clients_dir())
+
+    loaded = load_profile("Autodesk APAC", get_clients_dir())
+    assert loaded.client_group == "Autodesk"
+
+
+def test_load_profile_defaults_client_group_for_old_schema_json(tmp_path, monkeypatch):
+    # A profile saved before client_group existed has no such key at all
+    # -- must default to "" (ungrouped), not crash on the missing key.
+    monkeypatch.chdir(tmp_path)
+    import json
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    clients_dir = get_clients_dir()
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "Old Schema Client.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "Old Schema Client", "accumulated_report_path": "acc.xlsx"}, f)
+
+    loaded = load_profile("Old Schema Client", clients_dir)
+    assert loaded.client_group == ""

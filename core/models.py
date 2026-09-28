@@ -322,6 +322,13 @@ class ClientProfile:
     refund_tab_name: str = "Refund"
     jira_ticket_key: str = ""
     jira_reporter_name: str = ""
+    # Groups this profile with other regional profiles for the same brand
+    # (e.g. "Autodesk APAC" and "Autodesk EMEA" both set this to
+    # "Autodesk") so the client picker in Client Setup/Run Check can offer
+    # them as one recognizable group instead of two unrelated flat-list
+    # entries. Blank (the default) means "not part of any group" -- this
+    # profile is picked exactly as it is today.
+    client_group: str = ""
     # SharePoint share links used in Jira comments instead of a file:// path
     # that only opens on the machine it was posted from.
     accumulated_report_link: str = ""

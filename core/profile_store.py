@@ -95,6 +95,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         refund_tab_name=data.get("refund_tab_name", "Refund"),
         jira_ticket_key=data.get("jira_ticket_key", ""),
         jira_reporter_name=data.get("jira_reporter_name", ""),
+        client_group=data.get("client_group", ""),
         accumulated_report_link=data.get("accumulated_report_link", ""),
         lead_template_link=data.get("lead_template_link", ""),
         client_mode=data.get("client_mode", "Lead QA"),

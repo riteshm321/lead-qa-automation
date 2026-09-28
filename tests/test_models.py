@@ -114,3 +114,8 @@ def test_google_sheet_tab_defaults():
     from core.models import GoogleSheetTab
     tab = GoogleSheetTab(cid="119999", sheet_id="1o_v7oMh6Y5VcX0COIjWQ_y00IVKGbwbznCEzNGcyhpU")
     assert tab.worksheet_name == "Sheet1"
+
+
+def test_client_profile_defaults_to_no_client_group():
+    profile = ClientProfile(name="X", accumulated_report_path="acc.xlsx")
+    assert profile.client_group == ""
