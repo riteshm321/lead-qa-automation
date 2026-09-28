@@ -22,18 +22,18 @@ def _home() -> None:
 # individual pages changes, no need for pg.run()'s current page.
 pg = st.navigation({
     "Lead QA": [
-        st.Page(_home, title="Home", icon="✅", default=True),
-        st.Page("pages/1_Client_Setup.py", title="Client Setup", icon="🗂️"),
-        st.Page("pages/2_Run_Check.py", title="Run Check", icon="▶️"),
-        st.Page("pages/3_Settings.py", title="Settings", icon="⚙️"),
-        st.Page("pages/4_Activity_Log.py", title="Activity Log", icon="📊"),
-        st.Page("pages/5_Box_Tracker.py", title="Box Tracker", icon="📦"),
-        st.Page("pages/6_Fuzzy_Match.py", title="Fuzzy Match", icon="🔍"),
+        st.Page(_home, title="Home", icon=":material/home:", default=True),
+        st.Page("pages/1_Client_Setup.py", title="Client Setup", icon=":material/folder:"),
+        st.Page("pages/2_Run_Check.py", title="Run Check", icon=":material/play_arrow:"),
+        st.Page("pages/3_Settings.py", title="Settings", icon=":material/settings:"),
+        st.Page("pages/4_Activity_Log.py", title="Activity Log", icon=":material/bar_chart:"),
+        st.Page("pages/5_Box_Tracker.py", title="Box Tracker", icon=":material/inventory_2:"),
+        st.Page("pages/6_Fuzzy_Match.py", title="Fuzzy Match", icon=":material/search:"),
     ],
     "Upload Tools": [
-        st.Page("pages/7_Convertr.py", title="Convertr", icon="🔗"),
-        st.Page("pages/8_Enhancio.py", title="Enhancio", icon="🔗"),
-        st.Page("pages/9_Integrate.py", title="Integrate", icon="🔗"),
+        st.Page("pages/7_Convertr.py", title="Convertr", icon=":material/link:"),
+        st.Page("pages/8_Enhancio.py", title="Enhancio", icon=":material/link:"),
+        st.Page("pages/9_Integrate.py", title="Integrate", icon=":material/link:"),
     ],
 })
 pg.run()

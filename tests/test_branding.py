@@ -110,3 +110,15 @@ def test_quit_app_cancel_dismisses_the_confirmation_without_exiting(tmp_path, mo
     assert not calls
     assert not any("quit" in w.value.lower() for w in at.sidebar.warning)
     assert any(b.label == "Quit App" for b in at.sidebar.button)
+
+
+def test_sidebar_nav_uses_material_symbols_not_emoji():
+    with open("Summary.py", encoding="utf-8") as f:
+        source = f.read()
+    # Every icon= argument passed to st.Page must be a :material/...:
+    # shorthand, not a raw emoji -- catches a future page addition that
+    # reverts to emoji just as easily as it catches this task's own change.
+    import re
+    icon_args = re.findall(r'icon="([^"]+)"', source)
+    assert len(icon_args) >= 10  # one per st.Page call (10 pages + Home)
+    assert all(icon.startswith(":material/") for icon in icon_args)
