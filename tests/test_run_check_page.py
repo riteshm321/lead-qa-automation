@@ -2017,3 +2017,106 @@ def test_client_picker_still_selects_ungrouped_clients_by_exact_name_on_run_chec
     assert len(client_boxes) == 1
     client_boxes[0].set_value("Existing Client").run()
     assert not at.exception
+
+
+def _stepper(at):
+    return next(m.value for m in at.markdown if "Review & Finalize" in m.value)
+
+
+def test_stepper_shows_run_check_as_current_before_any_result(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    save_profile(ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm),
+                 get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert _stepper(at) == (
+        ":blue-badge[:material/arrow_circle_right: 1. Run Check]"
+        " :material/chevron_right: "
+        ":gray-badge[:material/radio_button_unchecked: 2. Review & Finalize]"
+    )  # no Jira ticket key -> no "Post to Jira" step
+    # The old emoji-in-columns indicator is gone.
+    assert not any(m.value.startswith(("✅ 1.", "**➡️", "⚪")) for m in at.markdown)
+
+
+def test_stepper_shows_review_as_current_with_a_result_and_jira_step_upcoming(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    save_profile(ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+                               jira_ticket_key="PROJ-1234"), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+    ])
+    at.session_state["run_result"] = PipelineResult(valid_indices=[0], refund_reasons={})
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    assert not at.exception
+    stepper = _stepper(at)
+    assert ":green-badge[:material/check_circle: 1. Run Check]" in stepper
+    assert ":blue-badge[:material/arrow_circle_right: 2. Review & Finalize]" in stepper
+    assert ":gray-badge[:material/radio_button_unchecked: 3. Post to Jira]" in stepper
+
+
+def test_stepper_shows_post_to_jira_as_current_after_finalize(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    save_profile(ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+                               jira_ticket_key="PROJ-1234"), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+    ])
+    at.session_state["run_result"] = PipelineResult(valid_indices=[0], refund_reasons={})
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    next(b for b in at.button if b.label == "Finalize").click().run()
+    assert not at.exception
+    stepper = _stepper(at)
+    assert ":green-badge[:material/check_circle: 1. Run Check]" in stepper
+    assert ":green-badge[:material/check_circle: 2. Review & Finalize]" in stepper
+    assert ":blue-badge[:material/arrow_circle_right: 3. Post to Jira]" in stepper
+
+
+def test_summary_shows_four_bordered_metric_cards(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    save_profile(ClientProfile(name="Test Client", accumulated_report_path=acc_path, field_mapping=fm),
+                 get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = pd.DataFrame([
+        {"Email_Address": "a@x.com", "First_Name": "A", "Last_Name": "One", "Company_Name": "X", "CID": "1"},
+        {"Email_Address": "b@x.com", "First_Name": "B", "Last_Name": "Two", "Company_Name": "Y", "CID": "1"},
+        {"Email_Address": "c@x.com", "First_Name": "C", "Last_Name": "Three", "Company_Name": "Z", "CID": "1"},
+    ])
+    at.session_state["run_result"] = PipelineResult(
+        valid_indices=[0], refund_reasons={1: "Duplicate - exact email"},
+        review_reasons={2: [ReviewDetail(check="Duplicate", message="reason c")]},
+    )
+    at.session_state["run_result_for"] = "Test Client"
+    at.run()
+    assert not at.exception
+
+    cards = [m for m in at.metric if m.label in {"Leads In", "Valid", "Refunded", "Needs Review"}]
+    assert [m.label for m in cards] == ["Leads In", "Valid", "Refunded", "Needs Review"]
+    assert [m.value for m in cards] == ["3", "1", "1", "1"]
+    assert [m.proto.icon for m in cards] == [
+        ":material/group:", ":material/check_circle:", ":material/undo:", ":material/flag:"]
+    assert all(m.proto.show_border for m in cards)

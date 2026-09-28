@@ -35,6 +35,7 @@ from core.models import FieldMapping
 from core.pipeline import run_pipeline, apply_refund_overrides
 from core.profile_store import load_profile, save_profile
 from core.toast import queue_toast_before_rerun, show_pending_toast
+from core.ui_components import render_metric_cards, render_stepper
 from core.upload_cache import resolve_upload
 import requests
 
@@ -201,14 +202,7 @@ if _step_pending_summary and _step_pending_summary.get("client_name") == client_
 _step_labels = ["Run Check", "Review & Finalize"]
 if profile.jira_ticket_key:
     _step_labels.append("Post to Jira")
-_step_cols = st.columns(len(_step_labels))
-for _step_num, (_step_col, _step_label) in enumerate(zip(_step_cols, _step_labels), start=1):
-    if _step_num < _step_current:
-        _step_col.markdown(f"✅ {_step_num}. {_step_label}")
-    elif _step_num == _step_current:
-        _step_col.markdown(f"**➡️ {_step_num}. {_step_label}**")
-    else:
-        _step_col.markdown(f"⚪ {_step_num}. {_step_label}")
+render_stepper(_step_labels, _step_current)
 st.divider()
 
 _upload_key_suffix = st.session_state.get("upload_reset_counter", 0)
@@ -498,11 +492,12 @@ if "run_result" in st.session_state:
     result = st.session_state["run_result"]
 
     st.subheader("Summary")
-    _summary_col_in, _summary_col_valid, _summary_col_refund, _summary_col_review = st.columns(4)
-    _summary_col_in.metric("Leads In", len(new_leads))
-    _summary_col_valid.metric("Valid", len(result.valid_indices))
-    _summary_col_refund.metric("Refunded", len(result.refund_reasons))
-    _summary_col_review.metric("Needs Review", len(result.review_reasons))
+    render_metric_cards([
+        ("Leads In", len(new_leads), "group"),
+        ("Valid", len(result.valid_indices), "check_circle"),
+        ("Refunded", len(result.refund_reasons), "undo"),
+        ("Needs Review", len(result.review_reasons), "flag"),
+    ])
 
     _completed_checks = [
         label for label, on in [
