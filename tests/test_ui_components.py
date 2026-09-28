@@ -55,3 +55,41 @@ def test_render_empty_state_without_hint_and_custom_icon():
     at = AppTest.from_function(_app)
     at.run()
     assert at.caption[0].value == ":material/toggle_off: TAL check is off."
+
+
+def test_step_state_mapping():
+    from core.ui_components import step_state
+    assert step_state(1, 2) == "done"
+    assert step_state(2, 2) == "current"
+    assert step_state(3, 2) == "todo"
+
+
+def test_stepper_markdown_marks_done_current_and_upcoming_steps():
+    from core.ui_components import stepper_markdown
+    assert stepper_markdown(["Run Check", "Review & Finalize", "Post to Jira"], 2) == (
+        ":green-badge[:material/check_circle: 1. Run Check]"
+        " :material/chevron_right: "
+        ":blue-badge[:material/arrow_circle_right: 2. Review & Finalize]"
+        " :material/chevron_right: "
+        ":gray-badge[:material/radio_button_unchecked: 3. Post to Jira]"
+    )
+
+
+def test_stepper_markdown_past_the_last_step_marks_everything_done():
+    from core.ui_components import stepper_markdown
+    value = stepper_markdown(["Run Check", "Review & Finalize"], 3)
+    assert "blue-badge" not in value and "gray-badge" not in value
+    assert value.count(":green-badge[") == 2
+
+
+def test_render_stepper_renders_one_markdown_element():
+    def _app():
+        from core.ui_components import render_stepper
+        render_stepper(["Run Check", "Review & Finalize"], 1)
+
+    at = AppTest.from_function(_app)
+    at.run()
+    assert not at.exception
+    assert len(at.markdown) == 1
+    assert at.markdown[0].value.startswith(":blue-badge[:material/arrow_circle_right: 1. Run Check]")
+    assert len(at.caption) == 0  # never a caption -- see Run Check's "completed" caption test

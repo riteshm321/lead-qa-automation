@@ -1,4 +1,4 @@
-"""Small shared in-page visual components (status chips, empty states).
+"""Small shared in-page visual components (status chips, empty states, stepper, metric cards).
 
 Page chrome (logo, login gate, sidebar) lives in core/branding.py; user-facing
 error/warning rendering lives in core/errors.py. This module is for the
@@ -48,3 +48,34 @@ def render_empty_state(message: str, hint: str = "", icon: str = "inbox") -> Non
     if hint:
         text += f" — {hint}"
     st.caption(text)
+
+
+StepState = Literal["done", "current", "todo"]
+
+# (Material icon name, st.badge colour) per step state.
+_STEPS: dict[str, tuple[str, str]] = {
+    "done": ("check_circle", "green"),
+    "current": ("arrow_circle_right", "blue"),
+    "todo": ("radio_button_unchecked", "gray"),
+}
+
+
+def step_state(step_num: int, current: int) -> StepState:
+    if step_num < current:
+        return "done"
+    return "current" if step_num == current else "todo"
+
+
+def stepper_markdown(steps: list[str], current: int) -> str:
+    """One row of numbered step badges (1-based `current`), joined by a
+    chevron -- a real visual stepper instead of plain text with a coloured
+    circle (UI redesign spec, section 5)."""
+    parts = []
+    for num, label in enumerate(steps, start=1):
+        icon, color = _STEPS[step_state(num, current)]
+        parts.append(f":{color}-badge[:material/{icon}: {num}. {label}]")
+    return " :material/chevron_right: ".join(parts)
+
+
+def render_stepper(steps: list[str], current: int) -> None:
+    st.markdown(stepper_markdown(steps, current))
