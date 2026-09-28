@@ -32,6 +32,7 @@ from core.models import (
 from core.client_picker import render_client_picker
 from core.profile_store import save_profile, load_profile
 from core.toast import show_pending_toast
+from core.ui_components import chip_markdown, chip_state, render_status_strip
 
 # Integrate's own documented set of real lead attribute names -- confirmed
 # from the account's Import -> API tab, same source as core/integrate_client.py's
@@ -408,6 +409,14 @@ def _profile_file_mtime(name: str, clients_dir: str) -> float:
         return 0.0
 
 
+def _check_tab_label(title: str, configured: bool) -> str:
+    # Reflects the SAVED profile, not live widget state: tab labels are fixed
+    # when st.tabs() is called, before the checkboxes inside them exist.
+    # The summary strip above the tabs is the live view -- don't "fix" this
+    # into a live value; Streamlit can't relabel a tab after it renders.
+    return f"{title} {chip_markdown('configured')}" if configured else title
+
+
 if mode == "Edit existing client":
     selected_name = render_client_picker(get_clients_dir(), key_prefix="client_setup")
 else:
@@ -481,12 +490,22 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
     for _gs_stale_key in [k for k in st.session_state if k.startswith("gs_")]:
         del st.session_state[_gs_stale_key]
 
+# Filled at the bottom of the script, once every *_enabled widget value
+# exists, so the strip shows live state while still rendering above the tabs.
+_summary_strip_slot = st.container()
+
 tab_basics, tab_delivery, tab_checks = st.tabs([
     ":material/badge: Basics", ":material/send: Delivery", ":material/checklist: Checks",
 ])
 with tab_checks:
     tab_leadcap, tab_exclusion, tab_tal, tab_suppression, tab_dedupe, tab_complex, tab_duplicate = st.tabs([
-        "Leadcap", "Exclusion", "TAL", "Suppression", "Dedupe", "Complex Account", "Duplicate",
+        _check_tab_label("Leadcap", bool(profile and profile.leadcap.enabled)),
+        _check_tab_label("Exclusion", bool(profile and profile.exclusion.enabled)),
+        _check_tab_label("TAL", bool(profile and profile.tal.enabled)),
+        _check_tab_label("Suppression", bool(profile and profile.suppression.enabled)),
+        _check_tab_label("Dedupe", bool(profile and profile.dedupe_list.enabled)),
+        _check_tab_label("Complex Account", bool(profile and profile.complex_account.enabled)),
+        _check_tab_label("Duplicate", bool(profile and profile.duplicate.enabled)),
     ])
 
 with tab_basics:
@@ -1474,13 +1493,21 @@ with tab_delivery:
 
 st.divider()
 
-_enabled_summary = ", ".join(
-    label for label, on in [
-        ("Duplicate", duplicate_enabled), ("Leadcap", leadcap_enabled), ("Exclusion", exclusion_enabled),
-        ("TAL", tal_enabled), ("Suppression", suppression_enabled), ("Dedupe list", dedupe_enabled),
-    ] if on
-) or "None"
-st.caption(f"Enabled checks: {_enabled_summary}")
+with _summary_strip_slot:
+    render_status_strip([
+        ("Leadcap", chip_state(leadcap_enabled, needs_setup=bool(leadcap_segmented and leadcap_blank_cap_segments))),
+        ("Exclusion", chip_state(exclusion_enabled, needs_setup=not exclusion_sources_result)),
+        ("TAL", chip_state(tal_enabled, needs_setup=not tal_sources_result)),
+        ("Suppression", chip_state(suppression_enabled, needs_setup=not suppression_sources_result)),
+        ("Dedupe", chip_state(dedupe_enabled, needs_setup=not dedupe_sources_result)),
+        ("Complex Account", chip_state(complex_account_enabled)),
+        ("Duplicate", chip_state(duplicate_enabled)),
+        ("Google Sheets", chip_state(gs_enabled, needs_setup=not gs_tabs)),
+        ("Box Tracker", chip_state(box_tracker_enabled)),
+        ("Convertr", chip_state(convertr_enabled, needs_setup=not convertr_campaigns)),
+        ("Enhancio", chip_state(enhancio_enabled, needs_setup=not enhancio_allocations)),
+        ("Integrate", chip_state(integrate_enabled, needs_setup=not integrate_sid)),
+    ])
 
 if st.button("💾 Save Client Profile", type="primary"):
     _checks_to_validate = [
@@ -1603,8 +1630,9 @@ if st.button("💾 Save Client Profile", type="primary"):
                 leadfile_field_mapping=integrate_leadfile_mapping if integrate_enabled else None,
             ),
         )
-        saved_path = save_profile(new_profile, get_clients_dir())
-        if convertr_enabled and (convertr_account_username or convertr_account_password):
-            save_convertr_account_credentials(
-                client_name, convertr_account_username, convertr_account_password)
+        with st.spinner("Saving client profile..."):
+            saved_path = save_profile(new_profile, get_clients_dir())
+            if convertr_enabled and (convertr_account_username or convertr_account_password):
+                save_convertr_account_credentials(
+                    client_name, convertr_account_username, convertr_account_password)
         st.toast(f"Saved profile to {saved_path}", icon="✅")

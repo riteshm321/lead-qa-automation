@@ -1364,3 +1364,36 @@ def test_new_edit_mode_radio_stays_above_the_tabs(tmp_path, monkeypatch):
     at.run()
     first_mode = next(r for r in at.radio if r.label == "Mode")
     assert "Edit existing client" in first_mode.options
+
+
+def test_summary_strip_reflects_live_checkbox_state(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    strip = next(m for m in at.markdown if "badge[Leadcap" in m.value)
+    assert ":gray-badge[Duplicate ○ Off]" in strip.value
+
+    next(c for c in at.checkbox if c.label == "Enable Duplicate check").check().run()
+    next(c for c in at.checkbox if c.label == "Enable Exclusion check").check().run()
+    strip = next(m for m in at.markdown if "badge[Leadcap" in m.value)
+    assert ":green-badge[Duplicate ● On]" in strip.value
+    assert ":orange-badge[Exclusion ⚠ Needs setup]" in strip.value  # enabled, no sources
+
+
+def test_check_tab_label_shows_configured_chip_for_saved_profile(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile, DuplicateConfig
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_profile(ClientProfile(name="Dup Client", accumulated_report_path="a.xlsx",
+                               duplicate=DuplicateConfig(enabled=True)), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("Dup Client").run()
+    assert not at.exception
+    labels = [t.label for t in at.tabs]
+    assert "Duplicate :blue-badge[✓ Configured]" in labels
+    assert "Leadcap" in labels  # off in the saved profile -> no chip
