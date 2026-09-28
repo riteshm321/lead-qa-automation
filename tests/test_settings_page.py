@@ -309,3 +309,53 @@ def test_removing_an_account_requires_a_confirmation_click(tmp_path, monkeypatch
     confirm_button.click().run()
     assert not at.exception
     assert "bob" not in load_users()
+
+
+def test_settings_uses_material_icons_instead_of_emoji(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert at.title[0].value == ":material/settings: Settings"
+    assert {s.label: s.icon for s in at.status} == {
+        "Shared team data location": ":material/folder_shared:",
+        "Jira account (private to this machine)": ":material/key:",
+        "Enhancio Client ID (private to this machine)": ":material/key:",
+        "Integrate API credentials (private to this machine)": ":material/key:",
+        "Google Sheets service account (private to this machine)": ":material/key:",
+        "Manage user accounts (admin only)": ":material/manage_accounts:",
+        "Time saved tracking (admin only)": ":material/timer:",
+    }
+    browse = at.button(key="clients_dir_browse")
+    assert browse.label == "Browse..."
+    assert browse.proto.icon == ":material/folder_open:"
+
+
+def test_settings_status_strip_shows_what_is_configured(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_enhancio_client_id
+    save_enhancio_client_id("CID123")
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    strip = next(m.value for m in at.markdown if "badge[Shared folder" in m.value)
+    assert ":orange-badge[Shared folder ⚠ Needs setup]" in strip  # required, not set yet
+    assert ":blue-badge[Enhancio ✓ Configured]" in strip
+    assert ":gray-badge[Jira ○ Off]" in strip  # optional, not set
+    assert ":gray-badge[Integrate ○ Off]" in strip
+    assert ":gray-badge[Google Sheets ○ Off]" in strip
+
+
+def test_settings_problems_and_empty_states_use_the_shared_helpers(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert any(c.value.startswith(":material/timer: No client processes completed yet.") for c in at.caption)
+
+    at.button(key="clients_dir_save").click().run()
+    assert not at.exception
+    assert len(at.error) == 1
+    assert at.error[0].icon == ":material/error:"
+    assert "A shared team data folder is required" in at.error[0].value
+    assert "**Suggested fix:**" in at.error[0].value

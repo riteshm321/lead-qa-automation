@@ -12,16 +12,29 @@ from core.app_settings import (
 from core.activity_tracker import load_all_activity, get_user_stats, format_minutes
 from core.auth import create_user, delete_user, load_users, update_user_role
 from core.branding import configure_page
+from core.errors import render_problem
 from core.file_browser import browse_for_folder
 from core.onedrive import is_onedrive_synced_path
 from core.toast import queue_toast_before_rerun, show_pending_toast
+from core.ui_components import render_empty_state, render_status_strip, setup_state
 
 _current_user = configure_page("Settings")
 show_pending_toast()
-st.title("⚙️ Settings")
+st.title(":material/settings: Settings")
 st.caption("App-wide settings, set up once — not tied to any specific client.")
+# Saved state, not live input -- every Save button on this page reruns, so
+# this row catches up the moment anything below is saved.
+_jira_now = get_jira_settings()
+_integrate_key_now, _integrate_secret_now = get_integrate_credentials()
+render_status_strip([
+    ("Shared folder", setup_state(bool(get_shared_root_dir()))),
+    ("Jira", setup_state(all(_jira_now.values()), required=False)),
+    ("Enhancio", setup_state(bool(get_enhancio_client_id()), required=False)),
+    ("Integrate", setup_state(bool(_integrate_key_now and _integrate_secret_now), required=False)),
+    ("Google Sheets", setup_state(bool(get_google_sheets_key_path()), required=False)),
+])
 
-with st.expander("⚙️ Shared team data location", expanded=False):
+with st.expander("Shared team data location", expanded=False, icon=":material/folder_shared:"):
     _clients_dir = get_clients_dir()
     _aliases_path = get_aliases_path()
     st.caption(f"Clients are currently stored at: `{os.path.abspath(_clients_dir)}`")
@@ -52,7 +65,7 @@ with st.expander("⚙️ Shared team data location", expanded=False):
     # col_input rendering on the left regardless of that fill order, exactly
     # like the proven pattern in Client Setup's _path_input_with_browse.
     with col_browse:
-        if st.button("📂 Browse...", key="clients_dir_browse", use_container_width=True):
+        if st.button("Browse...", key="clients_dir_browse", icon=":material/folder_open:", use_container_width=True):
             chosen = browse_for_folder()
             if chosen:
                 st.session_state["clients_dir_input"] = chosen
@@ -65,9 +78,11 @@ with st.expander("⚙️ Shared team data location", expanded=False):
     if st.button("Save", key="clients_dir_save", use_container_width=True):
         new_root = _new_dir.strip()
         if not new_root:
-            st.error("A shared team data folder is required — this can no longer be left blank.")
+            render_problem("A shared team data folder is required — this can no longer be left blank.",
+                           "Click **Browse...** and pick a folder inside your synced OneDrive.")
         elif not is_onedrive_synced_path(new_root):
-            st.error(
+            # Kept verbatim with no separate suggestion -- the message already ends with the fix.
+            render_problem(
                 "That folder doesn't look like it's inside a OneDrive-synced folder on this machine. "
                 "Pick a folder inside your synced OneDrive (or a synced SharePoint team library) so "
                 "your colleagues can access the same data."
@@ -87,7 +102,7 @@ with st.expander("⚙️ Shared team data location", expanded=False):
             queue_toast_before_rerun("Saved.")
             st.rerun()
 
-with st.expander("🔑 Jira account (private to this machine)", expanded=False):
+with st.expander("Jira account (private to this machine)", expanded=False, icon=":material/key:"):
     st.caption(
         "Used only for the \"Post summary to Jira\" button on the Run Check page, so a finalized run's "
         "summary can be posted as a comment on that client's Jira ticket under your own account. "
@@ -107,9 +122,9 @@ with st.expander("🔑 Jira account (private to this machine)", expanded=False):
         queue_toast_before_rerun("Saved.")
         st.rerun()
 
-with st.expander("🔑 Enhancio Client ID (private to this machine)", expanded=False):
+with st.expander("Enhancio Client ID (private to this machine)", expanded=False, icon=":material/key:"):
     st.caption(
-        "Used by the 🔗 Enhancio page and by Client Setup's \"Fetch allocations\"/\"Test connection\" "
+        "Used by the **Enhancio** page and by Client Setup's \"Fetch allocations\"/\"Test connection\" "
         "buttons. Unlike Jira/Convertr, this is ONE shared credential for the whole org (Enhancio's "
         "Enhancio-Managed OAuth2 Connected App Client ID — Settings → Org Settings → API Integrations → "
         "Connected Apps on pubnet.enhancio.com), not tied to your own login — but it's still a live API "
@@ -124,9 +139,9 @@ with st.expander("🔑 Enhancio Client ID (private to this machine)", expanded=F
         queue_toast_before_rerun("Saved.")
         st.rerun()
 
-with st.expander("🔑 Integrate API credentials (private to this machine)", expanded=False):
+with st.expander("Integrate API credentials (private to this machine)", expanded=False, icon=":material/key:"):
     st.caption(
-        "Used by the 🔗 Integrate page. One shared API Key/Secret for the whole org (from Integrate's "
+        "Used by the **Integrate** page. One shared API Key/Secret for the whole org (from Integrate's "
         "Keys & credentials admin page) — each client just needs its own Source ID (SID), set on Client "
         "Setup. This is a live API credential, so it's stored locally on this machine only, never inside "
         "the shared clients folder above."
@@ -141,7 +156,7 @@ with st.expander("🔑 Integrate API credentials (private to this machine)", exp
         queue_toast_before_rerun("Saved.")
         st.rerun()
 
-with st.expander("🔑 Google Sheets service account (private to this machine)", expanded=False):
+with st.expander("Google Sheets service account (private to this machine)", expanded=False, icon=":material/key:"):
     st.caption(
         "Used by any client with Google Sheets Lead Delivery enabled. One shared service-account key file "
         "for the whole org — each individual Sheet still needs to be shared with that service account's "
@@ -157,7 +172,7 @@ with st.expander("🔑 Google Sheets service account (private to this machine)",
         st.rerun()
 
 if _current_user["is_admin"]:
-    with st.expander("👤 Manage user accounts (admin only)", expanded=False):
+    with st.expander("Manage user accounts (admin only)", expanded=False, icon=":material/manage_accounts:"):
         st.caption(
             "Accounts are local to this machine. Add one for each colleague who runs this app here."
         )
@@ -174,9 +189,11 @@ if _current_user["is_admin"]:
         if _add_submitted:
             _new_username = _new_username.strip()
             if not _new_username or not _new_password:
-                st.error("Username and password are required.")
+                render_problem("Username and password are required.",
+                               "Fill in both fields above, then click **Add account** again.")
             elif _new_username in load_users():
-                st.error("That username already exists.")
+                render_problem("That username already exists.",
+                               "Pick a different username, or edit that account under **Existing accounts** below.")
             else:
                 create_user(_new_username, _new_password, _new_is_admin, role=_new_role)
                 queue_toast_before_rerun(f"Added {_new_username}.")
@@ -199,7 +216,7 @@ if _current_user["is_admin"]:
                 # width, made a misclick a real, plausible way to
                 # permanently delete a colleague's login.
                 if st.session_state.get(_pending_removal_key) == _username:
-                    st.warning(f"⚠️ Remove **{_username}**'s account? This can't be undone.")
+                    render_problem(f"Remove **{_username}**'s account? This can't be undone.", level="warning")
                     _col_confirm, _col_cancel = st.columns(2)
                     if _col_confirm.button(
                         "Confirm removal", key=f"confirm_remove_{_username}",
@@ -229,7 +246,7 @@ if _current_user["is_admin"]:
                     queue_toast_before_rerun(f"Updated {_username}'s role.")
                     st.rerun()
 
-    with st.expander("⏱️ Time saved tracking (admin only)", expanded=False):
+    with st.expander("Time saved tracking (admin only)", expanded=False, icon=":material/timer:"):
         st.caption(
             "Drives the \"Time Saved\" card shown in the sidebar to everyone -- a client process is "
             "counted once per successful Finalize/Confirm & Write, with the automated time measured "
@@ -239,7 +256,9 @@ if _current_user["is_admin"]:
         )
         _activity = load_all_activity()
         if not _activity:
-            st.caption("No client processes completed yet.")
+            render_empty_state("No client processes completed yet.",
+                               "Every successful Finalize/Confirm & Write on Run Check is counted here.",
+                               icon="timer")
         else:
             for _activity_username, _activity_record in sorted(_activity.items()):
                 _count = _activity_record.get("process_count", 0)
