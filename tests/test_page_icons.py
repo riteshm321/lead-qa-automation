@@ -32,6 +32,7 @@ SWEPT_PAGES = [
     "5_Box_Tracker.py",
     "7_Convertr.py",
     "8_Enhancio.py",
+    "9_Integrate.py",
 ]
 
 

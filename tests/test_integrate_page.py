@@ -243,3 +243,54 @@ def test_dedup_skips_a_previously_uploaded_email(tmp_path, monkeypatch):
     assert not at.exception
     assert any("already uploaded" in w.value for w in at.warning)
     mock_submit.assert_not_called()
+
+
+def test_integrate_status_strip_shows_everything_missing_before_the_hard_stop(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _save_profile()  # SID + field mapping + QA mapping; no API credentials saved
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    strip = next(m.value for m in at.markdown if "badge[API credentials" in m.value)
+    assert ":orange-badge[API credentials ⚠ Needs setup]" in strip
+    assert ":blue-badge[Source ID ✓ Configured]" in strip
+    assert ":blue-badge[Field mapping ✓ Configured]" in strip
+    assert ":blue-badge[Leadfile mapping ✓ Configured]" in strip
+    err = next(e for e in at.error if "Integrate API Key/Secret" in e.value)
+    assert err.icon == ":material/error:"
+    assert "⚙️" not in err.value
+
+
+def test_integrate_upload_is_an_icon_titled_card(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_integrate_credentials("key123", "secret456")
+    _save_profile()
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert at.title[0].value == ":material/link: Integrate"
+    assert [s.value for s in at.subheader] == [":material/upload: Upload leads to Integrate"]
+
+
+def test_integrate_upload_summary_uses_icon_metric_cards(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_integrate_credentials("key123", "secret456")
+    _save_profile()
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["integrate_upload_results"] = pd.DataFrame([
+        {"Email": "a@x.com", "Result": "✅ Lead ID lead-1"},
+        {"Email": "", "Result": "❌ No email value for this row"},
+        {"Email": "c@x.com", "Result": "⏭️ Skipped (already uploaded previously)"},
+    ])
+    at.run()
+    assert not at.exception
+    assert [m.label for m in at.metric] == ["Uploaded", "Failed", "Skipped"]
+    assert [m.value for m in at.metric] == ["1", "1", "1"]
+    assert [m.proto.icon for m in at.metric] == [
+        ":material/check_circle:", ":material/error:", ":material/skip_next:"]
