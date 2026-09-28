@@ -145,3 +145,27 @@ def list_profile_names(clients_dir: str = "clients") -> list[str]:
         for f in os.listdir(clients_dir)
         if f.endswith(".json") and _looks_like_profile(os.path.join(clients_dir, f))
     )
+
+
+def list_profile_groups(clients_dir: str = "clients") -> dict[str, str]:
+    """Every existing profile's name mapped to its client_group ("" for a
+    profile that isn't part of any group) -- the raw data
+    core.client_picker groups into a pickable {group: [names]} structure.
+    Does its own directory scan (same shape as list_profile_names) rather
+    than calling it and re-opening each file a second time.
+    """
+    if not os.path.isdir(clients_dir):
+        return {}
+    result: dict[str, str] = {}
+    for f in os.listdir(clients_dir):
+        if not f.endswith(".json"):
+            continue
+        path = os.path.join(clients_dir, f)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if isinstance(data, dict) and "accumulated_report_path" in data:
+            result[os.path.splitext(f)[0]] = data.get("client_group", "")
+    return result

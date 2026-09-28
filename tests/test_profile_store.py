@@ -571,3 +571,21 @@ def test_load_profile_defaults_client_group_for_old_schema_json(tmp_path, monkey
 
     loaded = load_profile("Old Schema Client", clients_dir)
     assert loaded.client_group == ""
+
+
+def test_list_profile_groups_returns_name_to_group_mapping(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile, list_profile_groups
+
+    clients_dir = get_clients_dir()
+    save_profile(ClientProfile(name="Autodesk APAC", accumulated_report_path="a.xlsx",
+                                client_group="Autodesk"), clients_dir)
+    save_profile(ClientProfile(name="Autodesk EMEA", accumulated_report_path="a.xlsx",
+                                client_group="Autodesk"), clients_dir)
+    save_profile(ClientProfile(name="Solo Client", accumulated_report_path="a.xlsx"), clients_dir)
+
+    assert list_profile_groups(clients_dir) == {
+        "Autodesk APAC": "Autodesk", "Autodesk EMEA": "Autodesk", "Solo Client": "",
+    }
