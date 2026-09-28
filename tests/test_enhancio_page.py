@@ -1118,3 +1118,87 @@ def test_jira_section_posts_a_summary_after_reconcile(tmp_path, monkeypatch):
             adf_body = args[4]
             assert "https://madlog.sharepoint.com/:x:/s/Team/AccLink" in str(adf_body)
             assert "Accumulated File" in str(adf_body)
+
+
+def test_enhancio_status_strip_shows_what_this_client_still_needs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)  # allocations + field mapping; no Client ID saved, no Jira ticket
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    strip = next(m.value for m in at.markdown if "badge[Allocations" in m.value)
+    assert ":blue-badge[Allocations ✓ Configured]" in strip
+    assert ":blue-badge[Field mapping ✓ Configured]" in strip
+    assert ":orange-badge[Enhancio Client ID ⚠ Needs setup]" in strip
+    assert ":gray-badge[Jira ticket ○ Off]" in strip
+
+
+def test_enhancio_sections_are_icon_titled_cards_and_icons_replace_emoji(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated(acc_path)
+    _save_profile(acc_path, jira_ticket_key="PROJ-1234")
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert at.title[0].value == ":material/link: Enhancio"
+    assert [s.value for s in at.subheader] == [
+        ":material/upload: 1. Upload leads to Enhancio",
+        ":material/sync: 2. Reconcile accepted/rejected leads",
+        ":material/forum: Post to Jira",
+    ]
+    post = at.button(key="enhancio_jira_post")
+    assert post.label == "Post to PROJ-1234"
+    assert post.proto.icon == ":material/send:"
+
+
+def test_enhancio_upload_summary_uses_icon_metric_cards(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["enhancio_upload_results"] = pd.DataFrame([
+        {"CID": "120022", "Email": "a@x.com", "Result": "✅ Lead ID 1 (Submitted)"},
+        {"CID": "120022", "Email": "b@x.com", "Result": "❌ Not accepted by Enhancio (see batch error reasons above)"},
+        {"CID": "120028", "Email": "c@x.com", "Result": "⏭️ Skipped (already uploaded to this allocation previously)"},
+    ])
+    at.run()
+    assert not at.exception
+    assert [m.label for m in at.metric] == ["Uploaded", "Failed", "Skipped"]
+    assert [m.value for m in at.metric] == ["1", "1", "1"]
+    assert [m.proto.icon for m in at.metric] == [
+        ":material/check_circle:", ":material/error:", ":material/skip_next:"]
+
+
+def test_enhancio_empty_date_range_and_preview_download_use_icons(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)  # header row only -- no leads on any date
+    _save_profile(acc_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert any(c.value.startswith(":material/confirmation_number: No Jira ticket configured") for c in at.caption)
+
+    at.radio(key="enhancio_lead_source").set_value("Pull from Accumulated Report by date range").run()
+    assert not at.exception
+    assert any(c.value.startswith(":material/event_busy: No leads in the Accumulated Report between")
+               for c in at.caption)
+
+    at.radio(key="enhancio_lead_source").set_value("Upload a file").run()
+    leads_csv = tmp_path / "leads.csv"
+    pd.DataFrame([{"CID": "120022", "Email": "a@x.com", "First Name": "A", "Last Name": "One",
+                   "Company": "Acme"}]).to_csv(leads_csv, index=False)
+    with open(leads_csv, "rb") as f:
+        at.get("file_uploader")[0].set_value(("leads.csv", f.read(), "text/csv")).run()
+    assert not at.exception
+    download = next(d for d in at.download_button if d.key == "enhancio_preview_download")
+    assert download.proto.label == "Download these leads (.xlsx)"
+    assert download.proto.icon == ":material/download:"

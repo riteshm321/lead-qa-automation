@@ -31,6 +31,7 @@ SWEPT_PAGES = [
     "6_Fuzzy_Match.py",
     "5_Box_Tracker.py",
     "7_Convertr.py",
+    "8_Enhancio.py",
 ]
 
 
