@@ -79,3 +79,59 @@ def test_multi_profile_group_shows_a_second_step_with_a_region_count(tmp_path, m
     assert not at.exception
     profile_box = next(s for s in at.selectbox if s.label == "Client (region)")
     assert set(profile_box.options) == {"Autodesk APAC", "Autodesk EMEA"}
+
+
+def test_several_ungrouped_profiles_render_exactly_one_selectbox(tmp_path, monkeypatch):
+    # Regression test for the deleted `len(candidates) == 1` short-circuit:
+    # with 3+ ungrouped profiles, a second (region) selectbox must never
+    # appear, no matter which profile is picked. Asserting on
+    # `len(at.selectbox)` directly (not just the "Client"-labeled box) is
+    # what catches a stray second selectbox that the old label-filtered
+    # assertions couldn't see.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    names = ["Acme Corp", "Beta Industries", "Gamma LLC"]
+    for name in names:
+        save_profile(
+            ClientProfile(name=name, accumulated_report_path="a.xlsx"), get_clients_dir()
+        )
+
+    for name in names:
+        at = AppTest.from_file(_write_host_script(tmp_path), default_timeout=15)
+        at.run()
+        assert not at.exception
+        assert len(at.selectbox) == 1
+
+        at.selectbox[0].set_value(name).run()
+        assert not at.exception
+        assert len(at.selectbox) == 1
+        assert at.session_state["picked"] == name
+
+
+def test_singleton_group_with_client_group_set_shows_own_name_as_label(tmp_path, monkeypatch):
+    # A profile can be assigned a client_group before any sibling profile
+    # in that group exists. The picker must still show the profile's own
+    # name as its option -- not the abstract group key -- exactly like the
+    # fully-ungrouped case.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_profile(
+        ClientProfile(
+            name="Autodesk EMEA", accumulated_report_path="a.xlsx", client_group="Autodesk"
+        ),
+        get_clients_dir(),
+    )
+
+    at = AppTest.from_file(_write_host_script(tmp_path), default_timeout=15)
+    at.run()
+    assert not at.exception
+    client_selectboxes = [s for s in at.selectbox if s.label == "Client"]
+    assert len(client_selectboxes) == 1
+    assert client_selectboxes[0].options == ["Autodesk EMEA"]
+    assert at.session_state["picked"] == "Autodesk EMEA"

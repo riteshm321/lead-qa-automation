@@ -62,7 +62,7 @@ def render_client_picker(clients_dir: str, key_prefix: str, label: str = "Client
 
     groups = group_profile_names(name_to_group)
     group_labels = [
-        f"{key} ({len(names)} regions)" if len(names) > 1 else key
+        f"{key} ({len(names)} regions)" if len(names) > 1 else names[0]
         for key, names in groups.items()
     ]
     label_to_key = dict(zip(group_labels, groups.keys()))
