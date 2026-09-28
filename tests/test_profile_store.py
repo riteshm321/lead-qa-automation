@@ -589,3 +589,35 @@ def test_list_profile_groups_returns_name_to_group_mapping(tmp_path, monkeypatch
     assert list_profile_groups(clients_dir) == {
         "Autodesk APAC": "Autodesk", "Autodesk EMEA": "Autodesk", "Solo Client": "",
     }
+
+
+def test_list_profile_groups_ignores_non_profile_json_in_same_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile, list_profile_groups
+
+    clients_dir = get_clients_dir()
+    save_profile(ClientProfile(name="Valid Client", accumulated_report_path="a.xlsx",
+                                client_group="Group A"), clients_dir)
+    with open(os.path.join(clients_dir, "company_aliases.json"), "w", encoding="utf-8") as f:
+        json.dump([["acme", "acme corp"]], f)
+    with open(os.path.join(clients_dir, "not_a_profile_either.json"), "w", encoding="utf-8") as f:
+        json.dump({"some": "unrelated dict"}, f)
+
+    assert list_profile_groups(clients_dir) == {"Valid Client": "Group A"}
+
+
+def test_list_profile_groups_ignores_non_utf8_json_in_same_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile, list_profile_groups
+
+    clients_dir = get_clients_dir()
+    save_profile(ClientProfile(name="Valid Client", accumulated_report_path="a.xlsx",
+                                client_group="Group B"), clients_dir)
+    with open(os.path.join(clients_dir, "corrupted.json"), "wb") as f:
+        f.write(b"\xff\xfe\x00\x01not valid utf-8 \xbf")
+
+    assert list_profile_groups(clients_dir) == {"Valid Client": "Group B"}
