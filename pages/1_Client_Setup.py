@@ -29,7 +29,8 @@ from core.models import (
     EnhancioConfig, EnhancioAllocationMapping, IntegrateConfig, LeadTemplateColumnRule, LeadTemplateMappingConfig,
     GoogleSheetTab, GoogleSheetsConfig,
 )
-from core.profile_store import save_profile, load_profile, list_profile_names
+from core.client_picker import render_client_picker
+from core.profile_store import save_profile, load_profile
 from core.toast import show_pending_toast
 
 # Integrate's own documented set of real lead attribute names -- confirmed
@@ -388,28 +389,6 @@ def _render_paired_field_mapping(key_prefix: str, target_name: str, existing: di
     return mapping
 
 
-@st.cache_data(show_spinner=False)
-def _cached_profile_names(clients_dir: str, dir_mtime: float) -> list[str]:
-    # dir_mtime must NOT be underscore-prefixed -- Streamlit excludes any
-    # parameter named with a leading underscore from the cache key hash.
-    # list_profile_names() opens and JSON-parses every client profile in
-    # the shared OneDrive clients folder to confirm each one really is a
-    # profile -- re-scanning all of them (currently 15+) on every single
-    # widget interaction, not just page navigation, was a real and growing
-    # source of sluggishness as the client list grows. Keyed on the
-    # directory's own mtime so a newly saved/removed profile still shows
-    # up on the very next rerun.
-    return list_profile_names(clients_dir)
-
-
-def _clients_dir_mtime(clients_dir: str) -> float:
-    try:
-        return os.path.getmtime(clients_dir)
-    except OSError:
-        return 0.0
-
-
-existing = _cached_profile_names(get_clients_dir(), _clients_dir_mtime(get_clients_dir()))
 mode = st.radio("Mode", ["Create new client", "Edit existing client"])
 
 @st.cache_data(show_spinner=False)
@@ -429,8 +408,12 @@ def _profile_file_mtime(name: str, clients_dir: str) -> float:
         return 0.0
 
 
-if mode == "Edit existing client" and existing:
-    selected_name = st.selectbox("Client", existing)
+if mode == "Edit existing client":
+    selected_name = render_client_picker(get_clients_dir(), key_prefix="client_setup")
+else:
+    selected_name = None
+
+if selected_name:
     try:
         _clients_dir_now = get_clients_dir()
         profile = _cached_load_profile(
@@ -447,7 +430,6 @@ if mode == "Edit existing client" and existing:
                  f"happening, delete and re-create it in Client Setup. (Technical detail: {exc})")
         st.stop()
 else:
-    selected_name = None
     profile = None
 
 _profile_identity = f"{mode}::{selected_name or ''}"
@@ -499,6 +481,14 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
         del st.session_state[_gs_stale_key]
 
 client_name = st.text_input("Client name", value=profile.name if profile else "")
+client_group_input = st.text_input(
+    "Client group (optional)",
+    value=profile.client_group if profile else "",
+    key="client_group_input",
+    help="Groups this profile with other regional profiles for the same brand (e.g. \"Autodesk APAC\" and "
+         "\"Autodesk EMEA\" both set this to \"Autodesk\") so the client picker offers them as one group "
+         "instead of two unrelated entries. Leave blank if this client isn't split by region.",
+)
 
 st.divider()
 
@@ -1518,6 +1508,7 @@ if st.button("💾 Save Client Profile", type="primary"):
     else:
         new_profile = ClientProfile(
             name=client_name,
+            client_group=client_group_input.strip(),
             accumulated_report_path=accumulated_path,
             accumulated_tab_name=accumulated_tab_name or "Accumulated",
             refund_tab_name=refund_tab_name or "Refund",

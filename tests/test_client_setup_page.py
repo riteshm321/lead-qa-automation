@@ -1249,3 +1249,42 @@ def test_a_custom_gs_date_format_survives_a_reload_and_resave(tmp_path, monkeypa
     resaved = load_profile("GS Custom Format Client", get_clients_dir())
     rule2 = next(r for r in resaved.google_sheets.mapping.rules if r.template_column == "Capture Date")
     assert rule2.date_format == "%d %b %Y"
+
+
+def test_saving_a_client_group_persists_it(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("Autodesk APAC").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "acc.xlsx")).run()
+    next(t for t in at.text_input if t.label == "Client group (optional)").set_value("Autodesk").run()
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.profile_store import load_profile
+    saved = load_profile("Autodesk APAC", get_clients_dir())
+    assert saved.client_group == "Autodesk"
+
+
+def test_edit_existing_client_picker_still_selects_by_exact_name_when_ungrouped(tmp_path, monkeypatch):
+    # The load-bearing backward-compat guarantee from this plan's Global
+    # Constraints: an ungrouped client (every profile that existed before
+    # this task) must still be selectable through one plain selectbox
+    # labeled "Client", by its own exact name, with no second step.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_profile(ClientProfile(name="Existing Client", accumulated_report_path="a.xlsx"), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    client_boxes = [s for s in at.selectbox if s.label == "Client"]
+    assert len(client_boxes) == 1
+    client_boxes[0].set_value("Existing Client").run()
+    assert not at.exception
