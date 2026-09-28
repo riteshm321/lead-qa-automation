@@ -1317,3 +1317,50 @@ def test_switching_clients_resets_the_client_group_field(tmp_path, monkeypatch):
 
     next(s for s in at.selectbox if s.label == "Client").set_value("Ungrouped Client").run()
     assert at.text_input(key="client_group_input").value == ""
+
+
+def _tab(at, suffix):
+    return next(t for t in at.tabs if t.label.endswith(suffix))
+
+
+def test_client_setup_has_basics_delivery_checks_tabs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    labels = {t.label for t in at.tabs}
+    assert {":material/badge: Basics", ":material/send: Delivery", ":material/checklist: Checks"} <= labels
+    for check in ("Leadcap", "Exclusion", "TAL", "Suppression", "Dedupe", "Complex Account", "Duplicate"):
+        assert any(label.startswith(check) for label in labels), check
+
+
+def test_sections_live_in_their_new_tabs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    basics, delivery, checks = _tab(at, "Basics"), _tab(at, "Delivery"), _tab(at, "Checks")
+
+    assert any(t.label == "Client name" for t in basics.text_input)
+    assert any(t.label == "Jira ticket key or link (optional)" for t in basics.text_input)
+    assert any(c.label == "Enable file collation for this client" for c in basics.checkbox)
+
+    assert any(r.label == "Mode" for r in delivery.radio)
+    delivery_boxes = {c.label for c in delivery.checkbox}
+    assert "This client delivers leads to Google Sheets" in delivery_boxes
+    assert "This client uploads to Convertr" in delivery_boxes
+    assert "This client uses a Box Tracker" in delivery_boxes
+
+    check_boxes = {c.label for c in checks.checkbox}
+    assert "Enable Duplicate check" in check_boxes
+    assert "This is a complex account" in check_boxes
+    assert "This client uploads to Convertr" not in check_boxes
+
+
+def test_new_edit_mode_radio_stays_above_the_tabs(tmp_path, monkeypatch):
+    # Nine existing tests pick the FIRST radio labeled "Mode" to mean the
+    # New/Edit radio; Client Mode's radio shares that label.
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    first_mode = next(r for r in at.radio if r.label == "Mode")
+    assert "Edit existing client" in first_mode.options

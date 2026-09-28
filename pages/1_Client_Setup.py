@@ -481,22 +481,26 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
     for _gs_stale_key in [k for k in st.session_state if k.startswith("gs_")]:
         del st.session_state[_gs_stale_key]
 
-client_name = st.text_input("Client name", value=profile.name if profile else "")
-client_group_input = st.text_input(
-    "Client group (optional)",
-    value=profile.client_group if profile else "",
-    key="client_group_input",
-    help="Groups this profile with other regional profiles for the same brand (e.g. \"Autodesk APAC\" and "
-         "\"Autodesk EMEA\" both set this to \"Autodesk\") so the client picker offers them as one group "
-         "instead of two unrelated entries. Leave blank if this client isn't split by region.",
-)
-
-st.divider()
-
-tab_basics, tab_leadcap, tab_exclusion, tab_tal, tab_suppression, tab_dedupe, tab_complex = st.tabs([
-    "🗂️ Basics", "🧮 Leadcap", "🚫 Exclusion", "🎯 TAL", "🔕 Suppression", "🧹 Dedupe & Duplicate",
-    "🧩 Complex Account",
+tab_basics, tab_delivery, tab_checks = st.tabs([
+    ":material/badge: Basics", ":material/send: Delivery", ":material/checklist: Checks",
 ])
+with tab_checks:
+    tab_leadcap, tab_exclusion, tab_tal, tab_suppression, tab_dedupe, tab_complex, tab_duplicate = st.tabs([
+        "Leadcap", "Exclusion", "TAL", "Suppression", "Dedupe", "Complex Account", "Duplicate",
+    ])
+
+with tab_basics:
+    with st.container(border=True):
+        st.subheader(":material/person: Client")
+        client_name = st.text_input("Client name", value=profile.name if profile else "")
+        client_group_input = st.text_input(
+            "Client group (optional)",
+            value=profile.client_group if profile else "",
+            key="client_group_input",
+            help="Groups this profile with other regional profiles for the same brand (e.g. \"Autodesk APAC\" and "
+                 "\"Autodesk EMEA\" both set this to \"Autodesk\") so the client picker offers them as one group "
+                 "instead of two unrelated entries. Leave blank if this client isn't split by region.",
+        )
 
 with tab_basics:
     with st.container(border=True):
@@ -518,22 +522,6 @@ with tab_basics:
         with col_ref:
             refund_tab_name = st.text_input("Refund tab name",
                                              value=profile.refund_tab_name if profile else "Refund")
-
-        col_jira_ticket, col_jira_reporter = st.columns(2)
-        with col_jira_ticket:
-            jira_ticket_key = st.text_input(
-                "Jira ticket key or link (optional)", value=profile.jira_ticket_key if profile else "",
-                placeholder="e.g. PROJ-1234 or https://yourteam.atlassian.net/browse/PROJ-1234",
-                help="Paste either the ticket key or the full link — either works. Enables a \"Post summary "
-                     "to Jira\" button on Run Check after Finalize. Leave blank to skip. The same ticket "
-                     "usually covers a whole campaign — come back here and update it if that ever changes.",
-            )
-        with col_jira_reporter:
-            jira_reporter_name = st.text_input(
-                "Jira reporter's name (optional)", value=profile.jira_reporter_name if profile else "",
-                placeholder="e.g. Jane",
-                help="Used for the \"Hi <name>\" greeting in the posted summary.",
-            )
 
         accumulated_headers, accumulated_headers_error = _safe_read_template_headers(accumulated_path, accumulated_tab_name)
 
@@ -566,6 +554,24 @@ with tab_basics:
                 st.caption("Enter a valid Accumulated Report path and tab name above to map its columns.")
 
     with st.container(border=True):
+        st.subheader(":material/confirmation_number: Jira")
+        col_jira_ticket, col_jira_reporter = st.columns(2)
+        with col_jira_ticket:
+            jira_ticket_key = st.text_input(
+                "Jira ticket key or link (optional)", value=profile.jira_ticket_key if profile else "",
+                placeholder="e.g. PROJ-1234 or https://yourteam.atlassian.net/browse/PROJ-1234",
+                help="Paste either the ticket key or the full link — either works. Enables a \"Post summary "
+                     "to Jira\" button on Run Check after Finalize. Leave blank to skip. The same ticket "
+                     "usually covers a whole campaign — come back here and update it if that ever changes.",
+            )
+        with col_jira_reporter:
+            jira_reporter_name = st.text_input(
+                "Jira reporter's name (optional)", value=profile.jira_reporter_name if profile else "",
+                placeholder="e.g. Jane",
+                help="Used for the \"Hi <name>\" greeting in the posted summary.",
+            )
+
+    with st.container(border=True):
         st.subheader("File Collation (optional)")
         st.caption(
             "Offers a \"collate multiple files into one New Leads file\" option on Run Check for this "
@@ -576,6 +582,7 @@ with tab_basics:
             value=profile.collation_enabled if profile else False,
         )
 
+with tab_delivery:
     with st.container(border=True):
         st.subheader("Client Mode")
         _CLIENT_MODES = ["Lead QA", "Lead QA & Upload"]
@@ -856,8 +863,9 @@ with tab_basics:
             ]
             lead_template_mapping_rules = _ltm_preserved_rules + lead_template_mapping_rules
 
-        st.divider()
-        st.markdown("**Google Sheets Lead Delivery (optional)**")
+with tab_delivery:
+    with st.container(border=True):
+        st.subheader("Google Sheets Lead Delivery (optional)")
         st.caption(
             "Route this client's valid leads straight to a Google Sheet per CID, instead of (or alongside) "
             "an Excel Lead Template. Requires the Google Sheets service account key to be set on the "
@@ -974,6 +982,7 @@ with tab_basics:
         else:
             st.caption("Google Sheets delivery is disabled for this client.")
 
+with tab_duplicate:
     with st.container(border=True):
         st.subheader("Duplicate Check")
         duplicate_enabled = st.checkbox("Enable Duplicate check", value=profile.duplicate.enabled if profile else False)
@@ -1106,8 +1115,9 @@ with tab_complex:
         else:
             st.caption("Complex Account rules are disabled for this client.")
 
-        st.divider()
-        st.markdown("**Box Tracker (optional)**")
+with tab_delivery:
+    with st.container(border=True):
+        st.subheader("Box Tracker (optional)")
         st.caption(
             "For clients whose lead-approval process runs through a Box-hosted tracker workbook this app "
             "can't write to directly (no Box API access) — the tool instead maintains a local mirror "
@@ -1170,8 +1180,9 @@ with tab_complex:
         else:
             st.caption("Box Tracker is disabled for this client.")
 
-        st.divider()
-        st.markdown("**Convertr Upload (optional)**")
+with tab_delivery:
+    with st.container(border=True):
+        st.subheader("Convertr Upload (optional)")
         st.caption(
             "Uploads a client-verified leadfile straight to Convertr via the Publisher API — every "
             "Publisher account has access to this by default, no Campaign Admin access required. Each "
@@ -1263,8 +1274,9 @@ with tab_complex:
         else:
             st.caption("Convertr upload is disabled for this client.")
 
-        st.divider()
-        st.markdown("**Enhancio Upload (optional)**")
+with tab_delivery:
+    with st.container(border=True):
+        st.subheader("Enhancio Upload (optional)")
         st.caption(
             "Uploads a client-verified leadfile straight to Enhancio's Lead Import API. Unlike Convertr, "
             "auth is ONE shared org-wide Client ID (set once on the ⚙️ Settings page) — every client just "
@@ -1397,8 +1409,9 @@ with tab_complex:
         else:
             st.caption("Enhancio upload is disabled for this client.")
 
-        st.divider()
-        st.markdown("**Integrate Upload (optional)**")
+with tab_delivery:
+    with st.container(border=True):
+        st.subheader("Integrate Upload (optional)")
         st.caption(
             "Uploads a client-verified leadfile straight to Integrate.com's Lead API. One shared "
             "org-wide API Key/Secret (set once on the ⚙️ Settings page) — this client just needs its "
