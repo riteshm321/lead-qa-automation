@@ -1,6 +1,10 @@
+from typing import Literal
+
 import streamlit as st
 
 from core.app_logging import get_logger
+
+ProblemLevel = Literal["error", "warning"]
 
 
 def friendly_error(exc: Exception) -> tuple[str, str]:
@@ -47,6 +51,18 @@ def friendly_error(exc: Exception) -> tuple[str, str]:
     return (f"{type(exc).__name__}: {text}", "")
 
 
+def render_problem(message: str, suggestion: str = "", level: ProblemLevel = "error") -> None:
+    """The one shared way to show a user-facing error/warning: icon +
+    message + (when there's an obvious next step) a one-line suggestion.
+    Pages call this instead of ad hoc st.error/st.warning so every problem
+    looks and reads the same everywhere (UI redesign spec, section 2)."""
+    body = f"{message}\n\n**Suggested fix:** {suggestion}" if suggestion else message
+    if level == "warning":
+        st.warning(body, icon=":material/warning:")
+    else:
+        st.error(body, icon=":material/error:")
+
+
 def render_error(exc: Exception) -> None:
     """Show a short, friendly error with a suggested fix when one is known.
 
@@ -60,7 +76,4 @@ def render_error(exc: Exception) -> None:
     """
     get_logger().exception("Handled error shown to user: %s", exc, exc_info=exc)
     message, fix = friendly_error(exc)
-    if fix:
-        st.error(f"⚠️ {message}\n\n**Suggested fix:** {fix}")
-    else:
-        st.error(f"⚠️ {message}")
+    render_problem(message, fix)

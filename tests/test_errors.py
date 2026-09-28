@@ -1,5 +1,7 @@
 import logging
 
+from streamlit.testing.v1 import AppTest
+
 from core.errors import friendly_error, render_error
 
 
@@ -70,3 +72,39 @@ def test_render_error_logs_the_full_exception(tmp_path, monkeypatch, caplog):
 
     assert any("something specific broke" in r.message for r in caplog.records)
     assert any(r.exc_info is not None for r in caplog.records)
+
+
+def test_render_problem_error_with_suggestion():
+    def _app():
+        from core.errors import render_problem
+        render_problem("Client name is required.", "Enter a name in Basics → Client name.")
+
+    at = AppTest.from_function(_app)
+    at.run()
+    assert not at.exception
+    assert at.error[0].value == "Client name is required.\n\n**Suggested fix:** Enter a name in Basics → Client name."
+    assert at.error[0].icon == ":material/error:"
+
+
+def test_render_problem_warning_without_suggestion():
+    def _app():
+        from core.errors import render_problem
+        render_problem("TAL is enabled but no sources are configured.", level="warning")
+
+    at = AppTest.from_function(_app)
+    at.run()
+    assert at.warning[0].value == "TAL is enabled but no sources are configured."
+    assert at.warning[0].icon == ":material/warning:"
+    assert len(at.error) == 0
+
+
+def test_render_error_routes_through_render_problem():
+    def _app():
+        from core.errors import render_error
+        render_error(PermissionError("[Errno 13] Permission denied: 'x.xlsx'"))
+
+    at = AppTest.from_function(_app)
+    at.run()
+    assert "couldn't be opened" in at.error[0].value
+    assert "**Suggested fix:**" in at.error[0].value
+    assert at.error[0].icon == ":material/error:"
