@@ -1983,3 +1983,37 @@ def test_finalize_skips_google_sheets_write_when_key_path_not_set(tmp_path, monk
     assert not at.exception
 
     mock_append_rows.assert_not_called()
+
+
+def test_client_picker_groups_regional_profiles_on_run_check(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_profile(ClientProfile(name="Autodesk APAC", accumulated_report_path="a.xlsx",
+                                client_group="Autodesk"), get_clients_dir())
+    save_profile(ClientProfile(name="Autodesk EMEA", accumulated_report_path="a.xlsx",
+                                client_group="Autodesk"), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    group_box = next(s for s in at.selectbox if s.label == "Client")
+    assert group_box.options == ["Autodesk (2 regions)"]
+
+
+def test_client_picker_still_selects_ungrouped_clients_by_exact_name_on_run_check(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_profile(ClientProfile(name="Existing Client", accumulated_report_path="a.xlsx"), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    client_boxes = [s for s in at.selectbox if s.label == "Client"]
+    assert len(client_boxes) == 1
+    client_boxes[0].set_value("Existing Client").run()
+    assert not at.exception

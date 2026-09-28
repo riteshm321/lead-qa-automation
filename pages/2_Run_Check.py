@@ -12,6 +12,7 @@ from core.activity_tracker import record_process_completed
 from core.app_settings import get_aliases_path, get_clients_dir, get_jira_settings, get_google_sheets_key_path
 from core.branding import configure_page
 from core.checks.leadcap import validate_purchased_report_cids
+from core.client_picker import render_client_picker
 from core.collation import collate_uploaded_files
 from core.errors import render_error
 from core.excel_io import (
@@ -32,7 +33,7 @@ from core.jira_client import JiraError
 from core.matching import load_alias_groups, add_alias_pair
 from core.models import FieldMapping
 from core.pipeline import run_pipeline, apply_refund_overrides
-from core.profile_store import list_profile_names, load_profile, save_profile
+from core.profile_store import load_profile, save_profile
 from core.toast import queue_toast_before_rerun, show_pending_toast
 from core.upload_cache import resolve_upload
 import requests
@@ -74,34 +75,12 @@ def _cached_sheet_df(path: str, sheet_name: str, mtime: float) -> pd.DataFrame:
     return read_sheet_as_dataframe(path, sheet_name)
 
 
-@st.cache_data(show_spinner=False)
-def _cached_profile_names(clients_dir: str, dir_mtime: float) -> list[str]:
-    # dir_mtime must NOT be underscore-prefixed -- see _cached_tal_index
-    # above for why. list_profile_names() opens and JSON-parses every
-    # client profile in the shared OneDrive clients folder to confirm each
-    # one really is a profile -- re-scanning all of them (currently 15+)
-    # on every single widget interaction, not just page navigation, was a
-    # real and growing source of sluggishness as the client list grows.
-    # Keyed on the directory's own mtime so a newly saved/removed profile
-    # still shows up on the very next rerun.
-    return list_profile_names(clients_dir)
-
-
-def _clients_dir_mtime(clients_dir: str) -> float:
-    try:
-        return os.path.getmtime(clients_dir)
-    except OSError:
-        return 0.0
-
-
-profile_names = _cached_profile_names(get_clients_dir(), _clients_dir_mtime(get_clients_dir()))
-if not profile_names:
-    st.warning("No client profiles found. Create one on the Client Setup page first.")
-    st.stop()
-
 col_client, col_clear = st.columns([5, 1], vertical_alignment="bottom")
 with col_client:
-    client_name = st.selectbox("Client", profile_names)
+    client_name = render_client_picker(get_clients_dir(), key_prefix="run_check")
+    if client_name is None:
+        st.warning("No client profiles found. Create one on the Client Setup page first.")
+        st.stop()
 with col_clear:
     if st.button("🔄 Clear", use_container_width=True,
                  help="Clear the uploaded files and any displayed results, and start a fresh run."):
