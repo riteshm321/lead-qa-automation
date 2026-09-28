@@ -47,7 +47,7 @@ _INTEGRATE_VALID_ATTRIBUTES = {
 configure_page("Client Setup")
 show_pending_toast()
 st.title("Client Setup")
-st.caption("Shared team data location and Jira account credentials moved to the ⚙️ Settings page.")
+st.caption("Shared team data location and Jira account credentials moved to the **Settings** page.")
 
 
 def _path_input_with_browse(label: str, session_key: str, current_value: str, show_label: bool = True) -> str:
@@ -85,7 +85,7 @@ def _tabs_to_state(tabs: list[LeadTemplateTab]) -> list[dict]:
 
 def _render_lead_template_tabs(template_path: str) -> list[LeadTemplateTab]:
     if not st.session_state["lead_template_tabs"]:
-        st.caption("📭 No tabs configured yet — click **➕ Add Tab** below to create one.")
+        render_empty_state("No tabs configured yet.", "Click **➕ Add Tab** below to create one.")
     if st.button("➕ Add Tab", key="lead_template_tabs_add"):
         st.session_state["lead_template_tabs"].append(
             {"id": str(uuid.uuid4()), "sheet_name": "", "cids": "", "file_path": "", "link": ""})
@@ -374,10 +374,11 @@ def _render_paired_field_mapping(key_prefix: str, target_name: str, existing: di
     _targets = [line.strip() for line in _targets_text.splitlines() if line.strip()]
 
     if len(_cols) != len(_targets):
-        st.error(
+        render_problem(
             f"Leadfile columns ({len(_cols)} line(s)) and {target_name} field names ({len(_targets)} "
             "line(s)) don't have the same number of lines — line N in one box has to be line N's match "
-            "in the other. Keeping the previously saved mapping until these line up."
+            "in the other. Keeping the previously saved mapping until these line up.",
+            "Add or delete lines in one of the two boxes until both have the same count.",
         )
         return dict(existing)
 
@@ -570,7 +571,8 @@ with tab_basics:
             accumulated_field_mapping_result = _render_target_field_mapping(
                 "Accumulated Report", "acc", accumulated_headers)
             if accumulated_headers_error is not None:
-                st.error(f"Couldn't read '{accumulated_path}' [{accumulated_tab_name}]: {accumulated_headers_error}")
+                render_problem(f"Couldn't read '{accumulated_path}' [{accumulated_tab_name}]: {accumulated_headers_error}",
+                               "Check the Accumulated Report path and tab name above.")
             elif not accumulated_headers:
                 st.caption("Enter a valid Accumulated Report path and tab name above to map its columns.")
 
@@ -660,8 +662,10 @@ with tab_delivery:
                 )
                 lead_template_tabs_result = _render_lead_template_tabs(lead_template_path)
                 if not lead_template_tabs_result:
-                    st.warning("Multi-tab is enabled but no tabs are configured — "
-                               "no leads will be pasted into the Lead Template.")
+                    render_problem("Multi-tab is enabled but no tabs are configured — "
+                                   "no leads will be pasted into the Lead Template.",
+                                   "Click **➕ Add Tab** above, or untick **Route different CIDs to different "
+                                   "tabs and/or separate files**.", level="warning")
                 _header_source_sheet = lead_template_tabs_result[0].sheet_name if lead_template_tabs_result else ""
                 # A tab can point at a completely different workbook than the shared
                 # path above — the column-mapping preview must read from whichever
@@ -890,7 +894,7 @@ with tab_delivery:
         st.caption(
             "Route this client's valid leads straight to a Google Sheet per CID, instead of (or alongside) "
             "an Excel Lead Template. Requires the Google Sheets service account key to be set on the "
-            "⚙️ Settings page, and each Sheet to be individually shared with that service account's email "
+            "**Settings** page, and each Sheet to be individually shared with that service account's email "
             "as Editor."
         )
         gs_enabled = st.checkbox(
@@ -936,7 +940,8 @@ with tab_delivery:
             _gs_key_path = get_google_sheets_key_path()
             _gs_sample_headers: list[str] = []
             if not _gs_key_path:
-                st.caption("No Google Sheets service account key configured yet — set one on the ⚙️ Settings page.")
+                render_empty_state("No Google Sheets service account key configured yet.",
+                                   "Set one on the **Settings** page.", icon="key_off")
             elif gs_tabs:
                 try:
                     _first_tab = gs_tabs[0]
@@ -1001,7 +1006,9 @@ with tab_delivery:
             ]
             gs_mapping_rules = _gs_preserved_rules + gs_mapping_rules
         else:
-            st.caption("Google Sheets delivery is disabled for this client.")
+            render_empty_state("Google Sheets delivery is disabled for this client.",
+                               "Tick **This client delivers leads to Google Sheets** above to configure it.",
+                               icon="toggle_off")
 
 with tab_duplicate:
     with st.container(border=True):
@@ -1213,7 +1220,8 @@ with tab_delivery:
                 key="box_tracker_pacing_skipped_input", label_visibility="collapsed", height=68)
             box_tracker_pacing_skipped = [line.strip() for line in _skip_text.splitlines() if line.strip()]
         else:
-            st.caption("Box Tracker is disabled for this client.")
+            render_empty_state("Box Tracker is disabled for this client.",
+                               "Tick **This client uses a Box Tracker** above to configure it.", icon="toggle_off")
 
 with tab_delivery:
     with st.container(border=True):
@@ -1286,7 +1294,9 @@ with tab_delivery:
             for _campaign_id in _unique_campaign_ids:
                 if st.button(f"Test connection — campaign {_campaign_id}", key=f"convertr_test_{_campaign_id}"):
                     if not convertr_enterprise or not convertr_account_username or not convertr_account_password:
-                        st.warning("Enter the enterprise subdomain and account login first.")
+                        render_problem("Enter the enterprise subdomain and account login first.",
+                                       "Fill in the enterprise subdomain, Convertr username and Convertr password above.",
+                                       level="warning")
                     else:
                         try:
                             with st.spinner(f"Calling Convertr for campaign {_campaign_id}..."):
@@ -1296,7 +1306,9 @@ with tab_delivery:
                                 _forms = convertr_client.get_publisher_form_fields(
                                     convertr_enterprise, _token, _campaign_id)
                             if not _forms:
-                                st.warning("Connected, but Convertr returned no forms for this campaign.")
+                                render_problem("Connected, but Convertr returned no forms for this campaign.",
+                                               "Check the Campaign ID (SID) in the mapping above belongs to this "
+                                               "Publisher account.", level="warning")
                             for _form in _forms:
                                 _field_keys = ", ".join(
                                     f.removeprefix("form[").removesuffix("]") for f in _form.get("fields", []))
@@ -1305,16 +1317,18 @@ with tab_delivery:
                                     f"{_form.get('formId')}) — fields: {_field_keys}"
                                 )
                         except ConvertrError as exc:
-                            st.error(f"❌ {exc}")
+                            render_problem(f"Couldn't connect to Convertr: {exc}",
+                                           "Check the enterprise subdomain, username and password above, then try again.")
         else:
-            st.caption("Convertr upload is disabled for this client.")
+            render_empty_state("Convertr upload is disabled for this client.",
+                               "Tick **This client uploads to Convertr** above to configure it.", icon="toggle_off")
 
 with tab_delivery:
     with st.container(border=True):
         st.subheader("Enhancio Upload (optional)")
         st.caption(
             "Uploads a client-verified leadfile straight to Enhancio's Lead Import API. Unlike Convertr, "
-            "auth is ONE shared org-wide Client ID (set once on the ⚙️ Settings page) — every client just "
+            "auth is ONE shared org-wide Client ID (set once on the **Settings** page) — every client just "
             "needs its own CID → Enhancio allocation mapping. Each CID routes to its own allocation."
         )
         enhancio_enabled = st.checkbox(
@@ -1376,8 +1390,9 @@ with tab_delivery:
 
             _enhancio_client_id = get_enhancio_client_id()
             if not _enhancio_client_id:
-                st.caption("No Enhancio Client ID configured yet — set one on the ⚙️ Settings page to "
-                           "enable the lookup/test buttons below.")
+                render_empty_state("No Enhancio Client ID configured yet.",
+                                   "Set one on the **Settings** page to enable the lookup/test buttons below.",
+                                   icon="key_off")
             else:
                 if st.button("Fetch allocations from Enhancio", key="enhancio_fetch_allocations"):
                     try:
@@ -1385,14 +1400,17 @@ with tab_delivery:
                             _token = enhancio_client.get_access_token(_enhancio_client_id)["access_token"]
                             _allocations = enhancio_client.list_publisher_allocations(_token)
                         if not _allocations:
-                            st.warning("Connected, but Enhancio returned no allocations for this account.")
+                            render_problem("Connected, but Enhancio returned no allocations for this account.",
+                                           "Check the Client ID on the **Settings** page is this org's Connected App.",
+                                           level="warning")
                         for _allocation in _allocations:
                             st.success(
                                 f"✅ \"{_allocation.get('campaignName')}\" — allocationUid "
                                 f"{_allocation.get('uniqueId')} ({_allocation.get('allocationStatus')})"
                             )
                     except EnhancioError as exc:
-                        st.error(f"❌ {exc}")
+                        render_problem(f"Couldn't connect to Enhancio: {exc}",
+                                       "Check the Enhancio Client ID on the **Settings** page, then try again.")
 
                 _unique_allocation_uids = sorted({a.allocation_uid for a in enhancio_allocations if a.allocation_uid})
                 for _allocation_uid in _unique_allocation_uids:
@@ -1403,7 +1421,8 @@ with tab_delivery:
                                 _token = enhancio_client.get_access_token(_enhancio_client_id)["access_token"]
                                 _fields = enhancio_client.describe_fields(_token, _allocation_uid)
                             if not _fields:
-                                st.warning("Connected, but Enhancio returned no fields for this allocation.")
+                                render_problem("Connected, but Enhancio returned no fields for this allocation.",
+                                               "Check the allocationUid in the mapping above.", level="warning")
                             # Cross-check against the field mapping above --
                             # a mandatory field Enhancio will reject the
                             # whole import for if it's missing, so this is
@@ -1416,10 +1435,12 @@ with tab_delivery:
                                 if _field.get("mandatory") == "Y" and _field.get("fieldLabel") not in _mapped_targets
                             ]
                             if _unmapped_mandatory:
-                                st.error(
-                                    "❌ These mandatory fields have NO mapping entry pointing to them at all "
+                                render_problem(
+                                    "These mandatory fields have NO mapping entry pointing to them at all "
                                     "-- Enhancio will reject every lead sent to this allocation until each has "
-                                    "one: " + "; ".join(f'\"{f}\"' for f in _unmapped_mandatory)
+                                    "one: " + "; ".join(f'\"{f}\"' for f in _unmapped_mandatory),
+                                    "Add a line for each to the Enhancio field mapping above — leadfile column on "
+                                    "the left, this exact field label on the right.",
                                 )
                             for _field in _fields:
                                 _label = _field.get("fieldLabel")
@@ -1440,16 +1461,18 @@ with tab_delivery:
                                 if _allowed_values:
                                     st.caption(f"　　Allowed values: {', '.join(str(v) for v in _allowed_values)}")
                         except EnhancioError as exc:
-                            st.error(f"❌ {exc}")
+                            render_problem(f"Couldn't connect to Enhancio: {exc}",
+                                           "Check the Enhancio Client ID on the **Settings** page, then try again.")
         else:
-            st.caption("Enhancio upload is disabled for this client.")
+            render_empty_state("Enhancio upload is disabled for this client.",
+                               "Tick **This client uploads to Enhancio** above to configure it.", icon="toggle_off")
 
 with tab_delivery:
     with st.container(border=True):
         st.subheader("Integrate Upload (optional)")
         st.caption(
             "Uploads a client-verified leadfile straight to Integrate.com's Lead API. One shared "
-            "org-wide API Key/Secret (set once on the ⚙️ Settings page) — this client just needs its "
+            "org-wide API Key/Secret (set once on the **Settings** page) — this client just needs its "
             "own Source ID (SID), from that Source's URL on home.integrate.com."
         )
         integrate_enabled = st.checkbox(
@@ -1478,9 +1501,11 @@ with tab_delivery:
                 # "emial") without blocking the save, since Integrate's own
                 # attribute list could grow and this app shouldn't be the
                 # thing standing in the way of using a brand-new one.
-                st.warning(
+                render_problem(
                     "These Integrate field mapping target(s) aren't one of Integrate's known attribute "
-                    "names, double-check for a typo: " + ", ".join(_integrate_invalid_targets)
+                    "names, double-check for a typo: " + ", ".join(_integrate_invalid_targets),
+                    "Fix the spelling if it's a typo; a genuinely new Integrate attribute can be saved as-is.",
+                    level="warning",
                 )
 
             st.caption(
@@ -1505,7 +1530,8 @@ with tab_delivery:
             integrate_leadfile_mapping = _render_leadfile_column_mapping(
                 "integrate", profile.integrate.leadfile_field_mapping if profile else None)
         else:
-            st.caption("Integrate upload is disabled for this client.")
+            render_empty_state("Integrate upload is disabled for this client.",
+                               "Tick **This client uploads to Integrate** above to configure it.", icon="toggle_off")
 
 st.divider()
 

@@ -1424,3 +1424,74 @@ def test_disabled_check_shows_an_empty_state_pointing_at_its_toggle(tmp_path, mo
     at.run()
     assert any(c.value.startswith(":material/toggle_off: Exclusion check is off.")
                and "Enable Exclusion check" in c.value for c in at.caption)
+
+
+def test_field_mapping_line_count_error_uses_the_shared_problem_helper(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Enhancio").set_value(True).run()
+    at.text_area(key="enhancio_field_map_cols_input").set_value("Email\nFirst Name").run()
+    at.text_area(key="enhancio_field_map_targets_input").set_value("Email Address").run()
+    err = next(e for e in at.error if "don't have the same number of lines" in e.value)
+    assert err.icon == ":material/error:"
+    assert "**Suggested fix:**" in err.value
+
+
+def test_enhancio_connection_failure_keeps_the_error_text_via_the_shared_helper(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_enhancio_client_id
+    from core.enhancio_client import EnhancioError
+    save_enhancio_client_id("CID123")
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Enhancio").set_value(True).run()
+    with patch("core.enhancio_client.get_access_token",
+               side_effect=EnhancioError("Enhancio returned 401: bad client id")):
+        next(b for b in at.button if b.label == "Fetch allocations from Enhancio").click().run()
+    assert not at.exception
+    err = next(e for e in at.error if "Enhancio returned 401: bad client id" in e.value)
+    assert not err.value.startswith("❌")
+    assert err.icon == ":material/error:"
+    assert "**Suggested fix:**" in err.value
+
+
+def test_convertr_test_connection_failure_keeps_the_error_text_via_the_shared_helper(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.convertr_client import ConvertrError
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(c for c in at.checkbox if c.label == "This client uploads to Convertr").set_value(True).run()
+    next(t for t in at.text_input if t.label.startswith("Convertr enterprise subdomain")).set_value(
+        "amazonbusiness").run()
+    at.text_area(key="convertr_campaigns_input").set_value("120022,44709").run()
+    at.text_input(key="convertr_account_username").set_value("me@x.com").run()
+    at.text_input(key="convertr_account_password").set_value("hunter2").run()
+    with patch("core.convertr_client.login", side_effect=ConvertrError("Convertr returned 401: bad login")):
+        at.button(key="convertr_test_44709").click().run()
+    assert not at.exception
+    err = next(e for e in at.error if "Convertr returned 401: bad login" in e.value)
+    assert not err.value.startswith("❌")
+    assert err.icon == ":material/error:"
+
+
+def test_disabled_delivery_destinations_show_empty_states_pointing_at_their_toggle(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    captions = [c.value for c in at.caption]
+    for message, toggle in [
+        ("Google Sheets delivery is disabled for this client.", "This client delivers leads to Google Sheets"),
+        ("Box Tracker is disabled for this client.", "This client uses a Box Tracker"),
+        ("Convertr upload is disabled for this client.", "This client uploads to Convertr"),
+        ("Enhancio upload is disabled for this client.", "This client uploads to Enhancio"),
+        ("Integrate upload is disabled for this client.", "This client uploads to Integrate"),
+    ]:
+        assert any(c.startswith(f":material/toggle_off: {message}") and toggle in c for c in captions), message
+    assert not any("⚙️" in c for c in captions)  # stale pre-Phase-1 nav-icon references are gone
+
+    next(c for c in at.checkbox if c.label == "This client uploads to Enhancio").set_value(True).run()
+    assert any(c.value.startswith(":material/key_off: No Enhancio Client ID configured yet.") for c in at.caption)
