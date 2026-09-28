@@ -39,3 +39,12 @@ def chip_state(enabled: bool, needs_setup: bool = False) -> ChipState:
 def render_status_strip(items: list[tuple[str, ChipState]]) -> None:
     """One row of labeled chips, in a single markdown element."""
     st.markdown("&nbsp; ".join(chip_markdown(state, label) for label, state in items))
+
+
+def render_empty_state(message: str, hint: str = "", icon: str = "inbox") -> None:
+    """Icon + one short line on what's missing + (optionally) where to fix
+    it -- instead of rendering nothing or a bare caption (spec section 2)."""
+    text = f":material/{icon}: {message}"
+    if hint:
+        text += f" — {hint}"
+    st.caption(text)

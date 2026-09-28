@@ -34,3 +34,24 @@ def test_render_status_strip_renders_one_markdown_row():
     assert ":green-badge[Leadcap ● On]" in value
     assert ":orange-badge[TAL ⚠ Needs setup]" in value
     assert ":gray-badge[Exclusion ○ Off]" in value
+
+
+def test_render_empty_state_with_hint():
+    def _app():
+        from core.ui_components import render_empty_state
+        render_empty_state("No TAL sources configured yet.", "Click **➕ Add TAL Source** below.")
+
+    at = AppTest.from_function(_app)
+    at.run()
+    assert not at.exception
+    assert at.caption[0].value == ":material/inbox: No TAL sources configured yet. — Click **➕ Add TAL Source** below."
+
+
+def test_render_empty_state_without_hint_and_custom_icon():
+    def _app():
+        from core.ui_components import render_empty_state
+        render_empty_state("TAL check is off.", icon="toggle_off")
+
+    at = AppTest.from_function(_app)
+    at.run()
+    assert at.caption[0].value == ":material/toggle_off: TAL check is off."
