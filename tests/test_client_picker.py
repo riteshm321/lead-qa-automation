@@ -2,7 +2,7 @@ import os
 
 from streamlit.testing.v1 import AppTest
 
-from core.client_picker import group_profile_names
+from core.client_picker import NEW_GROUP_SENTINEL, group_choices, group_profile_names
 
 
 def test_ungrouped_profile_becomes_its_own_singleton_group():
@@ -135,3 +135,24 @@ def test_singleton_group_with_client_group_set_shows_own_name_as_label(tmp_path,
     assert len(client_selectboxes) == 1
     assert client_selectboxes[0].options == ["Autodesk EMEA"]
     assert at.session_state["picked"] == "Autodesk EMEA"
+
+
+def test_group_choices_lists_no_group_existing_groups_with_counts_then_create_new():
+    choices = group_choices({"A APAC": "autodesk", "A EMEA": "autodesk", "S": "Solo", "U": "", "B": "Bravo"})
+    assert choices == [
+        ("No group", ""),
+        ("autodesk (2 clients)", "autodesk"),
+        ("Bravo (1 client)", "Bravo"),
+        ("Solo (1 client)", "Solo"),
+        ("+ Create new group…", NEW_GROUP_SENTINEL),
+    ]
+
+
+def test_group_choices_with_no_profiles():
+    assert group_choices({}) == [("No group", ""), ("+ Create new group…", NEW_GROUP_SENTINEL)]
+
+
+def test_group_choices_includes_unknown_current_group():
+    choices = group_choices({"X": "Alpha"}, current_group="Ghost")
+    assert ("Ghost (0 clients)", "Ghost") in choices
+    assert [v for _, v in choices] == ["", "Alpha", "Ghost", NEW_GROUP_SENTINEL]

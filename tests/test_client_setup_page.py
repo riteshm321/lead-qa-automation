@@ -1260,7 +1260,9 @@ def test_saving_a_client_group_persists_it(tmp_path, monkeypatch):
     at.run()
     next(t for t in at.text_input if t.label == "Client name").set_value("Autodesk APAC").run()
     at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "acc.xlsx")).run()
-    next(t for t in at.text_input if t.label == "Client group (optional)").set_value("Autodesk").run()
+    from core.client_picker import NEW_GROUP_SENTINEL
+    at.selectbox(key="client_group_select").set_value(NEW_GROUP_SENTINEL).run()
+    at.text_input(key="client_group_new").set_value("  Autodesk ").run()
     next(b for b in at.button if "Save Client Profile" in b.label).click().run()
     assert not at.exception
 
@@ -1291,7 +1293,7 @@ def test_edit_existing_client_picker_still_selects_by_exact_name_when_ungrouped(
 
 
 def test_switching_clients_resets_the_client_group_field(tmp_path, monkeypatch):
-    # Regression test: client_group_input is a keyed widget (like
+    # Regression test: the client group dropdown is a keyed widget (like
     # accumulated_path_input), so it must be re-seeded in the profile-switch
     # reset block below -- otherwise switching from a grouped profile to an
     # ungrouped one would leave the previous profile's group name showing,
@@ -1313,10 +1315,11 @@ def test_switching_clients_resets_the_client_group_field(tmp_path, monkeypatch):
     group_box = next(s for s in at.selectbox if s.label == "Client")
     assert group_box.options == ["Autodesk (2 regions)", "Ungrouped Client"]
     group_box.set_value("Autodesk (2 regions)").run()
-    assert at.text_input(key="client_group_input").value == "Autodesk"
+    assert at.selectbox(key="client_group_select").value == "Autodesk"
 
     next(s for s in at.selectbox if s.label == "Client").set_value("Ungrouped Client").run()
-    assert at.text_input(key="client_group_input").value == ""
+    assert at.selectbox(key="client_group_select").value == ""
+    assert at.selectbox(key="client_group_select").format_func("") == "No group"
 
 
 def _tab(at, suffix):
@@ -1495,3 +1498,83 @@ def test_disabled_delivery_destinations_show_empty_states_pointing_at_their_togg
 
     next(c for c in at.checkbox if c.label == "This client uploads to Enhancio").set_value(True).run()
     assert any(c.value.startswith(":material/key_off: No Enhancio Client ID configured yet.") for c in at.caption)
+
+
+def _new_client(at, tmp_path, name):
+    at.run()
+    next(t for t in at.text_input if t.label == "Client name").set_value(name).run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "acc.xlsx")).run()
+
+
+def _save(at):
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+
+def _seed_groups(tmp_path):
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_profile(ClientProfile(name="Autodesk APAC", accumulated_report_path="a.xlsx",
+                               client_group="Autodesk"), get_clients_dir())
+    save_profile(ClientProfile(name="Solo One", accumulated_report_path="a.xlsx",
+                               client_group="Solo"), get_clients_dir())
+    save_profile(ClientProfile(name="Plain", accumulated_report_path="a.xlsx"), get_clients_dir())
+    return get_clients_dir()
+
+
+def test_client_group_dropdown_lists_existing_groups_and_saves_picked_one(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    clients_dir = _seed_groups(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    _new_client(at, tmp_path, "Autodesk EMEA")
+    box = at.selectbox(key="client_group_select")
+    assert box.options == ["No group", "Autodesk (1 client)", "Solo (1 client)", "+ Create new group…"]
+    assert box.value == ""
+    box.set_value("Autodesk").run()
+    assert not any(t.key == "client_group_new" for t in at.text_input)
+    _save(at)
+    from core.profile_store import load_profile
+    assert load_profile("Autodesk EMEA", clients_dir).client_group == "Autodesk"
+
+
+def test_client_group_dropdown_no_group_saves_blank(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    clients_dir = _seed_groups(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    _new_client(at, tmp_path, "Fresh")
+    at.selectbox(key="client_group_select").set_value("Solo").run()
+    at.selectbox(key="client_group_select").set_value("").run()
+    _save(at)
+    from core.profile_store import load_profile
+    assert load_profile("Fresh", clients_dir).client_group == ""
+
+
+def test_client_group_create_new_with_blank_name_saves_no_group(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    clients_dir = _seed_groups(tmp_path)
+    from core.client_picker import NEW_GROUP_SENTINEL
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    _new_client(at, tmp_path, "Fresh")
+    at.selectbox(key="client_group_select").set_value(NEW_GROUP_SENTINEL).run()
+    at.text_input(key="client_group_new").set_value("   ").run()
+    _save(at)
+    from core.profile_store import load_profile
+    assert load_profile("Fresh", clients_dir).client_group == ""
+
+
+def test_edit_mode_preselects_current_group_and_resaves_it(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    clients_dir = _seed_groups(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("Solo One").run()
+    assert at.selectbox(key="client_group_select").value == "Solo"
+    next(s for s in at.selectbox if s.label == "Client").set_value("Plain").run()
+    assert at.selectbox(key="client_group_select").value == ""
+    at.selectbox(key="client_group_select").set_value("Autodesk").run()
+    _save(at)
+    from core.profile_store import load_profile
+    assert load_profile("Plain", clients_dir).client_group == "Autodesk"

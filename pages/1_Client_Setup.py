@@ -29,7 +29,7 @@ from core.models import (
     EnhancioConfig, EnhancioAllocationMapping, IntegrateConfig, LeadTemplateColumnRule, LeadTemplateMappingConfig,
     GoogleSheetTab, GoogleSheetsConfig,
 )
-from core.client_picker import render_client_picker
+from core.client_picker import render_client_picker, render_group_selector
 from core.profile_store import save_profile, load_profile
 from core.toast import show_pending_toast
 from core.ui_components import chip_markdown, chip_state, render_empty_state, render_status_strip
@@ -454,7 +454,8 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
     st.session_state["lead_template_tabs"] = _tabs_to_state(profile.lead_template_tabs) if profile else []
     st.session_state["accumulated_path_input"] = profile.accumulated_report_path if profile else ""
     st.session_state["lead_template_path_input"] = profile.lead_template_path if profile else ""
-    st.session_state["client_group_input"] = profile.client_group if profile else ""
+    st.session_state["client_group_select"] = profile.client_group if profile else ""
+    st.session_state["client_group_new"] = ""
     st.session_state["leadcap_segments_text"] = (
         "\n".join(f"{', '.join(s.cids)} - {s.cap}" for s in profile.leadcap.segments) if profile else ""
     )
@@ -515,14 +516,8 @@ with tab_basics:
     with st.container(border=True):
         st.subheader(":material/person: Client")
         client_name = st.text_input("Client name", value=profile.name if profile else "")
-        client_group_input = st.text_input(
-            "Client group (optional)",
-            value=profile.client_group if profile else "",
-            key="client_group_input",
-            help="Groups this profile with other regional profiles for the same brand (e.g. \"Autodesk APAC\" and "
-                 "\"Autodesk EMEA\" both set this to \"Autodesk\") so the client picker offers them as one group "
-                 "instead of two unrelated entries. Leave blank if this client isn't split by region.",
-        )
+        client_group_input = render_group_selector(
+            get_clients_dir(), profile.client_group if profile else "", key_prefix="client_group")
 
 with tab_basics:
     with st.container(border=True):
