@@ -406,7 +406,7 @@ def test_pull_from_accumulated_report_filters_by_date_range_and_stamps_status(tm
         assert not at.exception
 
     results_df = at.session_state["enhancio_upload_results"]
-    assert results_df["Result"].str.startswith("✅").sum() == 1
+    assert results_df["Result"].str.startswith("Uploaded").sum() == 1
     assert "in_range@x.com" in results_df["Email"].values
     assert "too_old@x.com" not in results_df["Email"].values
 
@@ -456,7 +456,7 @@ def test_upload_batches_leads_by_allocation_and_reports_results(tmp_path, monkey
         assert not at.exception
 
     results_df = at.session_state["enhancio_upload_results"]
-    assert results_df["Result"].str.startswith("✅").sum() == 2
+    assert results_df["Result"].str.startswith("Uploaded").sum() == 2
     assert any("lead-L-22256" in r for r in results_df["Result"])
     assert any("lead-L-22257" in r for r in results_df["Result"])
 
@@ -489,7 +489,7 @@ def test_preview_shows_leads_to_send_without_calling_the_api(tmp_path, monkeypat
         assert not at.exception
         mock_import_leads.assert_not_called()
 
-    preview_expander = next(e for e in at.expander if e.label.startswith("📋 Preview leads to send"))
+    preview_expander = next(e for e in at.status if e.label.startswith("Preview leads to send"))
     assert "2 lead(s)" in preview_expander.label
     assert "2 allocation(s)" in preview_expander.label
     assert any(dl.key == "enhancio_preview_download" for dl in at.download_button)
@@ -537,8 +537,8 @@ def test_upload_keeps_and_saves_successes_when_batch_also_has_rejected_leads(tmp
         assert not at.exception
 
     results_df = at.session_state["enhancio_upload_results"]
-    assert results_df["Result"].str.startswith("✅").sum() == 2
-    assert results_df["Result"].str.startswith("❌").sum() == 1
+    assert results_df["Result"].str.startswith("Uploaded").sum() == 2
+    assert results_df["Result"].str.startswith("Failed").sum() == 1
     assert any("Duplicate lead within the campaign allocation" in w.value for w in at.warning)
 
     pending = load_pending_leads(profile.name)
@@ -620,7 +620,7 @@ def test_reuploading_the_same_file_skips_leads_already_uploaded_to_that_allocati
 
     assert import_calls == []
     results_df = at2.session_state["enhancio_upload_results"]
-    assert results_df["Result"].str.startswith("⏭️").sum() == 2
+    assert results_df["Result"].str.startswith("Skipped").sum() == 2
     assert all("already uploaded to this allocation previously" in r for r in results_df["Result"])
 
 
@@ -703,7 +703,7 @@ def test_rejected_lead_can_be_resent_without_resending_already_accepted_leads(tm
     assert resent_leads[0]["Email Address"] == "rejected@x.com"
 
     results_df = at2.session_state["enhancio_upload_results"]
-    skipped = results_df[results_df["Result"].str.startswith("⏭️")]
+    skipped = results_df[results_df["Result"].str.startswith("Skipped")]
     assert len(skipped) == 1
     assert skipped.iloc[0]["Email"] == "accepted@x.com"
 
@@ -803,7 +803,7 @@ def test_same_email_can_still_upload_to_a_different_allocation(tmp_path, monkeyp
         assert not at2.exception
 
     results_df = at2.session_state["enhancio_upload_results"]
-    assert results_df["Result"].str.startswith("✅").sum() == 1
+    assert results_df["Result"].str.startswith("Uploaded").sum() == 1
 
 
 def test_upload_applies_fixed_field_values_only_to_the_matching_allocation(tmp_path, monkeypatch):
@@ -1130,10 +1130,10 @@ def test_enhancio_status_strip_shows_what_this_client_still_needs(tmp_path, monk
     at.run()
     assert not at.exception
     strip = next(m.value for m in at.markdown if "badge[Allocations" in m.value)
-    assert ":blue-badge[Allocations ✓ Configured]" in strip
-    assert ":blue-badge[Field mapping ✓ Configured]" in strip
-    assert ":orange-badge[Enhancio Client ID ⚠ Needs setup]" in strip
-    assert ":gray-badge[Jira ticket ○ Off]" in strip
+    assert ":blue-badge[Allocations :material/task_alt: Configured]" in strip
+    assert ":blue-badge[Field mapping :material/task_alt: Configured]" in strip
+    assert ":orange-badge[Enhancio Client ID :material/warning: Needs setup]" in strip
+    assert ":gray-badge[Jira ticket :material/radio_button_unchecked: Off]" in strip
 
 
 def test_enhancio_sections_are_icon_titled_cards_and_icons_replace_emoji(tmp_path, monkeypatch):
@@ -1164,9 +1164,9 @@ def test_enhancio_upload_summary_uses_icon_metric_cards(tmp_path, monkeypatch):
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.session_state["enhancio_upload_results"] = pd.DataFrame([
-        {"CID": "120022", "Email": "a@x.com", "Result": "✅ Lead ID 1 (Submitted)"},
-        {"CID": "120022", "Email": "b@x.com", "Result": "❌ Not accepted by Enhancio (see batch error reasons above)"},
-        {"CID": "120028", "Email": "c@x.com", "Result": "⏭️ Skipped (already uploaded to this allocation previously)"},
+        {"CID": "120022", "Email": "a@x.com", "Result": "Uploaded — Lead ID 1 (Submitted)"},
+        {"CID": "120022", "Email": "b@x.com", "Result": "Failed — Not accepted by Enhancio (see batch error reasons above)"},
+        {"CID": "120028", "Email": "c@x.com", "Result": "Skipped (already uploaded to this allocation previously)"},
     ])
     at.run()
     assert not at.exception

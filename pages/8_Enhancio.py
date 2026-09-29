@@ -331,7 +331,7 @@ with st.container(border=True):
                     _cid = str(lead[cid_column])
                     skip_results.append({
                         "CID": _cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                        "Result": f"⏭️ Skipped (test mode — allocation {_allocation_by_cid[_cid]} "
+                        "Result": f"Skipped (test mode — allocation {_allocation_by_cid[_cid]} "
                                   "already tested via another CID)",
                     })
                 # A CID with no allocation mapping at all is excluded from both
@@ -353,7 +353,7 @@ with st.container(border=True):
                 if allocation_uid is None:
                     for _, lead in group.iterrows():
                         skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                                         "Result": "❌ No Enhancio allocation mapped for this CID"})
+                                         "Result": "Failed — No Enhancio allocation mapped for this CID"})
                     continue
                 df_by_allocation[allocation_uid].append(group)
 
@@ -368,7 +368,7 @@ with st.container(border=True):
                 for _, lead in dup_df.iterrows():
                     skip_results.append({
                         "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
-                        "Result": "⏭️ Skipped (already uploaded to this allocation previously)",
+                        "Result": "Skipped (already uploaded to this allocation previously)",
                     })
                 if not send_df.empty:
                     send_by_allocation[allocation_uid] = send_df
@@ -377,8 +377,9 @@ with st.container(border=True):
 
         _preview_send_by_allocation, _preview_skip_results = _plan_sends(leads_df)
         with st.expander(
-            f"📋 Preview leads to send ({sum(len(df) for df in _preview_send_by_allocation.values())} lead(s) "
+            f"Preview leads to send ({sum(len(df) for df in _preview_send_by_allocation.values())} lead(s) "
             f"across {len(_preview_send_by_allocation)} allocation(s))",
+            icon=":material/preview:",
         ):
             st.caption(
                 "The exact rows that will be sent if you click \"Upload to Enhancio\" below right now — "
@@ -482,7 +483,7 @@ with st.container(border=True):
                         for _, lead in _send_df.iterrows():
                             results.append({
                                 "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
-                                "Result": f"❌ {exc}"})
+                                "Result": f"Failed — {exc}"})
                         continue
 
                 # A batch can accept some leads and reject others (e.g.
@@ -518,11 +519,11 @@ with st.container(border=True):
                         # once it writes to Accumulated/Refund later.
                         _allocation_newly_pending[str(lead_id)] = {col: lead.get(col, "") for col in leads_df.columns}
                         _newly_uploaded_emails_by_allocation[allocation_uid].add(str(email))
-                        results.append({"CID": cid, "Email": email, "Result": f"✅ Lead ID {lead_id} ({status})"})
+                        results.append({"CID": cid, "Email": email, "Result": f"Uploaded — Lead ID {lead_id} ({status})"})
                     else:
                         results.append({
                             "CID": cid, "Email": email,
-                            "Result": "❌ Not accepted by Enhancio (see batch error reasons above)",
+                            "Result": "Failed — Not accepted by Enhancio (see batch error reasons above)",
                         })
 
                 # Persist THIS allocation's results immediately, not batched to
@@ -559,9 +560,9 @@ with st.container(border=True):
 
     if st.session_state.get("enhancio_upload_results") is not None:
         _results_df = st.session_state["enhancio_upload_results"]
-        _ok = int(_results_df["Result"].str.startswith("✅").sum())
-        _failed = int(_results_df["Result"].str.startswith("❌").sum())
-        _skipped = int(_results_df["Result"].str.startswith("⏭️").sum())
+        _ok = int(_results_df["Result"].str.startswith("Uploaded").sum())
+        _failed = int(_results_df["Result"].str.startswith("Failed").sum())
+        _skipped = int(_results_df["Result"].str.startswith("Skipped").sum())
         render_metric_cards([
             ("Uploaded", _ok, "check_circle"),
             ("Failed", _failed, "error"),
@@ -694,7 +695,7 @@ with st.container(border=True):
         _reconcile_summary = st.session_state.get("enhancio_reconcile_summary")
         _summary_lines = []
         if _upload_results_df is not None:
-            _ok_count = _upload_results_df["Result"].str.startswith("✅").sum()
+            _ok_count = _upload_results_df["Result"].str.startswith("Uploaded").sum()
             _summary_lines.append(f"Uploaded {len(_upload_results_df)} lead(s) to Enhancio ({_ok_count} succeeded).")
         if _reconcile_summary and _reconcile_summary["client_name"] == client_name:
             _summary_lines.append(

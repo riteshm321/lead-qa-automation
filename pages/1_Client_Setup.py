@@ -65,7 +65,7 @@ def _path_input_with_browse(label: str, session_key: str, current_value: str, sh
     # renders visually on the left, since column position on screen is
     # independent of the order these blocks execute in.
     with col2:
-        if st.button("📂 Browse...", key=f"{session_key}_browse", use_container_width=True):
+        if st.button("Browse...", icon=":material/folder_open:", key=f"{session_key}_browse", use_container_width=True):
             chosen = browse_for_file()
             if chosen:
                 st.session_state[session_key] = chosen
@@ -85,8 +85,8 @@ def _tabs_to_state(tabs: list[LeadTemplateTab]) -> list[dict]:
 
 def _render_lead_template_tabs(template_path: str) -> list[LeadTemplateTab]:
     if not st.session_state["lead_template_tabs"]:
-        render_empty_state("No tabs configured yet.", "Click **➕ Add Tab** below to create one.")
-    if st.button("➕ Add Tab", key="lead_template_tabs_add"):
+        render_empty_state("No tabs configured yet.", "Click **Add Tab** below to create one.")
+    if st.button("Add Tab", icon=":material/add:", key="lead_template_tabs_add"):
         st.session_state["lead_template_tabs"].append(
             {"id": str(uuid.uuid4()), "sheet_name": "", "cids": "", "file_path": "", "link": ""})
 
@@ -120,7 +120,7 @@ def _render_lead_template_tabs(template_path: str) -> list[LeadTemplateTab]:
                 value=row.get("link", ""), key=f"tmpl_tab_link_{row_id}",
                 placeholder="e.g. https://madlog.sharepoint.com/:x:/s/.../...",
             )
-            if st.button("🗑️ Remove this tab", key=f"tmpl_tab_remove_{row_id}"):
+            if st.button("Remove this tab", icon=":material/delete:", key=f"tmpl_tab_remove_{row_id}"):
                 remove_id = row_id
 
         result.append(LeadTemplateTab(
@@ -175,8 +175,8 @@ def _render_sources_section(
     result: list[ReferenceSource] = []
     if not st.session_state[section_key]:
         render_empty_state(f"No {label} sources configured yet.",
-                            f"Click **➕ Add {label} Source** below to create one.")
-    if st.button(f"➕ Add {label} Source", key=f"{section_key}_add"):
+                            f"Click **Add {label} Source** below to create one.")
+    if st.button(f"Add {label} Source", icon=":material/add:", key=f"{section_key}_add"):
         st.session_state[section_key].append({
             "id": str(uuid.uuid4()), "name": "", "file_path": "", "sheet_name": "", "cids": "",
             "domain_column": "Domain", "company_column": "Account Name", "email_column": "Email",
@@ -188,7 +188,7 @@ def _render_sources_section(
         path_key = f"{section_key}_path_{row_id}"
 
         with st.container(border=True):
-            st.markdown(f"**📄 {label} Source: {src['name'] or '(unnamed)'}**")
+            st.markdown(f":material/description: **{label} Source: {src['name'] or '(unnamed)'}**")
 
             src["name"] = st.text_input("Name", value=src["name"], key=f"{section_key}_name_{row_id}")
             src["file_path"] = _path_input_with_browse("File path", path_key, src["file_path"], show_label=False)
@@ -239,7 +239,7 @@ def _render_sources_section(
             src["cids"] = st.text_input("CIDs this source applies to (comma-separated, blank = applies to all leads)",
                                          value=src["cids"], key=f"{section_key}_cids_{row_id}")
 
-            if st.button("🗑️ Remove this source", key=f"{section_key}_remove_{row_id}"):
+            if st.button("Remove this source", icon=":material/delete:", key=f"{section_key}_remove_{row_id}"):
                 remove_id = row_id
 
         result.append(ReferenceSource(
@@ -562,7 +562,7 @@ with tab_basics:
             st.session_state["acc_map_cid"] = _acc_fm_match.cid if _acc_fm_match else _acc_guess.get("cid", "")
 
         accumulated_field_mapping_result = None
-        with st.expander("🔗 Map Accumulated Report columns (optional)"):
+        with st.expander("Map Accumulated Report columns (optional)", icon=":material/link:"):
             accumulated_field_mapping_result = _render_target_field_mapping(
                 "Accumulated Report", "acc", accumulated_headers)
             if accumulated_headers_error is not None:
@@ -659,7 +659,7 @@ with tab_delivery:
                 if not lead_template_tabs_result:
                     render_problem("Multi-tab is enabled but no tabs are configured — "
                                    "no leads will be pasted into the Lead Template.",
-                                   "Click **➕ Add Tab** above, or untick **Route different CIDs to different "
+                                   "Click **Add Tab** above, or untick **Route different CIDs to different "
                                    "tabs and/or separate files**.", level="warning")
                 _header_source_sheet = lead_template_tabs_result[0].sheet_name if lead_template_tabs_result else ""
                 # A tab can point at a completely different workbook than the shared
@@ -721,7 +721,7 @@ with tab_delivery:
                 st.session_state["tmpl_map_company"] = _tmpl_fm_match.company if _tmpl_fm_match else _tmpl_guess.get("company", "")
                 st.session_state["tmpl_map_cid"] = _tmpl_fm_match.cid if _tmpl_fm_match else _tmpl_guess.get("cid", "")
 
-            with st.expander("🔗 Map Lead Template columns (optional)"):
+            with st.expander("Map Lead Template columns (optional)", icon=":material/link:"):
                 lead_template_field_mapping_result = _render_target_field_mapping(
                     "Lead Template", "tmpl", template_headers)
                 if template_headers_error:
@@ -815,7 +815,7 @@ with tab_delivery:
                             _ltm_col, _ltm_sample_df, _ltm_preview_fm, _ltm_preview_target_fm)
                         st.write(
                             f"**{_ltm_col}** — auto-matches: *{_auto_match}*" if _auto_match
-                            else f"**{_ltm_col}** — ⚠️ no auto-match found")
+                            else f"**{_ltm_col}** — :material/warning: no auto-match found")
                     else:
                         st.write(f"**{_ltm_col}**")
 
@@ -1061,7 +1061,7 @@ with tab_exclusion:
                 "exclusion_sources", "Exclusion", check_domain=True, check_company=exclusion_check_company, check_email=False)
             if not exclusion_sources_result:
                 render_problem("Exclusion is enabled but no sources are configured — this check will do nothing.",
-                                "Click **➕ Add Exclusion Source** above, or untick **Enable Exclusion check**.",
+                                "Click **Add Exclusion Source** above, or untick **Enable Exclusion check**.",
                                 level="warning")
         else:
             render_empty_state("Exclusion check is off.", "Tick **Enable Exclusion check** above to configure it.",
@@ -1077,7 +1077,7 @@ with tab_tal:
                 "tal_sources", "TAL", check_domain=True, check_company=tal_check_company, check_email=False)
             if not tal_sources_result:
                 render_problem("TAL is enabled but no sources are configured — this check will do nothing.",
-                                "Click **➕ Add TAL Source** above, or untick **Enable TAL check**.",
+                                "Click **Add TAL Source** above, or untick **Enable TAL check**.",
                                 level="warning")
         else:
             render_empty_state("TAL check is off.", "Tick **Enable TAL check** above to configure it.",
@@ -1099,7 +1099,7 @@ with tab_suppression:
                 check_company=suppression_check_company, check_email=suppression_check_email)
             if not suppression_sources_result:
                 render_problem("Suppression is enabled but no sources are configured — this check will do nothing.",
-                                "Click **➕ Add Suppression Source** above, or untick **Enable Suppression check**.",
+                                "Click **Add Suppression Source** above, or untick **Enable Suppression check**.",
                                 level="warning")
         else:
             render_empty_state("Suppression check is off.", "Tick **Enable Suppression check** above to configure it.",
@@ -1115,7 +1115,7 @@ with tab_dedupe:
                 "dedupe_sources", "Dedupe List", check_domain=False, check_company=False, check_email=True)
             if not dedupe_sources_result:
                 render_problem("Dedupe list is enabled but no sources are configured — this check will do nothing.",
-                                "Click **➕ Add Dedupe List Source** above, or untick **Enable Dedupe list check**.",
+                                "Click **Add Dedupe List Source** above, or untick **Enable Dedupe list check**.",
                                 level="warning")
         else:
             render_empty_state("Dedupe list check is off.", "Tick **Enable Dedupe list check** above to configure it.",
@@ -1308,7 +1308,7 @@ with tab_delivery:
                                 _field_keys = ", ".join(
                                     f.removeprefix("form[").removesuffix("]") for f in _form.get("fields", []))
                                 st.success(
-                                    f"✅ Form \"{_form.get('formName')}\" (Form ID "
+                                    f":material/check_circle: Form \"{_form.get('formName')}\" (Form ID "
                                     f"{_form.get('formId')}) — fields: {_field_keys}"
                                 )
                         except ConvertrError as exc:
@@ -1400,7 +1400,7 @@ with tab_delivery:
                                            level="warning")
                         for _allocation in _allocations:
                             st.success(
-                                f"✅ \"{_allocation.get('campaignName')}\" — allocationUid "
+                                f":material/check_circle: \"{_allocation.get('campaignName')}\" — allocationUid "
                                 f"{_allocation.get('uniqueId')} ({_allocation.get('allocationStatus')})"
                             )
                     except EnhancioError as exc:
@@ -1443,7 +1443,7 @@ with tab_delivery:
                                 _mapped_from = next(
                                     (col for col, target in enhancio_field_mapping.items() if target == _label),
                                     None)
-                                _line = f"✅ \"{_label}\" ({_required})"
+                                _line = f":material/check_circle: \"{_label}\" ({_required})"
                                 if _mapped_from is not None:
                                     _line += f" — mapped from leadfile column \"{_mapped_from}\""
                                 st.success(_line)
@@ -1546,7 +1546,7 @@ with _summary_strip_slot:
         ("Integrate", chip_state(integrate_enabled, needs_setup=not integrate_sid)),
     ])
 
-if st.button("💾 Save Client Profile", type="primary"):
+if st.button("Save Client Profile", icon=":material/save:", type="primary"):
     _checks_to_validate = [
         ("Exclusion", exclusion_enabled, exclusion_sources_result),
         ("TAL", tal_enabled, tal_sources_result),
@@ -1674,4 +1674,4 @@ if st.button("💾 Save Client Profile", type="primary"):
             if convertr_enabled and (convertr_account_username or convertr_account_password):
                 save_convertr_account_credentials(
                     client_name, convertr_account_username, convertr_account_password)
-        st.toast(f"Saved profile to {saved_path}", icon="✅")
+        st.toast(f"Saved profile to {saved_path}", icon=":material/check_circle:")

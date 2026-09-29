@@ -164,7 +164,7 @@ with st.container(border=True):
             for _, lead in dup_df.iterrows():
                 skip_results.append({
                     "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
-                    "Result": "⏭️ Skipped (already uploaded previously)",
+                    "Result": "Skipped (already uploaded previously)",
                 })
 
             if _test_mode:
@@ -174,7 +174,7 @@ with st.container(border=True):
                     _cid = str(lead[cid_column])
                     skip_results.append({
                         "CID": _cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                        "Result": f"⏭️ Skipped (test mode — campaign {cid_to_campaign_id[_cid]} "
+                        "Result": f"Skipped (test mode — campaign {cid_to_campaign_id[_cid]} "
                                   "already tested via another CID)",
                     })
                 # A CID with no campaign mapping at all is excluded from both
@@ -191,12 +191,12 @@ with st.container(border=True):
                 if mapping is None:
                     for _, lead in group.iterrows():
                         skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                                         "Result": "❌ No Convertr campaign mapped for this CID"})
+                                         "Result": "Failed — No Convertr campaign mapped for this CID"})
                     continue
                 if not mapping.global_form_id:
                     for _, lead in group.iterrows():
                         skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                                         "Result": f"❌ No Form ID saved for campaign {mapping.campaign_id}"})
+                                         "Result": f"Failed — No Form ID saved for campaign {mapping.campaign_id}"})
                     continue
                 send_by_cid[cid] = group
 
@@ -204,8 +204,9 @@ with st.container(border=True):
 
         _preview_send_by_cid, _preview_skip_results = _plan_sends(leads_df)
         with st.expander(
-            f"📋 Preview leads to send ({sum(len(df) for df in _preview_send_by_cid.values())} lead(s) "
+            f"Preview leads to send ({sum(len(df) for df in _preview_send_by_cid.values())} lead(s) "
             f"across {len(_preview_send_by_cid)} CID(s))",
+            icon=":material/preview:",
         ):
             st.caption(
                 "The exact rows that will be sent if you click \"Upload to Convertr\" below right now — "
@@ -282,9 +283,9 @@ with st.container(border=True):
                         # writes it to Accumulated/Refund.
                         _cid_newly_pending[lead_id] = {col: lead.get(col, "") for col in leads_df.columns}
                         _cid_newly_uploaded_emails.add(str(email))
-                        results.append({"CID": cid, "Email": email, "Result": f"✅ Lead ID {lead_id}"})
+                        results.append({"CID": cid, "Email": email, "Result": f"Uploaded — Lead ID {lead_id}"})
                     except ConvertrError as exc:
-                        results.append({"CID": cid, "Email": email, "Result": f"❌ {exc}"})
+                        results.append({"CID": cid, "Email": email, "Result": f"Failed — {exc}"})
                     _sent_so_far += 1
                     if _send_progress is not None:
                         _send_progress.progress(
@@ -312,9 +313,9 @@ with st.container(border=True):
 
     if st.session_state.get("convertr_upload_results") is not None:
         _results_df = st.session_state["convertr_upload_results"]
-        _ok = int(_results_df["Result"].str.startswith("✅").sum())
-        _failed = int(_results_df["Result"].str.startswith("❌").sum())
-        _skipped = int(_results_df["Result"].str.startswith("⏭️").sum())
+        _ok = int(_results_df["Result"].str.startswith("Uploaded").sum())
+        _failed = int(_results_df["Result"].str.startswith("Failed").sum())
+        _skipped = int(_results_df["Result"].str.startswith("Skipped").sum())
         render_metric_cards([
             ("Uploaded", _ok, "check_circle"),
             ("Failed", _failed, "error"),
@@ -467,7 +468,7 @@ with st.container(border=True):
         _reconcile_summary = st.session_state.get("convertr_reconcile_summary")
         _summary_lines = []
         if _upload_results_df is not None:
-            _ok_count = _upload_results_df["Result"].str.startswith("✅").sum()
+            _ok_count = _upload_results_df["Result"].str.startswith("Uploaded").sum()
             _summary_lines.append(f"Uploaded {len(_upload_results_df)} lead(s) to Convertr ({_ok_count} succeeded).")
         if _reconcile_summary and _reconcile_summary["client_name"] == client_name:
             _summary_lines.append(

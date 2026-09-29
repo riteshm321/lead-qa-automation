@@ -170,7 +170,7 @@ def test_rejected_lead_can_be_resent_without_resending_already_accepted_leads(tm
     assert submit_calls[0]["email"] == "rejected@x.com"
 
     results_df = at2.session_state["convertr_upload_results"]
-    skipped = results_df[results_df["Result"].str.startswith("⏭️")]
+    skipped = results_df[results_df["Result"].str.startswith("Skipped")]
     assert len(skipped) == 1
     assert skipped.iloc[0]["Email"] == "accepted@x.com"
 
@@ -203,7 +203,7 @@ def test_preview_shows_leads_to_send_without_calling_the_api(tmp_path, monkeypat
         assert not at.exception
         mock_submit.assert_not_called()
 
-    preview_expander = next(e for e in at.expander if e.label.startswith("📋 Preview leads to send"))
+    preview_expander = next(e for e in at.status if e.label.startswith("Preview leads to send"))
     assert "2 lead(s)" in preview_expander.label
     assert "2 CID(s)" in preview_expander.label
     assert any(dl.key == "convertr_preview_download" for dl in at.download_button)
@@ -514,13 +514,13 @@ def test_convertr_status_strip_shows_credentials_and_jira_state(tmp_path, monkey
     at.run()
     assert not at.exception
     strip = next(m.value for m in at.markdown if "badge[Account credentials" in m.value)
-    assert ":orange-badge[Account credentials ⚠ Needs setup]" in strip
-    assert ":gray-badge[Jira ticket ○ Off]" in strip
+    assert ":orange-badge[Account credentials :material/warning: Needs setup]" in strip
+    assert ":gray-badge[Jira ticket :material/radio_button_unchecked: Off]" in strip
 
     save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
     at.run()
     strip = next(m.value for m in at.markdown if "badge[Account credentials" in m.value)
-    assert ":blue-badge[Account credentials ✓ Configured]" in strip
+    assert ":blue-badge[Account credentials :material/task_alt: Configured]" in strip
 
 
 def test_convertr_sections_are_icon_titled_cards_and_icons_replace_emoji(tmp_path, monkeypatch):
@@ -547,9 +547,9 @@ def test_convertr_upload_summary_uses_icon_metric_cards(tmp_path, monkeypatch):
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.session_state["convertr_upload_results"] = pd.DataFrame([
-        {"CID": "44709", "Email": "a@x.com", "Result": "✅ Lead ID 1"},
-        {"CID": "44709", "Email": "b@x.com", "Result": "❌ Convertr returned 400: bad email"},
-        {"CID": "44709", "Email": "c@x.com", "Result": "⏭️ Skipped (already uploaded previously)"},
+        {"CID": "44709", "Email": "a@x.com", "Result": "Uploaded — Lead ID 1"},
+        {"CID": "44709", "Email": "b@x.com", "Result": "Failed — Convertr returned 400: bad email"},
+        {"CID": "44709", "Email": "c@x.com", "Result": "Skipped (already uploaded previously)"},
     ])
     at.run()
     assert not at.exception
@@ -579,4 +579,4 @@ def test_convertr_download_button_and_no_credentials_error_use_icons(tmp_path, m
     assert not at.exception
     err = next(e for e in at.error if "Convertr account username/password" in e.value)
     assert err.icon == ":material/error:"
-    assert not err.value.startswith("❌")
+    assert not err.value.startswith("Failed")

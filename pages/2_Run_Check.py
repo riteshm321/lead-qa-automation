@@ -42,7 +42,7 @@ import requests
 
 _current_user = configure_page("Run Check")
 show_pending_toast()
-st.title("▶️ Run Check")
+st.title(":material/play_circle: Run Check")
 
 
 @st.cache_data(show_spinner="Loading TAL reference file (large file, first load can take ~15s)...")
@@ -84,7 +84,7 @@ with col_client:
         st.warning("No client profiles found. Create one on the Client Setup page first.")
         st.stop()
 with col_clear:
-    if st.button("🔄 Clear", use_container_width=True,
+    if st.button("Clear", icon=":material/refresh:", use_container_width=True,
                  help="Clear the uploaded files and any displayed results, and start a fresh run."):
         for key in ("run_result", "run_new_leads", "run_result_for", "last_finalized_summary",
                     "upload_tool_pending_export"):
@@ -226,7 +226,7 @@ new_leads_headers: list[str] = []
 new_leads_file = None
 
 if profile.collation_enabled:
-    with st.expander("🗂️ Collate multiple files into one New Leads file (optional)"):
+    with st.expander("Collate multiple files into one New Leads file (optional)", icon=":material/library_add:"):
         st.caption(
             "Only use this when you have several per-CID export files to combine — if you already "
             "have one collated file ready, skip this and upload it directly below as normal."
@@ -241,7 +241,7 @@ if profile.collation_enabled:
             else:
                 st.session_state[_collated_key] = master_df
             for filename, cid, count in per_file_results:
-                st.caption(f"✓ {filename} (CID {cid or '—'}): {count} lead(s)")
+                st.caption(f":material/check: {filename} (CID {cid or '—'}): {count} lead(s)")
             if skipped:
                 st.warning("Skipped: " + "; ".join(f"{f} ({e})" for f, e in skipped))
             for filename, new_cols, missing_cols in column_notes:
@@ -250,14 +250,14 @@ if profile.collation_enabled:
                     note += f" — new: {', '.join(sorted(new_cols))}"
                 if missing_cols:
                     note += f" — missing: {', '.join(sorted(missing_cols))}"
-                st.caption(f"⚠️ {note}")
+                st.caption(f":material/warning: {note}")
 
         if _collated_key in st.session_state:
             _collated_df = st.session_state[_collated_key]
             col_use, col_download, col_clear = st.columns([3, 1, 1])
             col_use.success(f"Collated file ready: {len(_collated_df)} lead(s), {len(_collated_df.columns)} column(s).")
             col_download.download_button(
-                "⬇️ Download", key="collated_download_button",
+                "Download", icon=":material/download:", key="collated_download_button",
                 data=dataframe_to_excel_bytes(_collated_df, sheet_name="Collated"),
                 file_name=f"{client_name}_collated_{datetime.date.today():%Y-%m-%d}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -270,14 +270,14 @@ if _collated_key in st.session_state:
     new_leads_df = st.session_state[_collated_key]
     new_leads_headers = list(new_leads_df.columns)
     new_leads_file = True  # a collated file counts as "ready" below, same as a raw upload
-    st.caption(f"📎 Using the collated file ({len(new_leads_df)} lead(s)) as New Leads.")
+    st.caption(f":material/attach_file: Using the collated file ({len(new_leads_df)} lead(s)) as New Leads.")
 else:
     _new_leads_widget = st.file_uploader(
         "New Leads file", type=["xlsx", "csv"], key=f"new_leads_upload_{client_name}_{_upload_key_suffix}")
     new_leads_file, _new_leads_name, _new_leads_from_cache = resolve_upload(
         _new_leads_widget, _upload_cache, client_name, "new_leads")
     if _new_leads_from_cache:
-        st.caption(f"📎 Using previously selected file: **{_new_leads_name}**")
+        st.caption(f":material/attach_file: Using previously selected file: **{_new_leads_name}**")
 
     if new_leads_file:
         try:
@@ -333,7 +333,7 @@ if profile.leadcap.enabled:
     uploaded, _purchased_name, _purchased_from_cache = resolve_upload(
         _purchased_widget, _upload_cache, client_name, "purchased_report")
     if _purchased_from_cache:
-        st.caption(f"📎 Using previously selected file: **{_purchased_name}**")
+        st.caption(f":material/attach_file: Using previously selected file: **{_purchased_name}**")
     if uploaded:
         df = read_csv_bytes_robust(uploaded.read())
         try:
@@ -514,7 +514,7 @@ if "run_result" in st.session_state:
         if profile.complex_account.specifications_path:
             _completed_checks.append("Complex Account: Asset URL match")
     if _completed_checks:
-        st.caption("✅ " + "  ·  ✅ ".join(_completed_checks) + " — all completed")
+        st.caption(":material/check_circle: " + "  ·  :material/check_circle: ".join(_completed_checks) + " — all completed")
 
     approved_refund_indices: list[int] = []
     if result.refund_reasons:
@@ -548,7 +548,7 @@ if "run_result" in st.session_state:
             _refund_export_df = new_leads.loc[refund_indices].copy()
             _refund_export_df.insert(0, "Refund Reason", [result.refund_reasons[idx] for idx in refund_indices])
             st.download_button(
-                "⬇️ Download", key="refund_download_button",
+                "Download", icon=":material/download:", key="refund_download_button",
                 data=dataframe_to_excel_bytes(_refund_export_df, sheet_name="Refund Leads"),
                 file_name=f"{client_name} - Refund Leads.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -607,7 +607,7 @@ if "run_result" in st.session_state:
                 "; ".join(str(d) for d in result.review_reasons[idx]) for idx in review_indices
             ])
             st.download_button(
-                "⬇️ Download", key="review_download_button",
+                "Download", icon=":material/download:", key="review_download_button",
                 data=dataframe_to_excel_bytes(_review_export_df, sheet_name="Needs Review"),
                 file_name=f"{client_name} - Needs Review Leads.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -821,7 +821,7 @@ if "run_result" in st.session_state:
                         _tmpl_file_path, profile.lead_template_link)
                 if not unmatched.empty:
                     unmatched_cids = sorted(set(unmatched[profile.field_mapping.cid].astype(str).str.strip()))
-                    st.warning(f"⚠️ {len(unmatched)} valid lead(s) had a CID with no matching Lead Template "
+                    st.warning(f"{len(unmatched)} valid lead(s) had a CID with no matching Lead Template "
                                f"tab (CIDs: {', '.join(unmatched_cids)}) — skipped for the Lead Template "
                                "step, but still added to the Accumulated Report.")
                 if groups:
@@ -842,7 +842,7 @@ if "run_result" in st.session_state:
 
         if unmatched_headers:
             st.warning(
-                "⚠️ These columns had no matching leadfile column and were left blank: "
+                "These columns had no matching leadfile column and were left blank: "
                 f"{', '.join(sorted(unmatched_headers))}. If the leadfile does have this data under a "
                 "different name, rename the leadfile column (or its header) to something closer to the "
                 "target column name and re-run."
@@ -871,7 +871,7 @@ if "run_result" in st.session_state:
         if profile.google_sheets.enabled and not valid_leads_df.empty:
             _gs_key_path = get_google_sheets_key_path()
             if not _gs_key_path:
-                st.error("Set the Google Sheets service account key path on the ⚙️ Settings page first.")
+                st.error("Set the Google Sheets service account key path on the **Settings** page first.")
             else:
                 _gs_manual_overrides, _gs_date_formats = resolve_lead_template_rules(profile.google_sheets.mapping)
                 _gs_tab_by_cid = {t.cid: t for t in profile.google_sheets.tabs}
@@ -914,7 +914,7 @@ if "run_result" in st.session_state:
                         render_error(exc)
                 if _gs_unmatched_cids:
                     st.warning(
-                        f"⚠️ {len(_gs_unmatched_cids)} valid lead(s) had a CID with no matching Google Sheet "
+                        f"{len(_gs_unmatched_cids)} valid lead(s) had a CID with no matching Google Sheet "
                         f"(CIDs: {', '.join(sorted(_gs_unmatched_cids))}) — skipped for Google Sheets delivery, "
                         "but still added to the Accumulated Report."
                     )
@@ -1014,7 +1014,7 @@ if "run_result" in st.session_state:
                 for _idx, _changes in _complex_corrections.items():
                     _correction_lines.append(f"Row {_idx + 2}: " + "; ".join(_changes))
                 st.warning(
-                    f"⚠️ {len(_complex_corrections)} lead(s) had an Asset URN/Dell Asset URL/Form URL value "
+                    f"{len(_complex_corrections)} lead(s) had an Asset URN/Dell Asset URL/Form URL value "
                     "that didn't match the specifications file — corrected automatically:\n\n"
                     + "\n\n".join(_correction_lines)
                 )
@@ -1135,7 +1135,7 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
         _include_pacing = st.checkbox("Include Pacing Overview table", value=True, key="jira_include_pacing")
         if _include_pacing:
             if _pacing_stale:
-                st.caption("⚠️ Couldn't recalculate via Excel (not installed, or the attempt failed/timed "
+                st.caption(":material/warning: Couldn't recalculate via Excel (not installed, or the attempt failed/timed "
                            "out) — showing the file's last-saved values, which may not reflect this run's "
                            "leads yet if any of these columns are formulas.")
             st.dataframe(_pacing_df, hide_index=True)
@@ -1160,12 +1160,13 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
 
     _has_pending_attachment_errors = bool(_prior_errors)
     _post_label = (
-        f"🔁 Retry failed attachment(s) for {_pending_summary['ticket_key']}"
+        f"Retry failed attachment(s) for {_pending_summary['ticket_key']}"
         if _has_pending_attachment_errors
-        else f"📋 Post summary to {_pending_summary['ticket_key']}"
+        else f"Post summary to {_pending_summary['ticket_key']}"
     )
 
-    if st.button(_post_label, key="jira_post_button"):
+    if st.button(_post_label, key="jira_post_button",
+                 icon=":material/replay:" if _has_pending_attachment_errors else ":material/send:"):
         jira_settings = get_jira_settings()
         if not all([jira_settings["base_url"], jira_settings["email"], jira_settings["api_token"]]):
             st.error("Set up your Jira account (site URL, email, API token) in Client Setup first.")

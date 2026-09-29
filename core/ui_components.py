@@ -10,12 +10,12 @@ import streamlit as st
 
 ChipState = Literal["on", "off", "configured", "needs_setup"]
 
-# (text, st.badge color). Glyphs match the design spec's section 1 exactly.
+# (text, st.badge color). Material icons stand in for the spec's section 1 glyphs.
 _CHIPS: dict[str, tuple[str, str]] = {
-    "on": ("● On", "green"),
-    "off": ("○ Off", "gray"),
-    "configured": ("✓ Configured", "blue"),
-    "needs_setup": ("⚠ Needs setup", "orange"),
+    "on": (":material/check_circle: On", "green"),
+    "off": (":material/radio_button_unchecked: Off", "gray"),
+    "configured": (":material/task_alt: Configured", "blue"),
+    "needs_setup": (":material/warning: Needs setup", "orange"),
 }
 
 

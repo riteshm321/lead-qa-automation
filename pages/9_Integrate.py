@@ -156,7 +156,7 @@ with st.container(border=True):
         if st.button("Upload to Integrate", type="primary"):
             results = []
             for _, lead in _dup_df.iterrows():
-                results.append({"Email": lead.get(email_column, ""), "Result": "⏭️ Skipped (already uploaded previously)"})
+                results.append({"Email": lead.get(email_column, ""), "Result": "Skipped (already uploaded previously)"})
 
             _total_to_send = len(_send_df)
             _send_progress = st.progress(0.0, text=f"Uploading 0 / {_total_to_send} lead(s) to Integrate...") \
@@ -180,14 +180,14 @@ with st.container(border=True):
                     # entry in filter_already_uploaded and get silently
                     # skipped as "already uploaded" forever. Surfacing it here
                     # instead keeps it visible in the results table.
-                    results.append({"Email": email, "Result": "❌ No email value for this row"})
+                    results.append({"Email": email, "Result": "Failed — No email value for this row"})
                 else:
                     try:
                         response = integrate_client.submit_lead(
                             _integrate.sid, _api_key, _api_secret, attributes, callback_url=_integrate.callback_url,
                         )
                         lead_id = str(response.get("id", ""))
-                        results.append({"Email": email, "Result": f"✅ Lead ID {lead_id}"})
+                        results.append({"Email": email, "Result": f"Uploaded — Lead ID {lead_id}"})
                         # Saved per-lead, not batched to the end of the whole loop
                         # -- same reasoning as pages/7_Convertr.py's per-CID
                         # incremental save: an exception on a LATER lead must
@@ -195,7 +195,7 @@ with st.container(border=True):
                         # dedup record.
                         save_uploaded_emails(client_name, {str(email)})
                     except IntegrateError as exc:
-                        results.append({"Email": email, "Result": f"❌ {exc}"})
+                        results.append({"Email": email, "Result": f"Failed — {exc}"})
                 _sent_so_far += 1
                 if _send_progress is not None:
                     _send_progress.progress(
@@ -208,9 +208,9 @@ with st.container(border=True):
 
     if st.session_state.get("integrate_upload_results") is not None:
         _results_df = st.session_state["integrate_upload_results"]
-        _ok = int(_results_df["Result"].str.startswith("✅").sum())
-        _failed = int(_results_df["Result"].str.startswith("❌").sum())
-        _skipped = int(_results_df["Result"].str.startswith("⏭️").sum())
+        _ok = int(_results_df["Result"].str.startswith("Uploaded").sum())
+        _failed = int(_results_df["Result"].str.startswith("Failed").sum())
+        _skipped = int(_results_df["Result"].str.startswith("Skipped").sum())
         render_metric_cards([
             ("Uploaded", _ok, "check_circle"),
             ("Failed", _failed, "error"),

@@ -564,7 +564,7 @@ def test_exclusion_source_accepts_a_csv_file_and_reads_its_columns_and_saves(tmp
     next(c for c in at.checkbox if c.label == "Enable Exclusion check").set_value(True).run()
     assert not at.exception
 
-    add_button = next(b for b in at.button if b.label == "➕ Add Exclusion Source")
+    add_button = next(b for b in at.button if b.label == "Add Exclusion Source")
     add_button.click().run()
     assert not at.exception
 
@@ -1374,13 +1374,13 @@ def test_summary_strip_reflects_live_checkbox_state(tmp_path, monkeypatch):
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
     strip = next(m for m in at.markdown if "badge[Leadcap" in m.value)
-    assert ":gray-badge[Duplicate ○ Off]" in strip.value
+    assert ":gray-badge[Duplicate :material/radio_button_unchecked: Off]" in strip.value
 
     next(c for c in at.checkbox if c.label == "Enable Duplicate check").check().run()
     next(c for c in at.checkbox if c.label == "Enable Exclusion check").check().run()
     strip = next(m for m in at.markdown if "badge[Leadcap" in m.value)
-    assert ":green-badge[Duplicate ● On]" in strip.value
-    assert ":orange-badge[Exclusion ⚠ Needs setup]" in strip.value  # enabled, no sources
+    assert ":green-badge[Duplicate :material/check_circle: On]" in strip.value
+    assert ":orange-badge[Exclusion :material/warning: Needs setup]" in strip.value  # enabled, no sources
 
 
 def test_check_tab_label_shows_configured_chip_for_saved_profile(tmp_path, monkeypatch):
@@ -1398,7 +1398,7 @@ def test_check_tab_label_shows_configured_chip_for_saved_profile(tmp_path, monke
     next(s for s in at.selectbox if s.label == "Client").set_value("Dup Client").run()
     assert not at.exception
     labels = [t.label for t in at.tabs]
-    assert "Duplicate :blue-badge[✓ Configured]" in labels
+    assert "Duplicate :blue-badge[:material/task_alt: Configured]" in labels
     assert "Leadcap" in labels  # off in the saved profile -> no chip
 
 

@@ -254,10 +254,10 @@ def test_integrate_status_strip_shows_everything_missing_before_the_hard_stop(tm
     at.run()
     assert not at.exception
     strip = next(m.value for m in at.markdown if "badge[API credentials" in m.value)
-    assert ":orange-badge[API credentials ⚠ Needs setup]" in strip
-    assert ":blue-badge[Source ID ✓ Configured]" in strip
-    assert ":blue-badge[Field mapping ✓ Configured]" in strip
-    assert ":blue-badge[Leadfile mapping ✓ Configured]" in strip
+    assert ":orange-badge[API credentials :material/warning: Needs setup]" in strip
+    assert ":blue-badge[Source ID :material/task_alt: Configured]" in strip
+    assert ":blue-badge[Field mapping :material/task_alt: Configured]" in strip
+    assert ":blue-badge[Leadfile mapping :material/task_alt: Configured]" in strip
     err = next(e for e in at.error if "Integrate API Key/Secret" in e.value)
     assert err.icon == ":material/error:"
     assert "⚙️" not in err.value
@@ -284,9 +284,9 @@ def test_integrate_upload_summary_uses_icon_metric_cards(tmp_path, monkeypatch):
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.session_state["integrate_upload_results"] = pd.DataFrame([
-        {"Email": "a@x.com", "Result": "✅ Lead ID lead-1"},
-        {"Email": "", "Result": "❌ No email value for this row"},
-        {"Email": "c@x.com", "Result": "⏭️ Skipped (already uploaded previously)"},
+        {"Email": "a@x.com", "Result": "Uploaded — Lead ID lead-1"},
+        {"Email": "", "Result": "Failed — No email value for this row"},
+        {"Email": "c@x.com", "Result": "Skipped (already uploaded previously)"},
     ])
     at.run()
     assert not at.exception

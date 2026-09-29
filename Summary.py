@@ -5,8 +5,8 @@ from core.branding import configure_page
 
 def _home() -> None:
     configure_page("Lead QA Automation")
-    st.title("✅ Lead QA & Upload Automation")
-    st.write("Use the sidebar to open **🗂️ Client Setup** or **▶️ Run Check**.")
+    st.title(":material/fact_check: Lead QA & Upload Automation")
+    st.write("Use the sidebar to open **Client Setup** or **Run Check**.")
     st.divider()
     st.caption("Client Setup configures a client's checks, reference files, and mode once. "
                "Run Check uses that configuration against a new leads batch every time you run it.")

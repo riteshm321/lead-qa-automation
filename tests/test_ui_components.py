@@ -4,14 +4,14 @@ from core.ui_components import chip_markdown, chip_state
 
 
 def test_chip_markdown_uses_spec_glyphs_and_colors():
-    assert chip_markdown("on") == ":green-badge[● On]"
-    assert chip_markdown("off") == ":gray-badge[○ Off]"
-    assert chip_markdown("configured") == ":blue-badge[✓ Configured]"
-    assert chip_markdown("needs_setup") == ":orange-badge[⚠ Needs setup]"
+    assert chip_markdown("on") == ":green-badge[:material/check_circle: On]"
+    assert chip_markdown("off") == ":gray-badge[:material/radio_button_unchecked: Off]"
+    assert chip_markdown("configured") == ":blue-badge[:material/task_alt: Configured]"
+    assert chip_markdown("needs_setup") == ":orange-badge[:material/warning: Needs setup]"
 
 
 def test_chip_markdown_prefixes_a_label():
-    assert chip_markdown("on", "Leadcap") == ":green-badge[Leadcap ● On]"
+    assert chip_markdown("on", "Leadcap") == ":green-badge[Leadcap :material/check_circle: On]"
 
 
 def test_chip_state_mapping():
@@ -31,20 +31,20 @@ def test_render_status_strip_renders_one_markdown_row():
     assert not at.exception
     assert len(at.markdown) == 1
     value = at.markdown[0].value
-    assert ":green-badge[Leadcap ● On]" in value
-    assert ":orange-badge[TAL ⚠ Needs setup]" in value
-    assert ":gray-badge[Exclusion ○ Off]" in value
+    assert ":green-badge[Leadcap :material/check_circle: On]" in value
+    assert ":orange-badge[TAL :material/warning: Needs setup]" in value
+    assert ":gray-badge[Exclusion :material/radio_button_unchecked: Off]" in value
 
 
 def test_render_empty_state_with_hint():
     def _app():
         from core.ui_components import render_empty_state
-        render_empty_state("No TAL sources configured yet.", "Click **➕ Add TAL Source** below.")
+        render_empty_state("No TAL sources configured yet.", "Click **Add TAL Source** below.")
 
     at = AppTest.from_function(_app)
     at.run()
     assert not at.exception
-    assert at.caption[0].value == ":material/inbox: No TAL sources configured yet. — Click **➕ Add TAL Source** below."
+    assert at.caption[0].value == ":material/inbox: No TAL sources configured yet. — Click **Add TAL Source** below."
 
 
 def test_render_empty_state_without_hint_and_custom_icon():

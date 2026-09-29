@@ -107,7 +107,7 @@ def test_collation_expander_appears_only_when_enabled_and_leaves_normal_upload_i
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
     assert not at.exception
-    assert not any("Collate multiple files" in e.label for e in at.expander)
+    assert not any("Collate multiple files" in e.label for e in at.status)
 
     save_profile(ClientProfile(
         name="Collation Client", accumulated_report_path=acc_path, field_mapping=fm,
@@ -117,7 +117,7 @@ def test_collation_expander_appears_only_when_enabled_and_leaves_normal_upload_i
     at2.run()
     next(s for s in at2.selectbox if s.label == "Client").set_value("Collation Client").run()
     assert not at2.exception
-    assert any("Collate multiple files" in e.label for e in at2.expander)
+    assert any("Collate multiple files" in e.label for e in at2.status)
 
 
 def test_using_a_collated_file_does_not_crash_with_nameerror(tmp_path, monkeypatch):
@@ -167,7 +167,7 @@ def test_collated_file_offers_a_download_button(tmp_path, monkeypatch):
 
     assert not at.exception
     download_button = next(d for d in at.download_button if d.key == "collated_download_button")
-    assert download_button.label == "⬇️ Download"
+    assert download_button.label == "Download"
 
 
 def test_approved_refund_lead_lands_in_accumulated_tab_not_just_refund(tmp_path, monkeypatch):
@@ -305,7 +305,7 @@ def test_review_download_button_and_refund_download_button_present(tmp_path, mon
     download_keys = {d.key for d in at.download_button}
     assert "refund_download_button" in download_keys
     assert "review_download_button" in download_keys
-    assert all(d.label == "⬇️ Download" for d in at.download_button)
+    assert all(d.label == "Download" for d in at.download_button)
 
     # The old per-lead expander detail view is gone -- the bulk-select
     # table above is the only Needs Review UI now.

@@ -17,7 +17,7 @@ def show_pending_toast() -> None:
     """
     message = st.session_state.pop(_PENDING_TOAST_KEY, None)
     if message:
-        st.toast(message, icon="✅")
+        st.toast(message, icon=":material/check_circle:")
 
 
 def queue_toast_before_rerun(message: str) -> None:

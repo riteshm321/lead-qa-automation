@@ -340,11 +340,11 @@ def test_settings_status_strip_shows_what_is_configured(tmp_path, monkeypatch):
     at.run()
     assert not at.exception
     strip = next(m.value for m in at.markdown if "badge[Shared folder" in m.value)
-    assert ":orange-badge[Shared folder ⚠ Needs setup]" in strip  # required, not set yet
-    assert ":blue-badge[Enhancio ✓ Configured]" in strip
-    assert ":gray-badge[Jira ○ Off]" in strip  # optional, not set
-    assert ":gray-badge[Integrate ○ Off]" in strip
-    assert ":gray-badge[Google Sheets ○ Off]" in strip
+    assert ":orange-badge[Shared folder :material/warning: Needs setup]" in strip  # required, not set yet
+    assert ":blue-badge[Enhancio :material/task_alt: Configured]" in strip
+    assert ":gray-badge[Jira :material/radio_button_unchecked: Off]" in strip  # optional, not set
+    assert ":gray-badge[Integrate :material/radio_button_unchecked: Off]" in strip
+    assert ":gray-badge[Google Sheets :material/radio_button_unchecked: Off]" in strip
 
 
 def test_settings_problems_and_empty_states_use_the_shared_helpers(tmp_path, monkeypatch):

@@ -58,8 +58,8 @@ def configure_page(page_title: str) -> dict:
 
     with st.sidebar.container(border=True):
         st.caption("Logged in as")
-        st.caption(f"👤 {user['username']}")
-        st.caption(f"💼 {user['role']}" if user.get("role") else "💼 Admin" if user["is_admin"] else "💼 User")
+        st.caption(f":material/person: {user['username']}")
+        st.caption(f":material/work: {user['role']}" if user.get("role") else ":material/work: Admin" if user["is_admin"] else ":material/work: User")
     if st.sidebar.button("Log out", key="_logout_button", use_container_width=True):
         auth_gate.logout()
         st.rerun()
@@ -69,8 +69,8 @@ def configure_page(page_title: str) -> dict:
     st.sidebar.divider()
     with st.sidebar.container(border=True):
         st.caption("Tool Made By")
-        st.caption("👤 Ritesh Majumdar")
-        st.caption("💼 Sr. Client Reporting Specialist")
+        st.caption(":material/person: Ritesh Majumdar")
+        st.caption(":material/work: Sr. Client Reporting Specialist")
     return user
 
 
@@ -92,7 +92,7 @@ def _render_quit_app_button() -> None:
     # this ends the whole app process, not just the current page, so a
     # stray click deserves a confirmation, not an instant exit.
     if st.session_state.get(_PENDING_QUIT_KEY):
-        st.sidebar.warning("⚠️ Quit the app? Close any open browser tab afterward.")
+        st.sidebar.warning("Quit the app? Close any open browser tab afterward.", icon=":material/warning:")
         _col_confirm, _col_cancel = st.sidebar.columns(2)
         if _col_confirm.button("Confirm quit", key="_confirm_quit_button", type="primary", use_container_width=True):
             # window.close() only works if the browser considers this tab

@@ -55,7 +55,7 @@ def require_login() -> dict:
 
 
 def _render_corrupted_credentials_message() -> None:
-    st.title("⚠️ Accounts file couldn't be read")
+    st.title(":material/warning: Accounts file couldn't be read")
     st.error(
         "The shared accounts file (credentials.json) exists but couldn't be parsed -- this can happen "
         "if OneDrive is still syncing it, or if it was caught mid-write. Wait a moment for OneDrive to "
@@ -65,7 +65,7 @@ def _render_corrupted_credentials_message() -> None:
 
 
 def _render_shared_root_setup_form() -> None:
-    st.title("📁 Set up your shared team folder")
+    st.title(":material/folder_shared: Set up your shared team folder")
     st.caption(
         "Before you can log in, point this machine at your team's shared OneDrive folder -- this is "
         "where accounts, clients, and activity are all kept in sync across everyone's machines. Ask "
@@ -73,7 +73,7 @@ def _render_shared_root_setup_form() -> None:
     )
     col_input, col_browse = st.columns([5, 1])
     with col_browse:
-        if st.button("📂 Browse...", key="_bootstrap_shared_root_browse", use_container_width=True):
+        if st.button("Browse...", icon=":material/folder_open:", key="_bootstrap_shared_root_browse", use_container_width=True):
             chosen = browse_for_folder()
             if chosen:
                 st.session_state["_bootstrap_shared_root_input"] = chosen
@@ -102,7 +102,7 @@ def _render_shared_root_setup_form() -> None:
 
 
 def _render_bootstrap_form() -> None:
-    st.title("🔐 Set up your admin account")
+    st.title(":material/admin_panel_settings: Set up your admin account")
     st.caption("No accounts exist yet on your shared team folder. Create the first one -- it's automatically an admin.")
     with st.form("bootstrap_admin_form"):
         username = st.text_input("Username")
@@ -123,7 +123,7 @@ def _render_bootstrap_form() -> None:
 
 
 def _render_login_form() -> None:
-    st.title("🔐 Log in")
+    st.title(":material/lock: Log in")
     with st.form("login_form"):
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
