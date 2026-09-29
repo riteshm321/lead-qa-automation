@@ -1999,8 +1999,14 @@ def test_client_picker_groups_regional_profiles_on_run_check(tmp_path, monkeypat
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
     assert not at.exception
-    group_box = next(s for s in at.selectbox if s.label == "Client")
-    assert group_box.options == ["Autodesk (2 regions)"]
+    group_box = next(s for s in at.selectbox if s.label == "Group")
+    assert group_box.options == ["All groups", "Autodesk"]
+    group_box.set_value("Autodesk").run()
+    client_box = next(s for s in at.selectbox if s.label == "Client")
+    assert client_box.options == ["Autodesk APAC", "Autodesk EMEA"]
+    client_box.set_value("Autodesk EMEA").run()
+    assert not at.exception
+    assert next(s for s in at.selectbox if s.label == "Client").value == "Autodesk EMEA"
 
 
 def test_client_picker_still_selects_ungrouped_clients_by_exact_name_on_run_check(tmp_path, monkeypatch):

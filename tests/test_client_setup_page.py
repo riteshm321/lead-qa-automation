@@ -1312,15 +1312,42 @@ def test_switching_clients_resets_the_client_group_field(tmp_path, monkeypatch):
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
     next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
-    group_box = next(s for s in at.selectbox if s.label == "Client")
-    assert group_box.options == ["Autodesk (2 regions)", "Ungrouped Client"]
-    group_box.set_value("Autodesk (2 regions)").run()
+    group_box = next(s for s in at.selectbox if s.label == "Group")
+    assert group_box.options == ["All groups", "Autodesk", "Ungrouped"]
+    group_box.set_value("Autodesk").run()
+    client_box = next(s for s in at.selectbox if s.label == "Client")
+    assert client_box.options == ["Autodesk APAC", "Autodesk EMEA"]
+    client_box.set_value("Autodesk EMEA").run()
+    assert not at.exception
+    assert next(t for t in at.text_input if t.label == "Client name").value == "Autodesk EMEA"
     assert at.selectbox(key="client_group_select").value == "Autodesk"
+    assert at.selectbox(key="client_group_select").label == "Assign to group"
 
-    next(s for s in at.selectbox if s.label == "Client").set_value("Ungrouped Client").run()
+    next(s for s in at.selectbox if s.label == "Group").set_value("Ungrouped").run()
+    assert next(s for s in at.selectbox if s.label == "Client").value == "Ungrouped Client"
     assert at.selectbox(key="client_group_select").value == ""
     assert at.selectbox(key="client_group_select").format_func("") == "No group"
 
+
+def test_create_mode_assign_to_group_lists_all_existing_groups(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_profile(ClientProfile(name="Autodesk APAC", accumulated_report_path="a.xlsx",
+                                client_group="Autodesk"), get_clients_dir())
+    save_profile(ClientProfile(name="Bee", accumulated_report_path="a.xlsx", client_group="Bravo"),
+                 get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert not [s for s in at.selectbox if s.label == "Group"]
+    box = at.selectbox(key="client_group_select")
+    assert box.label == "Assign to group"
+    assert box.options == [
+        "No group", "Autodesk (1 client)", "Bravo (1 client)", "+ Create new group…"]
 
 def _tab(at, suffix):
     return next(t for t in at.tabs if t.label.endswith(suffix))

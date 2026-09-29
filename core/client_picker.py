@@ -5,22 +5,37 @@ import streamlit as st
 from core.profile_store import list_profile_groups
 
 
-def group_profile_names(name_to_group: dict[str, str]) -> dict[str, list[str]]:
-    """Groups profile names by their client_group. An ungrouped profile
-    (client_group == "") is treated as its own singleton group, keyed by
-    its own name, so every profile is reachable through the picker
-    whether or not it opted into a group. Returns {group_label:
-    [profile_name, ...]}, both the outer mapping and each inner list
-    sorted case-insensitively.
+ALL_GROUPS_LABEL = "All groups"
+UNGROUPED_LABEL = "Ungrouped"
+
+
+def group_filter_options(name_to_group: dict[str, str]) -> list[str]:
+    """Options for the picker's "Group" filter: "All groups", then every
+    distinct non-blank group sorted case-insensitively, then "Ungrouped"
+    (only if some profile has no group). Returns [] when no profile has a
+    group at all -- the picker then shows only the flat Client selectbox.
     """
-    groups: dict[str, list[str]] = {}
-    for name, group in name_to_group.items():
-        key = group if group else name
-        groups.setdefault(key, []).append(name)
-    return {
-        key: sorted(names, key=str.lower)
-        for key, names in sorted(groups.items(), key=lambda kv: kv[0].lower())
-    }
+    groups = sorted({g for g in name_to_group.values() if g}, key=str.lower)
+    if not groups:
+        return []
+    options = [ALL_GROUPS_LABEL, *groups]
+    if any(not g for g in name_to_group.values()):
+        options.append(UNGROUPED_LABEL)
+    return options
+
+
+def profiles_in_group(name_to_group: dict[str, str], group_filter: str) -> list[str]:
+    """Profile names matching a Group filter option, sorted
+    case-insensitively: all profiles for "All groups", blank-group profiles
+    for "Ungrouped", otherwise exactly that group's members.
+    """
+    if group_filter == ALL_GROUPS_LABEL:
+        names = list(name_to_group)
+    elif group_filter == UNGROUPED_LABEL:
+        names = [n for n, g in name_to_group.items() if not g]
+    else:
+        names = [n for n, g in name_to_group.items() if g == group_filter]
+    return sorted(names, key=str.lower)
 
 
 @st.cache_data(show_spinner=False)
@@ -35,22 +50,15 @@ def _cached_profile_groups(clients_dir: str, dir_mtime: float) -> dict[str, str]
 
 
 def render_client_picker(clients_dir: str, key_prefix: str, label: str = "Client") -> str | None:
-    """Two-step group -> profile client picker, shared by Client Setup's
-    'Edit existing client' selector and Run Check's Client selector so
-    the two pages can never disagree about how grouping renders.
+    """Group -> Client picker shared by Client Setup's 'Edit existing
+    client' selector and Run Check's Client selector.
 
-    Step 1 picks a client_group (or an ungrouped profile's own name,
-    treated as its own singleton group) via a plain st.selectbox labeled
-    exactly `label`. Step 2 -- only rendered when that group actually has
-    more than one profile -- picks which profile within it, labeled
-    "{label} (region)"; a single-profile group auto-selects without ever
-    showing step 2, so the common (non-split) case stays exactly as fast
-    as today: one click, not two, and the widget looks identical to
-    today's plain flat picker.
-
-    Returns the selected profile name, or None if there are no profiles
-    at all (caller decides how to handle that -- e.g. Run Check shows a
-    warning and st.stop()s).
+    When at least one profile has a client_group, a "Group" filter
+    selectbox (All groups / each group / Ungrouped) renders on the left and
+    the Client selectbox (labeled `label`) on the right lists only that
+    group's profiles by exact name. With no groups at all, only the flat
+    Client selectbox renders. Returns the selected profile name, or None
+    if there are no profiles.
     """
     try:
         dir_mtime = os.path.getmtime(clients_dir)
@@ -60,18 +68,25 @@ def render_client_picker(clients_dir: str, key_prefix: str, label: str = "Client
     if not name_to_group:
         return None
 
-    groups = group_profile_names(name_to_group)
-    group_labels = [
-        f"{key} ({len(names)} regions)" if len(names) > 1 else names[0]
-        for key, names in groups.items()
-    ]
-    label_to_key = dict(zip(group_labels, groups.keys()))
-    selected_label = st.selectbox(label, group_labels, key=f"{key_prefix}_client_group")
-    candidates = groups[label_to_key[selected_label]]
+    client_key = f"{key_prefix}_client_profile"
+    filter_options = group_filter_options(name_to_group)
+    if not filter_options:
+        return _client_selectbox(st, label, profiles_in_group(name_to_group, ALL_GROUPS_LABEL), client_key)
 
-    if len(candidates) == 1:
-        return candidates[0]
-    return st.selectbox(f"{label} (region)", candidates, key=f"{key_prefix}_client_profile")
+    filter_key = f"{key_prefix}_group_filter"
+    if st.session_state.get(filter_key) not in filter_options:
+        st.session_state.pop(filter_key, None)
+    group_col, client_col = st.columns(2)
+    selected_group = group_col.selectbox("Group", filter_options, key=filter_key)
+    return _client_selectbox(client_col, label, profiles_in_group(name_to_group, selected_group), client_key)
+
+
+def _client_selectbox(container, label: str, names: list[str], key: str) -> str | None:
+    # Fall back to the first client when the previous pick isn't in this
+    # (possibly re-filtered) list, so the selectbox never holds a stale value.
+    if st.session_state.get(key) not in names:
+        st.session_state.pop(key, None)
+    return container.selectbox(label, names, key=key)
 
 
 NEW_GROUP_SENTINEL = "\x00__new_group__"
@@ -123,13 +138,13 @@ def render_group_selector(clients_dir: str, current_group: str, key_prefix: str)
     values = [v for _, v in choices]
     labels = {v: lbl for lbl, v in choices}
     selected = st.selectbox(
-        "Client group (optional)",
+        "Assign to group",
         values,
         format_func=labels.__getitem__,
         key=select_key,
         help="Groups this profile with other regional profiles for the same brand (e.g. \"Autodesk APAC\" and "
-             "\"Autodesk EMEA\" both in \"Autodesk\") so the client picker offers them as one group instead of "
-             "two unrelated entries. Pick \"No group\" if this client isn't split by region.",
+             "\"Autodesk EMEA\" both in \"Autodesk\") so the Group filter above the client picker can show them "
+             "together. Pick \"No group\" if this client isn't split by region.",
     )
     if selected == NEW_GROUP_SENTINEL:
         return st.text_input("New group name", key=f"{key_prefix}_new").strip()

@@ -2,31 +2,39 @@ import os
 
 from streamlit.testing.v1 import AppTest
 
-from core.client_picker import NEW_GROUP_SENTINEL, group_choices, group_profile_names
+from core.client_picker import NEW_GROUP_SENTINEL, group_choices, group_filter_options, profiles_in_group
 
 
-def test_ungrouped_profile_becomes_its_own_singleton_group():
-    result = group_profile_names({"Solo Client": ""})
-    assert result == {"Solo Client": ["Solo Client"]}
+_MIXED = {"Autodesk EMEA": "Autodesk", "Autodesk APAC": "Autodesk", "zeta solo": "", "Beta": "bravo"}
 
 
-def test_shared_group_collects_all_its_profiles_sorted():
-    result = group_profile_names({
-        "Autodesk EMEA": "Autodesk", "Autodesk APAC": "Autodesk", "Solo Client": "",
-    })
-    assert result == {
-        "Autodesk": ["Autodesk APAC", "Autodesk EMEA"],
-        "Solo Client": ["Solo Client"],
-    }
+def test_group_filter_options_lists_all_then_groups_then_ungrouped():
+    assert group_filter_options(_MIXED) == ["All groups", "Autodesk", "bravo", "Ungrouped"]
 
 
-def test_groups_are_sorted_case_insensitively():
-    result = group_profile_names({"zebra corp": "", "Acme": ""})
-    assert list(result.keys()) == ["Acme", "zebra corp"]
+def test_group_filter_options_omits_ungrouped_when_everyone_is_grouped():
+    assert group_filter_options({"A": "G1", "B": "g0"}) == ["All groups", "g0", "G1"]
 
 
-def test_empty_input_returns_empty_dict():
-    assert group_profile_names({}) == {}
+def test_group_filter_options_empty_when_no_groups():
+    assert group_filter_options({"A": "", "B": ""}) == []
+    assert group_filter_options({}) == []
+
+
+def test_profiles_in_group_filters_and_sorts():
+    assert profiles_in_group(_MIXED, "All groups") == ["Autodesk APAC", "Autodesk EMEA", "Beta", "zeta solo"]
+    assert profiles_in_group(_MIXED, "Autodesk") == ["Autodesk APAC", "Autodesk EMEA"]
+    assert profiles_in_group(_MIXED, "Ungrouped") == ["zeta solo"]
+
+
+def _save(tmp_path, profiles):
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    for name, group in profiles.items():
+        save_profile(ClientProfile(name=name, accumulated_report_path="a.xlsx", client_group=group),
+                     get_clients_dir())
 
 
 def _write_host_script(tmp_path) -> str:
@@ -58,27 +66,46 @@ def test_single_profile_group_renders_one_selectbox_labeled_client(tmp_path, mon
     assert at.session_state["picked"] == "Solo Client"
 
 
-def test_multi_profile_group_shows_a_second_step_with_a_region_count(tmp_path, monkeypatch):
+def test_groups_render_group_filter_then_filtered_client_box(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    from core.app_settings import save_app_settings, get_clients_dir
-    from core.models import ClientProfile
-    from core.profile_store import save_profile
-    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
-    save_profile(ClientProfile(name="Autodesk APAC", accumulated_report_path="a.xlsx",
-                                client_group="Autodesk"), get_clients_dir())
-    save_profile(ClientProfile(name="Autodesk EMEA", accumulated_report_path="a.xlsx",
-                                client_group="Autodesk"), get_clients_dir())
+    _save(tmp_path, {"Autodesk APAC": "Autodesk", "Autodesk EMEA": "Autodesk", "Solo": "", "Bee": "Bravo"})
 
     at = AppTest.from_file(_write_host_script(tmp_path), default_timeout=15)
     at.run()
     assert not at.exception
-    group_box = next(s for s in at.selectbox if s.label == "Client")
-    assert group_box.options == ["Autodesk (2 regions)"]
+    assert [s.label for s in at.selectbox] == ["Group", "Client"]
+    group_box = at.selectbox(key="test_group_filter")
+    assert group_box.options == ["All groups", "Autodesk", "Bravo", "Ungrouped"]
+    assert group_box.value == "All groups"
+    assert at.selectbox(key="test_client_profile").options == ["Autodesk APAC", "Autodesk EMEA", "Bee", "Solo"]
 
-    group_box.set_value("Autodesk (2 regions)").run()
+    group_box.set_value("Autodesk").run()
     assert not at.exception
-    profile_box = next(s for s in at.selectbox if s.label == "Client (region)")
-    assert set(profile_box.options) == {"Autodesk APAC", "Autodesk EMEA"}
+    assert at.selectbox(key="test_client_profile").options == ["Autodesk APAC", "Autodesk EMEA"]
+    at.selectbox(key="test_client_profile").set_value("Autodesk EMEA").run()
+    assert at.session_state["picked"] == "Autodesk EMEA"
+
+    at.selectbox(key="test_group_filter").set_value("Ungrouped").run()
+    assert not at.exception
+    assert at.selectbox(key="test_client_profile").options == ["Solo"]
+    assert at.session_state["picked"] == "Solo"
+
+    at.selectbox(key="test_group_filter").set_value("All groups").run()
+    assert not at.exception
+    assert at.selectbox(key="test_client_profile").options == ["Autodesk APAC", "Autodesk EMEA", "Bee", "Solo"]
+
+
+def test_switching_group_falls_back_to_first_client_of_new_group(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _save(tmp_path, {"Autodesk APAC": "Autodesk", "Autodesk EMEA": "Autodesk", "Bee": "Bravo"})
+
+    at = AppTest.from_file(_write_host_script(tmp_path), default_timeout=15)
+    at.run()
+    at.selectbox(key="test_client_profile").set_value("Autodesk EMEA").run()
+    at.selectbox(key="test_group_filter").set_value("Bravo").run()
+    assert not at.exception
+    assert at.selectbox(key="test_client_profile").value == "Bee"
+    assert at.session_state["picked"] == "Bee"
 
 
 def test_several_ungrouped_profiles_render_exactly_one_selectbox(tmp_path, monkeypatch):
@@ -111,29 +138,17 @@ def test_several_ungrouped_profiles_render_exactly_one_selectbox(tmp_path, monke
         assert at.session_state["picked"] == name
 
 
-def test_singleton_group_with_client_group_set_shows_own_name_as_label(tmp_path, monkeypatch):
-    # A profile can be assigned a client_group before any sibling profile
-    # in that group exists. The picker must still show the profile's own
-    # name as its option -- not the abstract group key -- exactly like the
-    # fully-ungrouped case.
+def test_singleton_group_still_lists_the_profile_by_its_own_name(tmp_path, monkeypatch):
+    # A profile assigned to a group with no siblings yet still appears
+    # under its own exact name in the Client box.
     monkeypatch.chdir(tmp_path)
-    from core.app_settings import save_app_settings, get_clients_dir
-    from core.models import ClientProfile
-    from core.profile_store import save_profile
-    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
-    save_profile(
-        ClientProfile(
-            name="Autodesk EMEA", accumulated_report_path="a.xlsx", client_group="Autodesk"
-        ),
-        get_clients_dir(),
-    )
+    _save(tmp_path, {"Autodesk EMEA": "Autodesk"})
 
     at = AppTest.from_file(_write_host_script(tmp_path), default_timeout=15)
     at.run()
     assert not at.exception
-    client_selectboxes = [s for s in at.selectbox if s.label == "Client"]
-    assert len(client_selectboxes) == 1
-    assert client_selectboxes[0].options == ["Autodesk EMEA"]
+    assert at.selectbox(key="test_group_filter").options == ["All groups", "Autodesk"]
+    assert at.selectbox(key="test_client_profile").options == ["Autodesk EMEA"]
     assert at.session_state["picked"] == "Autodesk EMEA"
 
 
