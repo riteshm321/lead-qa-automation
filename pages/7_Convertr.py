@@ -76,6 +76,17 @@ if not _profile_names:
     st.stop()
 
 client_name = st.selectbox("Client", _profile_names)
+# Per-client state not already scoped by client name: the keyed Jira
+# message box (Streamlit ignores its per-client default once the key
+# exists), a staged Jira attachment, and the last upload's results (which
+# also feed the Jira message). Without this, switching the Client dropdown
+# kept client A's message/attachment and Post sent them to client B's ticket.
+_convertr_previous_client = st.session_state.get("_convertr_loaded_for")
+st.session_state["_convertr_loaded_for"] = client_name
+if _convertr_previous_client is not None and _convertr_previous_client != client_name:
+    for _stale_key in ("convertr_jira_message", "convertr_jira_attachment_bytes",
+                       "convertr_jira_attachment_name", "convertr_upload_results"):
+        st.session_state.pop(_stale_key, None)
 profile = _cached_load_profile(client_name, _clients_dir_now, _profile_file_mtime(client_name, _clients_dir_now))
 _convertr = profile.convertr
 _campaign_by_cid = {c.cid: c for c in _convertr.campaigns}

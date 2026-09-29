@@ -580,3 +580,25 @@ def test_convertr_download_button_and_no_credentials_error_use_icons(tmp_path, m
     err = next(e for e in at.error if "Convertr account username/password" in e.value)
     assert err.icon == ":material/error:"
     assert not err.value.startswith("Failed")
+
+
+def test_switching_client_resets_the_jira_message_to_the_new_clients_default(tmp_path, monkeypatch):
+    # Regression: the keyed Jira "Message" box kept the previously selected
+    # client's greeting/summary after switching the Client dropdown, so
+    # Post would send client A's text to client B's ticket.
+    monkeypatch.chdir(tmp_path)
+    for name, reporter, ticket in (("Switch A", "Alice", "AAA-1"), ("Switch B", "Bob", "BBB-2")):
+        save_profile(ClientProfile(
+            name=name, accumulated_report_path=str(tmp_path / f"{name}.xlsx"),
+            jira_ticket_key=ticket, jira_reporter_name=reporter,
+            convertr=ConvertrConfig(enabled=True, enterprise="ent", publisher_id="1"),
+        ), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("Switch A").run()
+    assert at.text_area(key="convertr_jira_message").value.startswith("Hi Alice,")
+
+    next(s for s in at.selectbox if s.label == "Client").set_value("Switch B").run()
+    assert not at.exception
+    assert at.text_area(key="convertr_jira_message").value.startswith("Hi Bob,")

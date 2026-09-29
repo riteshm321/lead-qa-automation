@@ -64,6 +64,12 @@ if not _profile_names:
     st.stop()
 
 client_name = st.selectbox("Client", _profile_names)
+# The last upload's results table isn't scoped by client -- clear it on a
+# Client switch so client A's results never show under client B.
+_integrate_previous_client = st.session_state.get("_integrate_loaded_for")
+st.session_state["_integrate_loaded_for"] = client_name
+if _integrate_previous_client is not None and _integrate_previous_client != client_name:
+    st.session_state.pop("integrate_upload_results", None)
 profile = _cached_load_profile(client_name, _clients_dir_now, _profile_file_mtime(client_name, _clients_dir_now))
 _integrate = profile.integrate
 _leadfile_mapping = resolve_field_mapping(_integrate.leadfile_field_mapping, profile.field_mapping)

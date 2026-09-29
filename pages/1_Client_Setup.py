@@ -494,6 +494,24 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
     for _gs_stale_key in [k for k in st.session_state if k.startswith("gs_")]:
         del st.session_state[_gs_stale_key]
 
+    # Every other keyed widget below that is built with a per-profile
+    # value= (Streamlit ignores value= once its key already exists in
+    # session_state). Without this, viewing client A then switching to
+    # client B kept showing A's Enhancio/Convertr/Integrate/Box Tracker/
+    # Complex Account inputs -- and clicking Save wrote A's config into B.
+    # Deleting (rather than re-seeding) lets each widget's own value= take
+    # effect on this run. Covers the fixed keys plus every key built by
+    # _render_paired_field_mapping / _render_leadfile_column_mapping /
+    # _path_input_with_browse for these sections, and their Test/Fetch
+    # buttons (harmless to clear). Convertr account username/password are
+    # per-client too (keyed on client name), so they're included via the
+    # convertr_ prefix.
+    _PER_PROFILE_KEY_PREFIXES = ("enhancio_", "convertr_", "integrate_", "box_tracker_", "complex_account_")
+    _PER_PROFILE_KEYS = ("lead_template_sheet_select", "lead_template_sheet_text")
+    for _stale_key in [k for k in st.session_state
+                       if k.startswith(_PER_PROFILE_KEY_PREFIXES) or k in _PER_PROFILE_KEYS]:
+        del st.session_state[_stale_key]
+
 # Filled at the bottom of the script, once every *_enabled widget value
 # exists, so the strip shows live state while still rendering above the tabs.
 _summary_strip_slot = st.container()

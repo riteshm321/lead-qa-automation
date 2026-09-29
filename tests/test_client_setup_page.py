@@ -1605,3 +1605,146 @@ def test_edit_mode_preselects_current_group_and_resaves_it(tmp_path, monkeypatch
     _save(at)
     from core.profile_store import load_profile
     assert load_profile("Plain", clients_dir).client_group == "Autodesk"
+
+
+def _save_two_delivery_profiles():
+    from core.app_settings import get_clients_dir, save_convertr_account_credentials
+    from core.models import (BoxTrackerConfig, ClientProfile, ComplexAccountConfig, ConvertrCampaignMapping,
+                             ConvertrConfig, EnhancioAllocationMapping, EnhancioConfig, FieldMapping,
+                             IntegrateConfig)
+    from core.profile_store import save_profile
+
+    def _make(tag: str) -> ClientProfile:
+        lf = FieldMapping(email=f"{tag} Email", first_name=f"{tag} First", last_name=f"{tag} Last",
+                          company=f"{tag} Co", cid=f"{tag} CID")
+        return ClientProfile(
+            name=f"Switch {tag}", accumulated_report_path=f"{tag}_acc.xlsx",
+            complex_account=ComplexAccountConfig(enabled=True, tal_path=f"{tag}_tal.xlsx",
+                                                 specifications_path=f"{tag}_specs.xlsx"),
+            box_tracker=BoxTrackerConfig(enabled=True, mirror_workbook_path=f"{tag}_mirror.xlsx",
+                                         cid_campaign_map={f"{tag}1": f"{tag} Camp"},
+                                         cid_lead_template_path={f"{tag}1": f"{tag}_tmpl.xlsx"},
+                                         pacing_skipped_campaigns=[f"{tag} Skip"]),
+            convertr=ConvertrConfig(enabled=True, enterprise=f"{tag.lower()}ent", publisher_id=f"{tag}pub",
+                                    campaigns=[ConvertrCampaignMapping(cid=f"{tag}1", campaign_id=f"{tag}C",
+                                                                       global_form_id="")],
+                                    field_mapping={f"{tag} Col": f"{tag} Target"}, leadfile_field_mapping=lf),
+            enhancio=EnhancioConfig(enabled=True,
+                                    allocations=[EnhancioAllocationMapping(cid=f"{tag}1",
+                                                                           allocation_uid=f"{tag}uid")],
+                                    field_mapping={f"{tag} ECol": f"{tag} ETarget"},
+                                    fixed_field_values={f"{tag}uid": {"Lead Source": f"{tag} Src"}},
+                                    leadfile_field_mapping=lf),
+            integrate=IntegrateConfig(enabled=True, sid=f"{tag}-sid", callback_url=f"https://{tag}.example",
+                                      field_mapping={f"{tag} ICol": "email"},
+                                      fixed_field_values={"country": f"{tag}land"}, leadfile_field_mapping=lf),
+        )
+
+    for tag in ("A", "B"):
+        save_profile(_make(tag), get_clients_dir())
+        save_convertr_account_credentials(f"Switch {tag}", f"{tag}-user", f"{tag}-pass")
+
+
+_PER_CLIENT_TEXT_KEYS = {
+    "complex_account_tal_path_input": "{t}_tal.xlsx",
+    "complex_account_specs_path_input": "{t}_specs.xlsx",
+    "box_tracker_mirror_path_input": "{t}_mirror.xlsx",
+    "convertr_account_username": "{t}-user",
+    "convertr_account_password": "{t}-pass",
+    "convertr_lf_email": "{t} Email",
+    "convertr_lf_cid": "{t} CID",
+    "enhancio_lf_email": "{t} Email",
+    "enhancio_lf_first": "{t} First",
+    "enhancio_lf_cid": "{t} CID",
+    "integrate_lf_company": "{t} Co",
+    "integrate_sid_input": "{t}-sid",
+    "integrate_callback_url_input": "https://{t}.example",
+}
+_PER_CLIENT_AREA_KEYS = {
+    "box_tracker_cid_map_input": "{t}1,{t} Camp",
+    "box_tracker_lead_template_map_input": "{t}1,{t}_tmpl.xlsx",
+    "box_tracker_pacing_skipped_input": "{t} Skip",
+    "convertr_campaigns_input": "{t}1,{t}C",
+    "convertr_field_map_cols_input": "{t} Col",
+    "convertr_field_map_targets_input": "{t} Target",
+    "enhancio_allocations_input": "{t}1,{t}uid",
+    "enhancio_field_map_cols_input": "{t} ECol",
+    "enhancio_field_map_targets_input": "{t} ETarget",
+    "enhancio_fixed_values_input": "{t}uid,Lead Source,{t} Src",
+    "integrate_field_map_cols_input": "{t} ICol",
+    "integrate_fixed_values_input": "country,{t}land",
+}
+
+
+def _assert_shows(at, tag):
+    for key, expected in _PER_CLIENT_TEXT_KEYS.items():
+        assert at.text_input(key=key).value == expected.format(t=tag), key
+    for key, expected in _PER_CLIENT_AREA_KEYS.items():
+        assert at.text_area(key=key).value == expected.format(t=tag), key
+
+
+def test_switching_edited_client_shows_new_clients_delivery_config_and_save_keeps_it(tmp_path, monkeypatch):
+    # Regression: keyed widgets with a per-profile value= kept client A's
+    # value after switching to client B (Streamlit ignores value= once the
+    # key exists), so clicking Save wrote A's Enhancio/Convertr/Integrate
+    # config into B.
+    monkeypatch.chdir(tmp_path)
+    _save_two_delivery_profiles()
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("Switch A").run()
+    _assert_shows(at, "A")
+
+    next(s for s in at.selectbox if s.label == "Client").set_value("Switch B").run()
+    assert not at.exception
+    _assert_shows(at, "B")
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir, get_convertr_account_credentials
+    from core.profile_store import load_profile
+
+    saved = load_profile("Switch B", get_clients_dir())
+    assert [(a.cid, a.allocation_uid) for a in saved.enhancio.allocations] == [("B1", "Buid")]
+    assert saved.enhancio.field_mapping == {"B ECol": "B ETarget"}
+    assert saved.enhancio.fixed_field_values == {"Buid": {"Lead Source": "B Src"}}
+    assert saved.enhancio.leadfile_field_mapping.email == "B Email"
+    assert [(c.cid, c.campaign_id) for c in saved.convertr.campaigns] == [("B1", "BC")]
+    assert saved.convertr.field_mapping == {"B Col": "B Target"}
+    assert saved.convertr.leadfile_field_mapping.cid == "B CID"
+    assert saved.integrate.sid == "B-sid"
+    assert saved.integrate.callback_url == "https://B.example"
+    assert saved.integrate.field_mapping == {"B ICol": "email"}
+    assert saved.integrate.fixed_field_values == {"country": "Bland"}
+    assert saved.box_tracker.cid_campaign_map == {"B1": "B Camp"}
+    assert saved.box_tracker.mirror_workbook_path == "B_mirror.xlsx"
+    assert saved.complex_account.tal_path == "B_tal.xlsx"
+    assert get_convertr_account_credentials("Switch B") == {"username": "B-user", "password": "B-pass"}
+
+
+def test_switching_from_edited_client_to_create_new_shows_blank_delivery_config(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _save_two_delivery_profiles()
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("Switch A").run()
+    _assert_shows(at, "A")
+    assert at.checkbox(key="integrate_enabled").value is True
+
+    next(r for r in at.radio if r.label == "Mode").set_value("Create new client").run()
+    assert not at.exception
+    assert at.checkbox(key="integrate_enabled").value is False
+    for label in ("This client uploads to Convertr", "This client uploads to Enhancio",
+                  "This client uses a Box Tracker"):
+        next(c for c in at.checkbox if c.label == label).set_value(True).run()
+    at.checkbox(key="integrate_enabled").set_value(True).run()
+    for key in list(_PER_CLIENT_TEXT_KEYS) + list(_PER_CLIENT_AREA_KEYS):
+        if key.startswith("complex_account_"):
+            continue
+        widget = at.text_area(key=key) if key in _PER_CLIENT_AREA_KEYS else at.text_input(key=key)
+        assert widget.value == "", key
