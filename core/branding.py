@@ -16,6 +16,30 @@ _LOGO_PATH = resource_path("assets/madison_logic_logo.svg")
 _FAVICON_PATH = resource_path("assets/favicon.ico")
 
 
+# App-wide polish, injected once per rerun by configure_page(). Colors come
+# from Streamlit's own theme (currentColor / translucent overlays) so the
+# same rules read correctly in both the light and dark theme. Selectors use
+# Streamlit's stable data-testid attributes, not generated class names.
+_POLISH_CSS = """<style>
+[data-testid="stMainBlockContainer"] { max-width: 1280px; padding-top: 2.5rem; }
+[data-testid="stHeadingWithActionElements"] h1 { font-weight: 700; letter-spacing: -0.02em; font-size: 2.1rem; }
+[data-testid="stHeadingWithActionElements"] h2 { font-weight: 650; letter-spacing: -0.01em; font-size: 1.5rem; }
+[data-testid="stHeadingWithActionElements"] h3 { font-weight: 600; font-size: 1.2rem; }
+/* Streamlit 1.61 gives bordered and plain containers the same markup, so
+   the card shadow is opted into via a container key prefix (class st-key-*). */
+[class*="st-key-ml_card"], [data-testid="stMetric"] {
+    box-shadow: 0 1px 3px rgba(0, 27, 71, 0.08);
+    transition: box-shadow 150ms ease, transform 150ms ease;
+}
+[class*="st-key-ml_card"]:hover { box-shadow: 0 6px 16px rgba(0, 27, 71, 0.14); transform: translateY(-1px); }
+[data-testid="stBaseButton-primary"], [data-testid="stBaseButton-secondary"],
+[data-testid="stDownloadButton"] button { font-weight: 600; }
+[data-testid="stMetricLabel"] { opacity: 0.75; }
+[data-testid="stMetricValue"] { font-weight: 700; }
+[data-testid="stPageLink"] a { font-weight: 600; }
+</style>"""
+
+
 def configure_page(page_title: str) -> dict:
     """Call as the very first Streamlit command in every page script.
 
@@ -49,6 +73,7 @@ def configure_page(page_title: str) -> dict:
         </style>""",
         unsafe_allow_html=True,
     )
+    st.markdown(_POLISH_CSS, unsafe_allow_html=True)
     user = auth_gate.require_login()
 
     # No divider directly above the Time Saved card -- it sits right after

@@ -6,10 +6,15 @@ from core.branding import configure_page
 def _home() -> None:
     configure_page("Lead QA Automation")
     st.title(":material/fact_check: Lead QA & Upload Automation")
-    st.write("Use the sidebar to open **Client Setup** or **Run Check**.")
-    st.divider()
-    st.caption("Client Setup configures a client's checks, reference files, and mode once. "
-               "Run Check uses that configuration against a new leads batch every time you run it.")
+    st.caption("Configure a client once, then QA and upload every new leads batch in a few clicks.")
+    st.write("")
+    col_setup, col_run = st.columns(2)
+    with col_setup.container(border=True, key="ml_card_client_setup"):
+        st.page_link("pages/1_Client_Setup.py", label="Client Setup", icon=":material/folder:")
+        st.caption("Set up a client's checks, reference files, and mode once.")
+    with col_run.container(border=True, key="ml_card_run_check"):
+        st.page_link("pages/2_Run_Check.py", label="Run Check", icon=":material/play_arrow:")
+        st.caption("Run that configuration against a new leads batch.")
 
 
 # st.navigation() with a {section title: [st.Page, ...]} dict groups the
