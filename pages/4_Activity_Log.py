@@ -26,7 +26,7 @@ if not _activity:
     st.stop()
 
 _usernames = sorted(_activity.keys())
-_selected_user = st.selectbox("Filter by user", ["All users"] + _usernames)
+_selected_user = st.selectbox("Filter by user", ["All users"] + _usernames, filter_mode=None)
 
 _rows = []
 for _username, _record in _activity.items():

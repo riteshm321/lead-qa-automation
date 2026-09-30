@@ -262,7 +262,7 @@ def test_saving_a_date_format_alone_persists_a_rule(tmp_path, monkeypatch):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Sheet1"
-    ws.append(["Email", "Company Size"])
+    ws.append(["Email", "Capture Date"])
     wb.save(template_path)
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
@@ -273,7 +273,7 @@ def test_saving_a_date_format_alone_persists_a_rule(tmp_path, monkeypatch):
     at.text_input(key="lead_template_path_input").set_value(template_path).run()
     at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
 
-    at.selectbox(key="ltm_fmt_Company Size").set_value("MM/DD/YYYY").run()
+    at.selectbox(key="ltm_fmt_Capture Date").set_value("MM/DD/YYYY").run()
 
     next(b for b in at.button if "Save Client Profile" in b.label).click().run()
     assert not at.exception
@@ -282,10 +282,82 @@ def test_saving_a_date_format_alone_persists_a_rule(tmp_path, monkeypatch):
     from core.profile_store import load_profile
 
     saved = load_profile("LTM Date Format Client", get_clients_dir())
-    rule = next(r for r in saved.lead_template_mapping.rules if r.template_column == "Company Size")
+    rule = next(r for r in saved.lead_template_mapping.rules if r.template_column == "Capture Date")
     assert rule.date_format == "MM/DD/YYYY"
     assert rule.mandatory is False
     assert rule.source_column == ""
+
+
+def test_date_format_selector_only_renders_for_date_columns(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Company Size", "Capture Date", "Submission Timestamp"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Date Only Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+    assert not at.exception
+
+    fmt_keys = {s.key for s in at.selectbox if s.key and s.key.startswith("ltm_fmt_")}
+    assert fmt_keys == {"ltm_fmt_Capture Date", "ltm_fmt_Submission Timestamp"}
+
+    at.checkbox(key="ltm_mandatory_Company Size").check().run()
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("LTM Date Only Client", get_clients_dir())
+    rule = next(r for r in saved.lead_template_mapping.rules if r.template_column == "Company Size")
+    assert rule.mandatory is True
+    assert rule.date_format == ""
+
+
+def test_saved_date_format_on_a_non_date_named_column_is_still_shown_and_kept(tmp_path, monkeypatch):
+    # An existing config must never silently lose its date format just
+    # because the column name doesn't look like a date.
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Company Size"])
+    wb.save(template_path)
+
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile, LeadTemplateColumnRule, LeadTemplateMappingConfig
+    from core.profile_store import load_profile, save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_profile(ClientProfile(
+        name="Legacy Format Client", accumulated_report_path=str(tmp_path / "accumulated.xlsx"),
+        lead_template_path=template_path, lead_template_sheet_name="Sheet1",
+        lead_template_mapping=LeadTemplateMappingConfig(rules=[
+            LeadTemplateColumnRule(template_column="Company Size", date_format="MM/DD/YYYY")]),
+    ), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("Legacy Format Client").run()
+    assert not at.exception
+    assert at.selectbox(key="ltm_fmt_Company Size").value == "MM/DD/YYYY"
+    assert not any(s.key == "ltm_fmt_Email" for s in at.selectbox)
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+    resaved = load_profile("Legacy Format Client", get_clients_dir())
+    rule = next(r for r in resaved.lead_template_mapping.rules if r.template_column == "Company Size")
+    assert rule.date_format == "MM/DD/YYYY"
 
 
 def test_switching_client_clears_stale_ltm_widget_state_for_same_named_column(tmp_path, monkeypatch):
@@ -1094,6 +1166,27 @@ def test_saving_google_sheets_tabs_and_mandatory_column_persists(tmp_path, monke
     assert rule.mandatory is True
 
 
+def test_gs_date_format_selector_only_renders_for_date_columns(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, save_google_sheets_key_path
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    save_google_sheets_key_path(str(tmp_path / "fake-key.json"))
+
+    with patch("core.google_sheets_client.read_sheet_headers",
+               return_value=["Work Email", "Company Size", "Lead Date", "Created Time"]):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        next(t for t in at.text_input if t.label == "Client name").set_value("GS Date Only Client").run()
+        at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "acc.xlsx")).run()
+        at.checkbox(key="gs_enabled").set_value(True).run()
+        at.text_area(key="gs_tabs_input").set_value(
+            "119999,https://docs.google.com/spreadsheets/d/1o_v7oMh6Y5VcX0COIjWQ_y00IVKGbwbznCEzNGcyhpU/edit"
+        ).run()
+        assert not at.exception
+        fmt_keys = {s.key for s in at.selectbox if s.key and s.key.startswith("gs_fmt_")}
+        assert fmt_keys == {"gs_fmt_Lead Date", "gs_fmt_Created Time"}
+
+
 def test_switching_client_clears_stale_gs_widget_state_for_same_named_column(tmp_path, monkeypatch):
     # Regression test, matching the fix already applied to the sibling Lead
     # Template Column Mapping section (see
@@ -1327,6 +1420,37 @@ def test_switching_clients_resets_the_client_group_field(tmp_path, monkeypatch):
     assert next(s for s in at.selectbox if s.label == "Client").value == "Ungrouped Client"
     assert at.selectbox(key="client_group_select").value == ""
     assert at.selectbox(key="client_group_select").format_func("") == "No group"
+
+
+def test_switching_group_auto_selects_first_client_and_loads_its_profile(tmp_path, monkeypatch):
+    # Changing Group must show AND load the new group's first client with no
+    # manual Client pick, and the profile-switch reset (_loaded_sources_for)
+    # must fire for it so no field is carried over from the previous client.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    for name, path, group in [("Alpha One", "alpha1.xlsx", "Group A"), ("Alpha Two", "alpha2.xlsx", "Group A"),
+                              ("Beta One", "beta1.xlsx", "Group B"), ("Beta Two", "beta2.xlsx", "Group B")]:
+        save_profile(ClientProfile(name=name, accumulated_report_path=path, client_group=group), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    at.selectbox(key="client_setup_group_filter").set_value("Group A").run()
+    at.selectbox(key="client_setup_client_profile").set_value("Alpha Two").run()
+    assert at.text_input(key="accumulated_path_input").value == "alpha2.xlsx"
+
+    at.selectbox(key="client_setup_group_filter").set_value("Group B").run()
+    assert not at.exception
+    client_box = at.selectbox(key="client_setup_client_profile")
+    assert client_box.value == "Beta One"
+    assert client_box.proto.set_value is True
+    assert at.session_state["_loaded_sources_for"].endswith("::Beta One")
+    assert next(t for t in at.text_input if t.label == "Client name").value == "Beta One"
+    assert at.text_input(key="accumulated_path_input").value == "beta1.xlsx"
+    assert at.selectbox(key="client_group_select").value == "Group B"
 
 
 def test_create_mode_assign_to_group_lists_all_existing_groups(tmp_path, monkeypatch):

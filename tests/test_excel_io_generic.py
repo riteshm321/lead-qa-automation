@@ -8,7 +8,7 @@ import pytest
 
 from core.excel_io import (
     list_sheet_names, read_sheet_as_dataframe, backup_file, require_columns, append_leads,
-    dataframe_to_excel_bytes,
+    dataframe_to_excel_bytes, is_date_column,
 )
 from core.models import FieldMapping
 
@@ -742,3 +742,21 @@ def test_read_pacing_overview_table_raises_clear_error_when_sheet_missing(tmp_pa
 
     with pytest.raises(ValueError, match="Pacing Overview"):
         read_pacing_overview_table(path)
+
+
+@pytest.mark.parametrize("name", [
+    "Capture Date", "DATE", "Lead date", "Created Time", "Timestamp", "Submission TimeStamp", "update_date",
+])
+def test_is_date_column_true_for_date_or_time_named_columns(name):
+    assert is_date_column(name) is True
+
+
+@pytest.mark.parametrize("name", ["Email", "Company Size", "First Name", "CID", "", None])
+def test_is_date_column_false_for_other_columns(name):
+    assert is_date_column(name) is False
+
+
+def test_is_date_column_true_when_a_format_is_already_saved():
+    assert is_date_column("Company Size", "MM/DD/YYYY") is True
+    assert is_date_column("Company Size", "%d %b %Y") is True
+    assert is_date_column("Company Size", "   ") is False

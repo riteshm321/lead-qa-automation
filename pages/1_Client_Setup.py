@@ -7,7 +7,7 @@ from core.errors import render_error, render_problem
 from core.excel_io import (
     list_sheet_names, read_sheet_as_dataframe, detect_cids_from_pacing_overview, guess_target_field_mapping,
     find_header_row, read_sheet_headers, resolve_one_header_source, normalize_header_text, read_leadfile,
-    detect_formula_columns,
+    detect_formula_columns, is_date_column,
 )
 from core.app_settings import (
     get_clients_dir, get_convertr_account_credentials, save_convertr_account_credentials,
@@ -108,7 +108,7 @@ def _render_lead_template_tabs(template_path: str) -> list[LeadTemplateTab]:
             if sheet_options:
                 idx = sheet_options.index(row["sheet_name"]) if row["sheet_name"] in sheet_options else 0
                 row["sheet_name"] = st.selectbox("Tab (sheet) name", sheet_options, index=idx,
-                                                  key=f"tmpl_tab_sheet_{row_id}")
+                                                  key=f"tmpl_tab_sheet_{row_id}", filter_mode=None)
             else:
                 row["sheet_name"] = st.text_input(
                     "Tab (sheet) name (enter a valid file path above to pick from a list)",
@@ -203,7 +203,7 @@ def _render_sources_section(
             if sheet_options:
                 sheet_idx = sheet_options.index(src["sheet_name"]) if src["sheet_name"] in sheet_options else 0
                 src["sheet_name"] = st.selectbox("Sheet", sheet_options, index=sheet_idx,
-                                                  key=f"{section_key}_sheet_{row_id}")
+                                                  key=f"{section_key}_sheet_{row_id}", filter_mode=None)
             else:
                 src["sheet_name"] = st.text_input("Sheet name (enter a valid file path above to pick from a list)",
                                                    value=src["sheet_name"], key=f"{section_key}_sheet_text_{row_id}")
@@ -221,7 +221,7 @@ def _render_sources_section(
                 if header_options:
                     idx = header_options.index(current) if current in header_options else 0
                     return st.selectbox(field_label, header_options, index=idx,
-                                         key=f"{section_key}_{field_key}_{row_id}")
+                                         key=f"{section_key}_{field_key}_{row_id}", filter_mode=None)
                 return st.text_input(f"{field_label} name", value=current,
                                       key=f"{section_key}_{field_key}_text_{row_id}")
 
@@ -302,7 +302,7 @@ def _render_target_field_mapping(label: str, key_prefix: str, headers: list[str]
     def _col(role_label: str, key: str) -> str:
         current = st.session_state.get(key, "")
         idx = options.index(current) if current in options else 0
-        selected = st.selectbox(role_label, options, index=idx, key=key)
+        selected = st.selectbox(role_label, options, index=idx, key=key, filter_mode=None)
         return "" if selected == _NO_MAPPING_OPTION else selected
 
     email = _col("Email column", f"{key_prefix}_map_email")
@@ -702,7 +702,7 @@ with tab_delivery:
                         if default_template_sheet in template_sheet_options else 0
                     )
                     lead_template_sheet_name = st.selectbox("Lead Template sheet", template_sheet_options,
-                                                              index=template_sheet_idx, key="lead_template_sheet_select")
+                                                              index=template_sheet_idx, key="lead_template_sheet_select", filter_mode=None)
                 else:
                     lead_template_sheet_name = st.text_input(
                         "Lead Template sheet name (enter a valid file path above to pick from a list)",
@@ -847,7 +847,7 @@ with tab_delivery:
                         _default_override = _existing_rule.source_column if _existing_rule and _existing_rule.source_column else "(auto)"
                         _override_idx = _override_options.index(_default_override) if _default_override in _override_options else 0
                         _ltm_source_selected = _col_b.selectbox(
-                            "Source column", _override_options, index=_override_idx, key=f"ltm_source_{_ltm_col}")
+                            "Source column", _override_options, index=_override_idx, key=f"ltm_source_{_ltm_col}", filter_mode=None)
                         _ltm_source = "" if _ltm_source_selected == "(auto)" else _ltm_source_selected
                     else:
                         _ltm_source = _col_b.text_input(
@@ -856,29 +856,36 @@ with tab_delivery:
                             key=f"ltm_source_text_{_ltm_col}")
 
                     _default_fmt = _existing_rule.date_format if _existing_rule else ""
-                    if _default_fmt in _DATE_FORMAT_OPTIONS:
-                        _fmt_idx = _DATE_FORMAT_OPTIONS.index(_default_fmt)
-                    elif _default_fmt:
-                        # A saved custom format (not one of the presets) must
-                        # still select "Custom..." here -- otherwise this
-                        # falls through to index 0 ("(no special formatting)")
-                        # and the custom text box below is never shown/
-                        # pre-filled, silently dropping the saved value the
-                        # next time this profile is saved.
-                        _fmt_idx = _DATE_FORMAT_OPTIONS.index("Custom...")
-                    else:
-                        _fmt_idx = 0
-                    _ltm_fmt_selected = st.selectbox(
-                        "Date format", _DATE_FORMAT_OPTIONS, index=_fmt_idx, key=f"ltm_fmt_{_ltm_col}")
-                    if _ltm_fmt_selected == "Custom...":
-                        _ltm_date_format = st.text_input(
-                            "Custom date format (Python strftime, e.g. %d %b %Y)",
-                            value=_default_fmt if _default_fmt not in _DATE_FORMAT_OPTIONS else "",
-                            key=f"ltm_fmt_custom_{_ltm_col}")
-                    elif _ltm_fmt_selected == "(no special formatting)":
+                    if not is_date_column(_ltm_col, _default_fmt):
+                        # Only date/time-named columns (or ones that already
+                        # have a saved format) get a Date format selector --
+                        # offering it on "Email" or "Company Size" just
+                        # invites a nonsense config.
                         _ltm_date_format = ""
                     else:
-                        _ltm_date_format = _ltm_fmt_selected
+                        if _default_fmt in _DATE_FORMAT_OPTIONS:
+                            _fmt_idx = _DATE_FORMAT_OPTIONS.index(_default_fmt)
+                        elif _default_fmt:
+                            # A saved custom format (not one of the presets) must
+                            # still select "Custom..." here -- otherwise this
+                            # falls through to index 0 ("(no special formatting)")
+                            # and the custom text box below is never shown/
+                            # pre-filled, silently dropping the saved value the
+                            # next time this profile is saved.
+                            _fmt_idx = _DATE_FORMAT_OPTIONS.index("Custom...")
+                        else:
+                            _fmt_idx = 0
+                        _ltm_fmt_selected = st.selectbox(
+                            "Date format", _DATE_FORMAT_OPTIONS, index=_fmt_idx, key=f"ltm_fmt_{_ltm_col}", filter_mode=None)
+                        if _ltm_fmt_selected == "Custom...":
+                            _ltm_date_format = st.text_input(
+                                "Custom date format (Python strftime, e.g. %d %b %Y)",
+                                value=_default_fmt if _default_fmt not in _DATE_FORMAT_OPTIONS else "",
+                                key=f"ltm_fmt_custom_{_ltm_col}")
+                        elif _ltm_fmt_selected == "(no special formatting)":
+                            _ltm_date_format = ""
+                        else:
+                            _ltm_date_format = _ltm_fmt_selected
 
                 if _ltm_mandatory or _ltm_source or _ltm_date_format:
                     lead_template_mapping_rules.append(LeadTemplateColumnRule(
@@ -976,30 +983,35 @@ with tab_delivery:
                         "Mandatory", value=_existing_rule.mandatory if _existing_rule else False,
                         key=f"gs_mandatory_{_gs_col}")
                     _default_fmt = _existing_rule.date_format if _existing_rule else ""
-                    if _default_fmt in _GS_DATE_FORMAT_OPTIONS:
-                        _fmt_idx = _GS_DATE_FORMAT_OPTIONS.index(_default_fmt)
-                    elif _default_fmt:
-                        # A saved custom format (not one of the presets) must
-                        # still select "Custom..." here -- otherwise this
-                        # falls through to index 0 ("(no special formatting)")
-                        # and the custom text box below is never shown/
-                        # pre-filled, silently dropping the saved value the
-                        # next time this profile is saved. Same fix as the
-                        # Lead Template Column Mapping section's ltm_fmt_*.
-                        _fmt_idx = _GS_DATE_FORMAT_OPTIONS.index("Custom...")
-                    else:
-                        _fmt_idx = 0
-                    _gs_fmt_selected = st.selectbox(
-                        "Date format", _GS_DATE_FORMAT_OPTIONS, index=_fmt_idx, key=f"gs_fmt_{_gs_col}")
-                    if _gs_fmt_selected == "Custom...":
-                        _gs_date_format = st.text_input(
-                            "Custom date format (Python strftime, e.g. %d %b %Y)",
-                            value=_default_fmt if _default_fmt not in _GS_DATE_FORMAT_OPTIONS else "",
-                            key=f"gs_fmt_custom_{_gs_col}")
-                    elif _gs_fmt_selected == "(no special formatting)":
+                    if not is_date_column(_gs_col, _default_fmt):
+                        # Same rule as the Lead Template Column Mapping
+                        # section: no Date format selector on non-date columns.
                         _gs_date_format = ""
                     else:
-                        _gs_date_format = _gs_fmt_selected
+                        if _default_fmt in _GS_DATE_FORMAT_OPTIONS:
+                            _fmt_idx = _GS_DATE_FORMAT_OPTIONS.index(_default_fmt)
+                        elif _default_fmt:
+                            # A saved custom format (not one of the presets) must
+                            # still select "Custom..." here -- otherwise this
+                            # falls through to index 0 ("(no special formatting)")
+                            # and the custom text box below is never shown/
+                            # pre-filled, silently dropping the saved value the
+                            # next time this profile is saved. Same fix as the
+                            # Lead Template Column Mapping section's ltm_fmt_*.
+                            _fmt_idx = _GS_DATE_FORMAT_OPTIONS.index("Custom...")
+                        else:
+                            _fmt_idx = 0
+                        _gs_fmt_selected = st.selectbox(
+                            "Date format", _GS_DATE_FORMAT_OPTIONS, index=_fmt_idx, key=f"gs_fmt_{_gs_col}", filter_mode=None)
+                        if _gs_fmt_selected == "Custom...":
+                            _gs_date_format = st.text_input(
+                                "Custom date format (Python strftime, e.g. %d %b %Y)",
+                                value=_default_fmt if _default_fmt not in _GS_DATE_FORMAT_OPTIONS else "",
+                                key=f"gs_fmt_custom_{_gs_col}")
+                        elif _gs_fmt_selected == "(no special formatting)":
+                            _gs_date_format = ""
+                        else:
+                            _gs_date_format = _gs_fmt_selected
                 if _gs_mandatory or _gs_date_format:
                     gs_mapping_rules.append(LeadTemplateColumnRule(
                         template_column=_gs_col, mandatory=_gs_mandatory, date_format=_gs_date_format))

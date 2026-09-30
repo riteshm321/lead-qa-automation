@@ -77,16 +77,34 @@ def render_client_picker(clients_dir: str, key_prefix: str, label: str = "Client
     if st.session_state.get(filter_key) not in filter_options:
         st.session_state.pop(filter_key, None)
     group_col, client_col = st.columns(2)
-    selected_group = group_col.selectbox("Group", filter_options, key=filter_key)
+    selected_group = group_col.selectbox(
+        "Group", filter_options, key=filter_key, filter_mode=None,
+        on_change=_select_first_client_of_group, args=(name_to_group, filter_key, client_key))
     return _client_selectbox(client_col, label, profiles_in_group(name_to_group, selected_group), client_key)
+
+
+def _select_first_client_of_group(name_to_group: dict[str, str], filter_key: str, client_key: str) -> None:
+    # Group on_change callback: runs before the rerun's script body, so the
+    # Client selectbox is rendered with the new group's first client as an
+    # explicitly set value. Just dropping the old key left the browser still
+    # DISPLAYING the previous client while the page returned (and loaded) a
+    # different one.
+    names = profiles_in_group(name_to_group, st.session_state.get(filter_key, ALL_GROUPS_LABEL))
+    if names:
+        st.session_state[client_key] = names[0]
+    else:
+        st.session_state.pop(client_key, None)
 
 
 def _client_selectbox(container, label: str, names: list[str], key: str) -> str | None:
     # Fall back to the first client when the previous pick isn't in this
     # (possibly re-filtered) list, so the selectbox never holds a stale value.
-    if st.session_state.get(key) not in names:
-        st.session_state.pop(key, None)
-    return container.selectbox(label, names, key=key)
+    # Assign it explicitly rather than popping the key: an explicit
+    # session_state value is pushed to the browser, a popped key is not, and
+    # the displayed client must always equal the returned one.
+    if names and st.session_state.get(key) not in names:
+        st.session_state[key] = names[0]
+    return container.selectbox(label, names, key=key, filter_mode=None)
 
 
 NEW_GROUP_SENTINEL = "\x00__new_group__"
@@ -142,6 +160,7 @@ def render_group_selector(clients_dir: str, current_group: str, key_prefix: str)
         values,
         format_func=labels.__getitem__,
         key=select_key,
+        filter_mode=None,
         help="Groups this profile with other regional profiles for the same brand (e.g. \"Autodesk APAC\" and "
              "\"Autodesk EMEA\" both in \"Autodesk\") so the Group filter above the client picker can show them "
              "together. Pick \"No group\" if this client isn't split by region.",

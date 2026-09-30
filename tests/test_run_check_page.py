@@ -2009,6 +2009,28 @@ def test_client_picker_groups_regional_profiles_on_run_check(tmp_path, monkeypat
     assert next(s for s in at.selectbox if s.label == "Client").value == "Autodesk EMEA"
 
 
+def test_switching_group_on_run_check_auto_selects_the_new_groups_first_client(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    for name, group in [("Alpha One", "Group A"), ("Alpha Two", "Group A"),
+                        ("Beta One", "Group B"), ("Beta Two", "Group B")]:
+        save_profile(ClientProfile(name=name, accumulated_report_path="a.xlsx", client_group=group),
+                     get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    at.selectbox(key="run_check_group_filter").set_value("Group A").run()
+    at.selectbox(key="run_check_client_profile").set_value("Alpha Two").run()
+    at.selectbox(key="run_check_group_filter").set_value("Group B").run()
+    assert not at.exception
+    client_box = at.selectbox(key="run_check_client_profile")
+    assert client_box.value == "Beta One"
+    assert client_box.proto.set_value is True
+
+
 def test_client_picker_still_selects_ungrouped_clients_by_exact_name_on_run_check(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from core.app_settings import save_app_settings, get_clients_dir

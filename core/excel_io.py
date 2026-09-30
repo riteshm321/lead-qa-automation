@@ -418,6 +418,21 @@ def normalize_header_text(value) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value).strip().lower())
 
 
+_DATE_COLUMN_WORDS = ("date", "time", "timestamp")
+
+
+def is_date_column(column_name, saved_date_format: str = "") -> bool:
+    """Whether a template column should offer a Date format selector:
+    its name contains "date", "time" or "timestamp" (case-insensitive), or
+    it already has a non-blank saved date format (so an existing config on
+    an oddly named column is never silently dropped).
+    """
+    if str(saved_date_format or "").strip():
+        return True
+    name = str(column_name or "").lower()
+    return any(word in name for word in _DATE_COLUMN_WORDS)
+
+
 _NORMALIZED_FIELD_SYNONYMS = {
     attr: {normalize_header_text(s) for s in synonyms} for attr, synonyms in _FIELD_SYNONYMS.items()
 }

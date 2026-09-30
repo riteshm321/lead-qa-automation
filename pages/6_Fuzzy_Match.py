@@ -31,8 +31,8 @@ if uploaded:
         st.subheader(":material/compare_arrows: Compare columns")
         headers = list(df.columns)
         col_a, col_b = st.columns(2)
-        column_a = col_a.selectbox("Column A (e.g. Job Title)", headers, index=0)
-        column_b = col_b.selectbox("Column B (e.g. LinkedIn Job Title)", headers, index=min(1, len(headers) - 1))
+        column_a = col_a.selectbox("Column A (e.g. Job Title)", headers, index=0, filter_mode=None)
+        column_b = col_b.selectbox("Column B (e.g. LinkedIn Job Title)", headers, index=min(1, len(headers) - 1), filter_mode=None)
 
         if st.button("Run comparison", type="primary"):
             result_df = compare_columns(df, column_a, column_b)

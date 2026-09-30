@@ -37,6 +37,24 @@ _POLISH_CSS = """<style>
 [data-testid="stMetricLabel"] { opacity: 0.75; }
 [data-testid="stMetricValue"] { font-weight: 700; }
 [data-testid="stPageLink"] a { font-weight: 600; }
+/* Every st.selectbox/st.multiselect should look and feel like a dropdown,
+   not an editable text box. Pages pass filter_mode=None (typing disabled,
+   enforced by a guard test); these rules make the whole control, not just
+   its inner input, show a pointer with no text caret or selection
+   highlight. Streamlit 1.61 renders selects as react-aria ComboBoxes (not
+   BaseWeb), so the selectors use its stable data-testid and ARIA roles;
+   the [data-baseweb="select"] ones keep older/newer builds covered. No
+   colors, so both themes are unaffected; the chevron button and keyboard
+   handling (arrows/Enter/Escape) are untouched. */
+[data-testid="stSelectbox"] [role="group"], [data-testid="stSelectbox"] [role="group"] *,
+[data-testid="stMultiSelect"] [role="group"], [data-testid="stMultiSelect"] [role="group"] *,
+[data-testid="stSelectbox"] [data-baseweb="select"], [data-testid="stSelectbox"] [data-baseweb="select"] *,
+[data-testid="stMultiSelect"] [data-baseweb="select"], [data-testid="stMultiSelect"] [data-baseweb="select"] *,
+[role="listbox"] [role="option"] { cursor: pointer; }
+[data-testid="stSelectbox"] input, [data-testid="stMultiSelect"] input {
+    caret-color: transparent; user-select: none; -webkit-user-select: none;
+}
+[data-testid="stSelectbox"] input::selection, [data-testid="stMultiSelect"] input::selection { background: transparent; }
 </style>"""
 
 

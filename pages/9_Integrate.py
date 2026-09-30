@@ -63,7 +63,7 @@ if not _profile_names:
                    "Tick **This client uploads to Integrate** under Client Setup → Delivery.", level="warning")
     st.stop()
 
-client_name = st.selectbox("Client", _profile_names)
+client_name = st.selectbox("Client", _profile_names, filter_mode=None)
 # The last upload's results table isn't scoped by client -- clear it on a
 # Client switch so client A's results never show under client B.
 _integrate_previous_client = st.session_state.get("_integrate_loaded_for")

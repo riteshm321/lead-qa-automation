@@ -108,6 +108,43 @@ def test_switching_group_falls_back_to_first_client_of_new_group(tmp_path, monke
     assert at.session_state["picked"] == "Bee"
 
 
+def test_switching_group_auto_selects_and_displays_new_groups_first_client(tmp_path, monkeypatch):
+    # Regression test: after changing Group, the Client box kept DISPLAYING
+    # the previously picked client while the page loaded a different
+    # profile. The new group's first client must be the widget's value, be
+    # pushed to the browser (set_value), and be what the picker returns --
+    # with no manual Client pick.
+    monkeypatch.chdir(tmp_path)
+    _save(tmp_path, {"Alpha One": "Group A", "Alpha Two": "Group A", "Beta One": "Group B", "Beta Two": "Group B"})
+
+    at = AppTest.from_file(_write_host_script(tmp_path), default_timeout=15)
+    at.run()
+    at.selectbox(key="test_group_filter").set_value("Group A").run()
+    at.selectbox(key="test_client_profile").set_value("Alpha Two").run()
+    assert at.session_state["picked"] == "Alpha Two"
+
+    at.selectbox(key="test_group_filter").set_value("Group B").run()
+    assert not at.exception
+    client_box = at.selectbox(key="test_client_profile")
+    assert client_box.options == ["Beta One", "Beta Two"]
+    assert client_box.value == "Beta One"
+    assert client_box.proto.set_value is True
+    assert at.session_state["picked"] == "Beta One"
+
+
+def test_group_and_client_selectboxes_are_plain_dropdowns(tmp_path, monkeypatch):
+    # filter_mode=None disables type-to-filter so the boxes behave like
+    # dropdowns rather than editable text fields.
+    monkeypatch.chdir(tmp_path)
+    _save(tmp_path, {"Alpha One": "Group A", "Beta One": "Group B"})
+    at = AppTest.from_file(_write_host_script(tmp_path), default_timeout=15)
+    at.run()
+    from streamlit.proto.SelectWidgetFilterMode_pb2 import SelectWidgetFilterMode
+    assert len(at.selectbox) == 2
+    for box in at.selectbox:
+        assert box.proto.filter_mode == SelectWidgetFilterMode.FILTER_MODE_NONE, box.label
+
+
 def test_several_ungrouped_profiles_render_exactly_one_selectbox(tmp_path, monkeypatch):
     # Regression test for the deleted `len(candidates) == 1` short-circuit:
     # with 3+ ungrouped profiles, a second (region) selectbox must never

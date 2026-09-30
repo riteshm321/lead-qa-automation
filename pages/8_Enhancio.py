@@ -92,7 +92,7 @@ if not _profile_names:
                    "Tick **This client uploads to Enhancio** under Client Setup → Delivery.", level="warning")
     st.stop()
 
-client_name = st.selectbox("Client", _profile_names)
+client_name = st.selectbox("Client", _profile_names, filter_mode=None)
 # Per-client state not already scoped by client name: the keyed Jira
 # message box (Streamlit ignores its per-client default once the key
 # exists), a staged Jira attachment, and the last upload's results (which

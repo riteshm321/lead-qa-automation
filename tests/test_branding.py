@@ -122,3 +122,37 @@ def test_sidebar_nav_uses_material_symbols_not_emoji():
     icon_args = re.findall(r'icon="([^"]+)"', source)
     assert len(icon_args) >= 10  # one per st.Page call (10 pages + Home)
     assert all(icon.startswith(":material/") for icon in icon_args)
+
+
+def _selectbox_calls_missing_filter_mode(path: str) -> list[str]:
+    import ast
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    missing = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("selectbox", "multiselect")):
+            fm = next((k for k in node.keywords if k.arg == "filter_mode"), None)
+            if fm is None or not (isinstance(fm.value, ast.Constant) and fm.value.value is None):
+                missing.append(f"{os.path.basename(path)}:{node.lineno}")
+    return missing
+
+
+def test_every_selectbox_and_multiselect_is_a_plain_dropdown():
+    # Guard: Streamlit's default type-to-filter combobox shows a text caret,
+    # so users took dropdowns for editable text boxes. Every selectbox/
+    # multiselect in the app must pass filter_mode=None.
+    import glob
+    root = os.path.join(os.path.dirname(__file__), "..")
+    paths = glob.glob(os.path.join(root, "pages", "*.py")) + glob.glob(os.path.join(root, "core", "*.py"))
+    paths.append(os.path.join(root, "Summary.py"))
+    missing = [m for p in paths for m in _selectbox_calls_missing_filter_mode(p)]
+    assert missing == []
+
+
+def test_polish_css_makes_selects_feel_like_dropdowns():
+    from core.branding import _POLISH_CSS
+    assert '[data-testid="stSelectbox"] [role="group"]' in _POLISH_CSS
+    assert '[data-testid="stMultiSelect"] input' in _POLISH_CSS
+    assert "caret-color: transparent" in _POLISH_CSS
+    assert "cursor: pointer" in _POLISH_CSS
+    assert "user-select: none" in _POLISH_CSS
