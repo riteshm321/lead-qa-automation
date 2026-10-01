@@ -1989,3 +1989,189 @@ def test_switching_client_resets_custom_questions_widgets(tmp_path, monkeypatch)
 
     next(r for r in at.radio if r.label == "Mode").set_value("Create new client").run()
     assert at.checkbox(key="cq_enabled").value is False
+
+
+def test_custom_questions_combined_cell_settings_persist_on_save(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    _start_new_client(at, tmp_path, "CQ Combined Client")
+
+    at.checkbox(key="cq_enabled").set_value(True).run()
+    at.text_input(key="cq_combined_cell_column").set_value("Custom").run()
+    at.checkbox(key="cq_require_consent").set_value(True).run()
+    at.text_area(key="cq_consent_keys").set_value(
+        "I agree to receive updates from Acme\n\nI accept the privacy policy\n").run()
+    assert not at.exception
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("CQ Combined Client", get_clients_dir()).custom_questions
+    assert saved.enabled is True and saved.rules == []
+    assert saved.combined_cell_column == "Custom"
+    assert saved.require_consent_true is True
+    assert saved.consent_keys == ["I agree to receive updates from Acme", "I accept the privacy policy"]
+
+
+def test_switching_client_resets_custom_questions_combined_cell_widgets(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import get_clients_dir
+    from core.models import ClientProfile, CustomQuestionsConfig
+    from core.profile_store import load_profile, save_profile
+
+    save_profile(ClientProfile(
+        name="CC A", accumulated_report_path="A_acc.xlsx",
+        custom_questions=CustomQuestionsConfig(enabled=True, combined_cell_column="Custom",
+                                               require_consent_true=True, consent_keys=["I agree"]),
+    ), get_clients_dir())
+    save_profile(ClientProfile(name="CC B", accumulated_report_path="B_acc.xlsx",
+                               custom_questions=CustomQuestionsConfig(enabled=True)), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("CC A").run()
+    assert at.text_input(key="cq_combined_cell_column").value == "Custom"
+    assert at.checkbox(key="cq_require_consent").value is True
+
+    next(s for s in at.selectbox if s.label == "Client").set_value("CC B").run()
+    assert not at.exception
+    assert at.text_input(key="cq_combined_cell_column").value == ""
+    assert at.checkbox(key="cq_require_consent").value is False
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+    saved_b = load_profile("CC B", get_clients_dir()).custom_questions
+    assert (saved_b.combined_cell_column, saved_b.require_consent_true, saved_b.consent_keys) == ("", False, [])
+
+
+# --- Lead Notes --------------------------------------------------------------
+
+def _ln_row_widgets(at, label: str):
+    return [w for w in at.selectbox if w.label == label]
+
+
+def test_lead_notes_config_persists_on_save(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    _start_new_client(at, tmp_path, "Notes Save Client")
+
+    at.checkbox(key="ln_enabled").set_value(True).run()
+    at.text_input(key="ln_notes_column").set_value("Signal Notes").run()
+    at.button(key="ln_fields_add").click().run()
+    at.button(key="ln_fields_add").click().run()
+    assert not at.exception
+
+    kinds = _ln_row_widgets(at, "Field")
+    assert len(kinds) == 2
+    kinds[1].set_value("value").run()
+    columns = [t for t in at.text_input if t.label == "Lead column"]
+    columns[0].set_value("Email").run()
+    columns[1].set_value("Budget").run()
+    next(t for t in at.text_input if t.label == "Name in reasons").set_value("Budget range").run()
+    [c for c in at.checkbox if c.label == "Required"][0].set_value(True).run()
+    _ln_row_widgets(at, "If it doesn't match")[0].set_value("refund").run()
+    assert not at.exception
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.models import LeadNotesConfig, LeadNotesField
+    from core.profile_store import load_profile
+
+    saved = load_profile("Notes Save Client", get_clients_dir())
+    assert saved.lead_notes == LeadNotesConfig(enabled=True, notes_column="Signal Notes", fields=[
+        LeadNotesField(kind="email", column="Email", required=True, action="refund"),
+        LeadNotesField(kind="value", column="Budget", label="Budget range", required=False, action="review"),
+    ])
+
+
+def test_lead_notes_save_is_blocked_without_a_notes_column(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    _start_new_client(at, tmp_path, "Notes Blocked Client")
+    at.checkbox(key="ln_enabled").set_value(True).run()
+    at.button(key="ln_fields_add").click().run()
+    next(t for t in at.text_input if t.label == "Lead column").set_value("Email").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+    assert any("Lead Notes" in e.value for e in at.error)
+    assert not (tmp_path / "clients" / "Notes Blocked Client.json").exists()
+
+
+def test_switching_client_resets_lead_notes_widgets(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import get_clients_dir
+    from core.models import ClientProfile, LeadNotesConfig, LeadNotesField
+    from core.profile_store import load_profile, save_profile
+
+    save_profile(ClientProfile(
+        name="LN A", accumulated_report_path="A_acc.xlsx",
+        lead_notes=LeadNotesConfig(enabled=True, notes_column="Signal Notes", fields=[
+            LeadNotesField(kind="phone", column="Phone", required=True, action="refund")]),
+    ), get_clients_dir())
+    save_profile(ClientProfile(name="LN B", accumulated_report_path="B_acc.xlsx"), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("LN A").run()
+    assert at.checkbox(key="ln_enabled").value is True
+    assert at.text_input(key="ln_notes_column").value == "Signal Notes"
+    assert [t.value for t in at.text_input if t.label == "Lead column"] == ["Phone"]
+
+    next(s for s in at.selectbox if s.label == "Client").set_value("LN B").run()
+    assert not at.exception
+    assert at.checkbox(key="ln_enabled").value is False
+    at.checkbox(key="ln_enabled").set_value(True).run()
+    assert at.text_input(key="ln_notes_column").value == ""
+    assert [t for t in at.text_input if t.label == "Lead column"] == []
+
+    at.checkbox(key="ln_enabled").set_value(False).run()
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+    saved_b = load_profile("LN B", get_clients_dir())
+    assert saved_b.lead_notes == LeadNotesConfig()
+
+    next(r for r in at.radio if r.label == "Mode").set_value("Create new client").run()
+    assert at.checkbox(key="ln_enabled").value is False
+
+
+def test_lead_notes_add_standard_fields_prefills_from_the_field_mapping(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import get_clients_dir
+    from core.models import ClientProfile, FieldMapping
+    from core.profile_store import save_profile
+
+    save_profile(ClientProfile(
+        name="LN Std", accumulated_report_path="acc.xlsx",
+        field_mapping=FieldMapping(email="Work Email", first_name="First", last_name="Last",
+                                   company="Company Name", cid="CID"),
+    ), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("LN Std").run()
+    at.checkbox(key="ln_enabled").set_value(True).run()
+    at.button(key="ln_fields_add_standard").click().run()
+    assert not at.exception
+
+    assert [s.value for s in at.selectbox if s.label == "Field"] == [
+        "email", "phone", "first_name", "last_name", "company", "job_title"]
+    assert [t.value for t in at.text_input if t.label == "Lead column"] == [
+        "Work Email", "", "First", "Last", "Company Name", ""]
+
+    at.button(key="ln_fields_add_standard").click().run()
+    assert len([s for s in at.selectbox if s.label == "Field"]) == 6

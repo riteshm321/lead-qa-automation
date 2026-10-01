@@ -27,9 +27,11 @@ from core.models import (
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
     LeadTemplateTab, ComplexAccountConfig, BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
     EnhancioConfig, EnhancioAllocationMapping, IntegrateConfig, LeadTemplateColumnRule, LeadTemplateMappingConfig,
-    GoogleSheetTab, GoogleSheetsConfig, CustomQuestionRule, CustomQuestionsConfig,
+    GoogleSheetTab, GoogleSheetsConfig, CustomQuestionRule, CustomQuestionsConfig, LeadNotesConfig,
+    LeadNotesField,
 )
 from core.custom_questions import detect_question_rules, normalize_question
+from core.lead_notes import FIELD_KINDS as _LN_KINDS
 from core.client_picker import render_client_picker, render_group_selector
 from core.profile_store import save_profile, load_profile
 from core.toast import show_pending_toast
@@ -413,6 +415,83 @@ def _find_custom_question_problems(rules: list[CustomQuestionRule]) -> list[str]
     return problems
 
 
+_LN_ACTIONS = {"review": "Needs Review", "refund": "Refund"}
+_LN_STANDARD_KINDS = ("email", "phone", "first_name", "last_name", "company", "job_title")
+
+
+def _ln_field_to_state(f: LeadNotesField) -> dict:
+    return {"id": str(uuid.uuid4()), "kind": f.kind, "column": f.column, "label": f.label,
+            "required": f.required, "action": f.action}
+
+
+def _render_lead_notes_fields(field_mapping: FieldMapping | None) -> list[LeadNotesField]:
+    if not st.session_state["ln_fields"]:
+        render_empty_state("No fields to verify yet.",
+                           "Click **Add Field**, or **Add standard fields** for email, phone, name, company "
+                           "and job title.")
+    _add_col, _std_col = st.columns(2)
+    if _add_col.button("Add Field", icon=":material/add:", key="ln_fields_add"):
+        st.session_state["ln_fields"].append(_ln_field_to_state(LeadNotesField()))
+    if _std_col.button("Add standard fields", icon=":material/playlist_add:", key="ln_fields_add_standard"):
+        mapped = {
+            "email": field_mapping.email, "first_name": field_mapping.first_name,
+            "last_name": field_mapping.last_name, "company": field_mapping.company,
+        } if field_mapping else {}
+        present = {row["kind"] for row in st.session_state["ln_fields"]}
+        for kind in _LN_STANDARD_KINDS:
+            if kind not in present:
+                st.session_state["ln_fields"].append(
+                    _ln_field_to_state(LeadNotesField(kind=kind, column=mapped.get(kind, ""))))
+
+    result: list[LeadNotesField] = []
+    remove_id = None
+    for row in st.session_state["ln_fields"]:
+        row_id = row["id"]
+        with st.container(border=True):
+            _kind_col, _column_col = st.columns(2)
+            with _kind_col:
+                row["kind"] = _cq_choice("Field", _LN_KINDS, row["kind"], f"ln_kind_{row_id}")
+            row["column"] = _column_col.text_input(
+                "Lead column", value=row["column"], key=f"ln_column_{row_id}",
+                help="The leadfile column holding this lead's own value, compared against the notes.")
+            if row["kind"] == "value":
+                row["label"] = st.text_input(
+                    "Name in reasons", value=row["label"], key=f"ln_label_{row_id}",
+                    placeholder="e.g. Budget", help="Used in refund/review reasons. Defaults to the column name.")
+            _req_col, _action_col = st.columns(2)
+            row["required"] = _req_col.checkbox(
+                "Required", value=bool(row["required"]), key=f"ln_required_{row_id}",
+                help="Required: the notes must mention it. Optional: only flagged when the notes hold a "
+                     "different email/phone.")
+            with _action_col:
+                row["action"] = _cq_choice("If it doesn't match", _LN_ACTIONS, row["action"],
+                                           f"ln_action_{row_id}")
+            if st.button("Remove this field", icon=":material/delete:", key=f"ln_remove_{row_id}"):
+                remove_id = row_id
+
+        result.append(LeadNotesField(
+            kind=row["kind"], column=row["column"].strip(),
+            label=row["label"].strip() if row["kind"] == "value" else "",
+            required=bool(row["required"]), action=row["action"],
+        ))
+
+    if remove_id is not None:
+        st.session_state["ln_fields"] = [r for r in st.session_state["ln_fields"] if r["id"] != remove_id]
+        st.rerun()
+
+    return result
+
+
+def _find_lead_notes_problems(notes_column: str, fields: list[LeadNotesField]) -> list[str]:
+    problems: list[str] = []
+    if not notes_column.strip():
+        problems.append("no notes column")
+    for n, f in enumerate(fields, start=1):
+        if not f.column:
+            problems.append(f"field {n} ({_LN_KINDS.get(f.kind, f.kind)}) has no lead column")
+    return problems
+
+
 def _find_source_name_problems(sources: list[ReferenceSource]) -> list[str]:
     problems: list[str] = []
     seen: set[str] = set()
@@ -661,6 +740,13 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
     st.session_state["cq_rules"] = (
         [_cq_rule_to_state(r) for r in profile.custom_questions.rules] if profile else [])
 
+    # Lead Notes: same treatment under its own ln_ prefix (ln_enabled,
+    # ln_notes_column and each field row's ln_<field>_<uuid>).
+    for _ln_stale_key in [k for k in st.session_state if k.startswith("ln_")]:
+        del st.session_state[_ln_stale_key]
+    st.session_state["ln_fields"] = (
+        [_ln_field_to_state(f) for f in profile.lead_notes.fields] if profile else [])
+
     # Every other keyed widget below that is built with a per-profile
     # value= (Streamlit ignores value= once its key already exists in
     # session_state). Without this, viewing client A then switching to
@@ -687,14 +773,15 @@ tab_basics, tab_delivery, tab_checks = st.tabs([
     ":material/badge: Basics", ":material/send: Delivery", ":material/checklist: Checks",
 ])
 with tab_checks:
-    (tab_leadcap, tab_exclusion, tab_tal, tab_suppression, tab_dedupe, tab_custom_questions, tab_complex,
-     tab_duplicate) = st.tabs([
+    (tab_leadcap, tab_exclusion, tab_tal, tab_suppression, tab_dedupe, tab_custom_questions, tab_lead_notes,
+     tab_complex, tab_duplicate) = st.tabs([
         _check_tab_label("Leadcap", bool(profile and profile.leadcap.enabled)),
         _check_tab_label("Exclusion", bool(profile and profile.exclusion.enabled)),
         _check_tab_label("TAL", bool(profile and profile.tal.enabled)),
         _check_tab_label("Suppression", bool(profile and profile.suppression.enabled)),
         _check_tab_label("Dedupe", bool(profile and profile.dedupe_list.enabled)),
         _check_tab_label("Custom Questions", bool(profile and profile.custom_questions.enabled)),
+        _check_tab_label("Lead Notes", bool(profile and profile.lead_notes.enabled)),
         _check_tab_label("Complex Account", bool(profile and profile.complex_account.enabled)),
         _check_tab_label("Duplicate", bool(profile and profile.duplicate.enabled)),
     ])
@@ -1332,18 +1419,77 @@ with tab_custom_questions:
             "Enable Custom Questions check",
             value=profile.custom_questions.enabled if profile else False, key="cq_enabled")
         cq_rules_result: list[CustomQuestionRule] = []
+        cq_combined_cell_column = ""
+        cq_require_consent = False
+        cq_consent_keys: list[str] = []
         if cq_enabled:
             _render_custom_question_detect()
             st.divider()
             cq_rules_result = _render_custom_question_rules()
-            if not cq_rules_result:
+            st.divider()
+            st.markdown(':material/view_list: **Combined "Question: answer" cell**')
+            st.caption(
+                'For leadfiles with one cell holding "Question: answer;Question: answer;..." pairs (consent '
+                "statements included). Each pair whose question matches a question above or a leadfile column "
+                "header is compared with that column: a clear mismatch refunds the lead, a near miss sends it to "
+                "Needs Review. A question above whose column isn't in the leadfile is answered from this cell "
+                "instead. Other pairs are ignored."
+            )
+            cq_combined_cell_column = st.text_input(
+                "Combined cell column (optional)",
+                value=profile.custom_questions.combined_cell_column if profile else "",
+                key="cq_combined_cell_column", placeholder="e.g. Custom",
+                help="Leave blank to turn the combined-cell cross-check off.").strip()
+            cq_require_consent = st.checkbox(
+                "Required consent pairs must be true",
+                value=profile.custom_questions.require_consent_true if profile else False,
+                key="cq_require_consent",
+                help="Each consent statement listed below must be in the combined cell and answered true, "
+                     "or the lead is refunded.")
+            if cq_require_consent:
+                cq_consent_keys = [line.strip() for line in st.text_area(
+                    "Required consent statements (one per line)",
+                    value="\n".join(profile.custom_questions.consent_keys) if profile else "",
+                    key="cq_consent_keys",
+                    help="The first few words of each statement are enough — matched loosely against the "
+                         "start of each pair's text.").splitlines() if line.strip()]
+            if not cq_rules_result and not cq_combined_cell_column:
                 render_problem("Custom Questions is enabled but no questions are configured — this check will "
                                "do nothing.",
-                               "Click **Add Question** or **Detect from leadfile** above, or untick **Enable "
-                               "Custom Questions check**.", level="warning")
+                               "Click **Add Question** or **Detect from leadfile** above, set a combined cell "
+                               "column, or untick **Enable Custom Questions check**.", level="warning")
         else:
             render_empty_state("Custom Questions check is off.",
                                "Tick **Enable Custom Questions check** above to configure it.", icon="toggle_off")
+
+with tab_lead_notes:
+    with st.container(border=True):
+        st.subheader("Lead Notes")
+        st.caption(
+            "Checks a lead's narrative notes paragraph against the lead's own columns — email, phone, name, "
+            "company, job title, or any other value such as budget or timeframe. A different email/phone in "
+            "the notes, or a required field the notes don't mention, gets that field's action."
+        )
+        ln_enabled = st.checkbox(
+            "Enable Lead Notes check",
+            value=profile.lead_notes.enabled if profile else False, key="ln_enabled")
+        ln_notes_column = ""
+        ln_fields_result: list[LeadNotesField] = []
+        if ln_enabled:
+            ln_notes_column = st.text_input(
+                "Notes column", value=profile.lead_notes.notes_column if profile else "",
+                key="ln_notes_column", placeholder="e.g. Signal Notes",
+                help="The leadfile column holding the notes paragraph. Matched loosely.").strip()
+            st.divider()
+            ln_fields_result = _render_lead_notes_fields(profile.field_mapping if profile else None)
+            if not ln_notes_column or not ln_fields_result:
+                render_problem("Lead Notes is enabled but isn't fully set up — this check will do nothing until "
+                               "it has a notes column and at least one field.",
+                               "Fill in **Notes column** and add a field, or untick **Enable Lead Notes "
+                               "check**.", level="warning")
+        else:
+            render_empty_state("Lead Notes check is off.",
+                               "Tick **Enable Lead Notes check** above to configure it.", icon="toggle_off")
 
 with tab_complex:
     with st.container(border=True):
@@ -1761,7 +1907,8 @@ with _summary_strip_slot:
         ("TAL", chip_state(tal_enabled, needs_setup=not tal_sources_result)),
         ("Suppression", chip_state(suppression_enabled, needs_setup=not suppression_sources_result)),
         ("Dedupe", chip_state(dedupe_enabled, needs_setup=not dedupe_sources_result)),
-        ("Custom Questions", chip_state(cq_enabled, needs_setup=not cq_rules_result)),
+        ("Custom Questions", chip_state(cq_enabled, needs_setup=not (cq_rules_result or cq_combined_cell_column))),
+        ("Lead Notes", chip_state(ln_enabled, needs_setup=not (ln_notes_column and ln_fields_result))),
         ("Complex Account", chip_state(complex_account_enabled)),
         ("Duplicate", chip_state(duplicate_enabled)),
         ("Google Sheets", chip_state(gs_enabled, needs_setup=not gs_tabs)),
@@ -1788,6 +1935,9 @@ if st.button("Save Client Profile", icon=":material/save:", type="primary"):
 
     _blank_tab_count = sum(1 for t in lead_template_tabs_result if not t.sheet_name)
     _cq_problems = _find_custom_question_problems(cq_rules_result) if cq_enabled else []
+    if cq_enabled and cq_require_consent and not cq_consent_keys:
+        _cq_problems.append("required consent is on but no consent statements are listed")
+    _ln_problems = _find_lead_notes_problems(ln_notes_column, ln_fields_result) if ln_enabled else []
 
     _client_name_invalid_chars = set('/\\') & set(client_name)
     if not client_name:
@@ -1815,6 +1965,9 @@ if st.button("Save Client Profile", icon=":material/save:", type="primary"):
         render_problem("Custom Questions rules are incomplete: " + "; ".join(_cq_problems) + ".",
                        "Open **Checks → Custom Questions** and fill in the missing fields, or remove that "
                        "question.")
+    elif _ln_problems:
+        render_problem("Lead Notes is incomplete: " + "; ".join(_ln_problems) + ".",
+                       "Open **Checks → Lead Notes** and fill in the missing fields, or remove that field.")
     else:
         new_profile = ClientProfile(
             name=client_name,
@@ -1866,6 +2019,17 @@ if st.button("Save Client Profile", icon=":material/save:", type="primary"):
             custom_questions=CustomQuestionsConfig(
                 enabled=cq_enabled,
                 rules=cq_rules_result if cq_enabled else (profile.custom_questions.rules if profile else []),
+                combined_cell_column=cq_combined_cell_column if cq_enabled else (
+                    profile.custom_questions.combined_cell_column if profile else ""),
+                require_consent_true=cq_require_consent if cq_enabled else (
+                    profile.custom_questions.require_consent_true if profile else False),
+                consent_keys=cq_consent_keys if cq_enabled else (
+                    profile.custom_questions.consent_keys if profile else []),
+            ),
+            lead_notes=LeadNotesConfig(
+                enabled=ln_enabled,
+                notes_column=ln_notes_column if ln_enabled else (profile.lead_notes.notes_column if profile else ""),
+                fields=ln_fields_result if ln_enabled else (profile.lead_notes.fields if profile else []),
             ),
             complex_account=ComplexAccountConfig(
                 enabled=complex_account_enabled,
