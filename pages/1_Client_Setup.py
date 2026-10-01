@@ -27,8 +27,9 @@ from core.models import (
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
     LeadTemplateTab, ComplexAccountConfig, BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping,
     EnhancioConfig, EnhancioAllocationMapping, IntegrateConfig, LeadTemplateColumnRule, LeadTemplateMappingConfig,
-    GoogleSheetTab, GoogleSheetsConfig,
+    GoogleSheetTab, GoogleSheetsConfig, CustomQuestionRule, CustomQuestionsConfig,
 )
+from core.custom_questions import detect_question_rules, normalize_question
 from core.client_picker import render_client_picker, render_group_selector
 from core.profile_store import save_profile, load_profile
 from core.toast import show_pending_toast
@@ -255,6 +256,161 @@ def _render_sources_section(
         st.rerun()
 
     return result
+
+
+_CQ_FORMATS = {
+    "header": "Question is the column header",
+    "combined": "Several questions in one cell",
+    "columns": "Question column + answer column",
+}
+_CQ_MODES = {"full": "Check the answers", "exists": "Only check it was answered"}
+_CQ_COUNT_RULES = {"any": "Any number", "exactly": "Exactly", "at_least": "At least", "at_most": "At most"}
+
+
+def _cq_rule_to_state(rule: CustomQuestionRule) -> dict:
+    return {
+        "id": str(uuid.uuid4()), "format": rule.format, "column": rule.column,
+        "question_column": rule.question_column, "question_text": rule.question_text, "mode": rule.mode,
+        "allowed_text": "\n".join(rule.allowed_answers), "count_rule": rule.count_rule,
+        "count": rule.count, "separator": rule.separator,
+    }
+
+
+def _cq_choice(label: str, options: dict[str, str], current: str, key: str) -> str:
+    keys = list(options)
+    return st.selectbox(label, keys, index=keys.index(current) if current in keys else 0,
+                        format_func=options.get, key=key, filter_mode=None)
+
+
+def _cq_rule_identity(rule_state: dict) -> str:
+    return normalize_question(rule_state["column"]) + "::" + normalize_question(rule_state["question_text"])
+
+
+def _render_custom_question_detect() -> None:
+    st.markdown("**Detect from leadfile**")
+    st.caption(
+        "Point at (or upload) a sample leadfile and the tool proposes one rule per column whose header "
+        "looks like a question (ends with \"?\" or starts with \"1.\"/\"Q1\"), pre-filled with the answer "
+        "options seen in it. Review and edit them below before saving."
+    )
+    sample_path = _path_input_with_browse("Sample leadfile path", "cq_sample_path", "", show_label=False)
+    sample_file = st.file_uploader("...or upload a sample leadfile", type=["xlsx", "csv"], key="cq_sample_file")
+    if st.button("Detect from leadfile", icon=":material/auto_awesome:", key="cq_detect"):
+        try:
+            if sample_file is not None:
+                sample_df = read_leadfile(sample_file)
+            elif sample_path:
+                with open(sample_path, "rb") as fh:
+                    sample_df = read_leadfile(fh)
+            else:
+                sample_df = None
+        except Exception as exc:
+            render_error(exc)
+            return
+        if sample_df is None:
+            render_problem("No sample leadfile given.", "Enter a path or upload a file above, then try again.",
+                           level="warning")
+            return
+        existing = {_cq_rule_identity(r) for r in st.session_state["cq_rules"]}
+        added = 0
+        for rule in detect_question_rules(sample_df):
+            state = _cq_rule_to_state(rule)
+            if _cq_rule_identity(state) not in existing:
+                st.session_state["cq_rules"].append(state)
+                existing.add(_cq_rule_identity(state))
+                added += 1
+        if added:
+            st.success(f":material/check_circle: Added {added} detected question(s) below — review them, "
+                       "then save.")
+        else:
+            render_empty_state("No new question-style columns found in that file.",
+                               "Headers need to end with \"?\" or start with numbering like \"1.\" or \"Q1\".",
+                               icon="search_off")
+
+
+def _render_custom_question_rules() -> list[CustomQuestionRule]:
+    if not st.session_state["cq_rules"]:
+        render_empty_state("No questions configured yet.",
+                           "Click **Add Question** below, or use **Detect from leadfile** above.")
+    if st.button("Add Question", icon=":material/add:", key="cq_rules_add"):
+        st.session_state["cq_rules"].append(_cq_rule_to_state(CustomQuestionRule()))
+
+    result: list[CustomQuestionRule] = []
+    remove_id = None
+    for n, row in enumerate(st.session_state["cq_rules"], start=1):
+        row_id = row["id"]
+        with st.container(border=True):
+            st.markdown(f":material/quiz: **CQ{n}**")
+            row["format"] = _cq_choice("Format", _CQ_FORMATS, row["format"], f"cq_format_{row_id}")
+            if row["format"] == "header":
+                row["column"] = st.text_input(
+                    "Question column header", value=row["column"], key=f"cq_column_{row_id}",
+                    help="The leadfile column whose header is the question. Matched loosely — case, spacing, "
+                         "punctuation and \"1.\"/\"Q1:\" numbering don't matter.")
+                row["question_text"] = row["column"]
+            elif row["format"] == "combined":
+                row["column"] = st.text_input(
+                    "Column holding the questions and answers", value=row["column"],
+                    key=f"cq_combined_column_{row_id}")
+                row["question_text"] = st.text_input(
+                    "Question text", value=row["question_text"], key=f"cq_question_text_{row_id}",
+                    help="Located inside the cell; everything after it up to the next configured question in "
+                         "the same column is taken as its answer(s).")
+            else:
+                _qc, _ac = st.columns(2)
+                row["question_column"] = _qc.text_input(
+                    "Question column", value=row["question_column"], key=f"cq_question_column_{row_id}")
+                row["column"] = _ac.text_input(
+                    "Answer column", value=row["column"], key=f"cq_answer_column_{row_id}")
+                row["question_text"] = st.text_input(
+                    "Question text", value=row["question_text"], key=f"cq_question_text_{row_id}")
+
+            row["mode"] = _cq_choice("Mode", _CQ_MODES, row["mode"], f"cq_mode_{row_id}")
+            if row["mode"] == "full":
+                row["allowed_text"] = st.text_area(
+                    "Allowed answers (one per line)", value=row["allowed_text"], key=f"cq_allowed_{row_id}",
+                    help="One answer option per line — answers may contain commas or other separators. Leave "
+                         "empty to only count answers (split on the separator).")
+                _rc, _cc, _sc = st.columns(3)
+                with _rc:
+                    row["count_rule"] = _cq_choice("Count rule", _CQ_COUNT_RULES, row["count_rule"],
+                                                   f"cq_count_rule_{row_id}")
+                with _cc:
+                    row["count"] = int(st.number_input(
+                        "Count", min_value=0, step=1, value=int(row["count"]), key=f"cq_count_{row_id}",
+                        disabled=row["count_rule"] == "any"))
+                with _sc:
+                    row["separator"] = st.text_input(
+                        "Separator", value=row["separator"], key=f"cq_separator_{row_id}",
+                        help="Between answers, e.g. \",\" \";\" or \"|\". Only used for counting when there's "
+                             "no allowed list, and for reporting unrecognized answers.")
+            if st.button("Remove this question", icon=":material/delete:", key=f"cq_remove_{row_id}"):
+                remove_id = row_id
+
+        result.append(CustomQuestionRule(
+            format=row["format"], column=row["column"].strip(), question_column=row["question_column"].strip(),
+            question_text=row["question_text"].strip(), mode=row["mode"],
+            allowed_answers=[a.strip() for a in row["allowed_text"].splitlines() if a.strip()],
+            count_rule=row["count_rule"], count=int(row["count"]), separator=row["separator"] or ",",
+        ))
+
+    if remove_id is not None:
+        st.session_state["cq_rules"] = [r for r in st.session_state["cq_rules"] if r["id"] != remove_id]
+        st.rerun()
+
+    return result
+
+
+def _find_custom_question_problems(rules: list[CustomQuestionRule]) -> list[str]:
+    problems: list[str] = []
+    for n, rule in enumerate(rules, start=1):
+        if not rule.column:
+            problems.append(f"CQ{n} has no column")
+        if rule.format == "columns" and not rule.question_column:
+            problems.append(f"CQ{n} has no question column")
+        if rule.format == "combined" and not rule.question_text:
+            problems.append(f"CQ{n} has no question text")
+    return problems
 
 
 def _find_source_name_problems(sources: list[ReferenceSource]) -> list[str]:
@@ -494,6 +650,17 @@ if st.session_state.get("_loaded_sources_for") != _profile_identity:
     for _gs_stale_key in [k for k in st.session_state if k.startswith("gs_")]:
         del st.session_state[_gs_stale_key]
 
+    # Custom Questions: every widget in that tab (cq_enabled, the sample
+    # leadfile path/upload, and each rule row's cq_<field>_<uuid>) is keyed
+    # under the cq_ prefix, so clearing the prefix lets each widget's
+    # per-profile value= take effect -- without it, cq_enabled (a fixed key)
+    # would keep client A's tick after switching to B and Save would write
+    # it into B. The rule rows themselves are re-seeded with fresh uuids.
+    for _cq_stale_key in [k for k in st.session_state if k.startswith("cq_")]:
+        del st.session_state[_cq_stale_key]
+    st.session_state["cq_rules"] = (
+        [_cq_rule_to_state(r) for r in profile.custom_questions.rules] if profile else [])
+
     # Every other keyed widget below that is built with a per-profile
     # value= (Streamlit ignores value= once its key already exists in
     # session_state). Without this, viewing client A then switching to
@@ -520,12 +687,14 @@ tab_basics, tab_delivery, tab_checks = st.tabs([
     ":material/badge: Basics", ":material/send: Delivery", ":material/checklist: Checks",
 ])
 with tab_checks:
-    tab_leadcap, tab_exclusion, tab_tal, tab_suppression, tab_dedupe, tab_complex, tab_duplicate = st.tabs([
+    (tab_leadcap, tab_exclusion, tab_tal, tab_suppression, tab_dedupe, tab_custom_questions, tab_complex,
+     tab_duplicate) = st.tabs([
         _check_tab_label("Leadcap", bool(profile and profile.leadcap.enabled)),
         _check_tab_label("Exclusion", bool(profile and profile.exclusion.enabled)),
         _check_tab_label("TAL", bool(profile and profile.tal.enabled)),
         _check_tab_label("Suppression", bool(profile and profile.suppression.enabled)),
         _check_tab_label("Dedupe", bool(profile and profile.dedupe_list.enabled)),
+        _check_tab_label("Custom Questions", bool(profile and profile.custom_questions.enabled)),
         _check_tab_label("Complex Account", bool(profile and profile.complex_account.enabled)),
         _check_tab_label("Duplicate", bool(profile and profile.duplicate.enabled)),
     ])
@@ -1151,6 +1320,31 @@ with tab_dedupe:
             render_empty_state("Dedupe list check is off.", "Tick **Enable Dedupe list check** above to configure it.",
                                 icon="toggle_off")
 
+with tab_custom_questions:
+    with st.container(border=True):
+        st.subheader("Custom Questions")
+        st.caption(
+            "Checks each lead's answers to this client's custom/survey questions. A missing or unanswered "
+            "question, an answer that isn't allowed, or the wrong number of answers refunds the lead; a "
+            "slightly reworded question or a typo'd answer sends it to Needs Review instead."
+        )
+        cq_enabled = st.checkbox(
+            "Enable Custom Questions check",
+            value=profile.custom_questions.enabled if profile else False, key="cq_enabled")
+        cq_rules_result: list[CustomQuestionRule] = []
+        if cq_enabled:
+            _render_custom_question_detect()
+            st.divider()
+            cq_rules_result = _render_custom_question_rules()
+            if not cq_rules_result:
+                render_problem("Custom Questions is enabled but no questions are configured — this check will "
+                               "do nothing.",
+                               "Click **Add Question** or **Detect from leadfile** above, or untick **Enable "
+                               "Custom Questions check**.", level="warning")
+        else:
+            render_empty_state("Custom Questions check is off.",
+                               "Tick **Enable Custom Questions check** above to configure it.", icon="toggle_off")
+
 with tab_complex:
     with st.container(border=True):
         st.subheader("Complex Account")
@@ -1567,6 +1761,7 @@ with _summary_strip_slot:
         ("TAL", chip_state(tal_enabled, needs_setup=not tal_sources_result)),
         ("Suppression", chip_state(suppression_enabled, needs_setup=not suppression_sources_result)),
         ("Dedupe", chip_state(dedupe_enabled, needs_setup=not dedupe_sources_result)),
+        ("Custom Questions", chip_state(cq_enabled, needs_setup=not cq_rules_result)),
         ("Complex Account", chip_state(complex_account_enabled)),
         ("Duplicate", chip_state(duplicate_enabled)),
         ("Google Sheets", chip_state(gs_enabled, needs_setup=not gs_tabs)),
@@ -1592,6 +1787,7 @@ if st.button("Save Client Profile", icon=":material/save:", type="primary"):
             break
 
     _blank_tab_count = sum(1 for t in lead_template_tabs_result if not t.sheet_name)
+    _cq_problems = _find_custom_question_problems(cq_rules_result) if cq_enabled else []
 
     _client_name_invalid_chars = set('/\\') & set(client_name)
     if not client_name:
@@ -1615,6 +1811,10 @@ if st.button("Save Client Profile", icon=":material/save:", type="primary"):
                        "Open **Delivery → Client Mode** and pick a sheet for every tab.")
     elif _name_error:
         render_problem(_name_error, "Give every source in that check a non-empty, unique name.")
+    elif _cq_problems:
+        render_problem("Custom Questions rules are incomplete: " + "; ".join(_cq_problems) + ".",
+                       "Open **Checks → Custom Questions** and fill in the missing fields, or remove that "
+                       "question.")
     else:
         new_profile = ClientProfile(
             name=client_name,
@@ -1663,6 +1863,10 @@ if st.button("Save Client Profile", icon=":material/save:", type="primary"):
                                                profile.suppression.sources if profile else [])),
             dedupe_list=DedupeListConfig(enabled=dedupe_enabled, sources=dedupe_sources_result if dedupe_enabled else (
                 profile.dedupe_list.sources if profile else [])),
+            custom_questions=CustomQuestionsConfig(
+                enabled=cq_enabled,
+                rules=cq_rules_result if cq_enabled else (profile.custom_questions.rules if profile else []),
+            ),
             complex_account=ComplexAccountConfig(
                 enabled=complex_account_enabled,
                 tal_path=complex_account_tal_path if complex_account_enabled else "",

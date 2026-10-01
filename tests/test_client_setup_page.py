@@ -1872,3 +1872,120 @@ def test_switching_from_edited_client_to_create_new_shows_blank_delivery_config(
             continue
         widget = at.text_area(key=key) if key in _PER_CLIENT_AREA_KEYS else at.text_input(key=key)
         assert widget.value == "", key
+
+
+# --- Custom Questions --------------------------------------------------------
+
+_CQ_HEADER = "1. Which widget features matter most to you?"
+
+
+def _start_new_client(at, tmp_path, name: str) -> None:
+    next(t for t in at.text_input if t.label == "Client name").set_value(name).run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+
+
+def test_custom_questions_rule_configured_in_client_setup_persists_on_save(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    _start_new_client(at, tmp_path, "CQ Save Client")
+
+    at.checkbox(key="cq_enabled").set_value(True).run()
+    at.button(key="cq_rules_add").click().run()
+    assert not at.exception
+    next(t for t in at.text_input if t.label == "Question column header").set_value(_CQ_HEADER).run()
+    next(t for t in at.text_area if t.label == "Allowed answers (one per line)").set_value(
+        "a) Speed, reliability & uptime\nb) Security / compliance").run()
+    next(s for s in at.selectbox if s.label == "Count rule").set_value("at_most").run()
+    next(n for n in at.number_input if n.label == "Count").set_value(2).run()
+    next(t for t in at.text_input if t.label == "Separator").set_value(";").run()
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.models import CustomQuestionRule
+    from core.profile_store import load_profile
+
+    saved = load_profile("CQ Save Client", get_clients_dir())
+    assert saved.custom_questions.enabled is True
+    assert saved.custom_questions.rules == [CustomQuestionRule(
+        format="header", column=_CQ_HEADER, question_text=_CQ_HEADER, mode="full",
+        allowed_answers=["a) Speed, reliability & uptime", "b) Security / compliance"],
+        count_rule="at_most", count=2, separator=";",
+    )]
+
+
+def test_custom_questions_detect_from_leadfile_prefills_rules(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    sample = str(tmp_path / "sample_leads.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Email", _CQ_HEADER, "Company"])
+    ws.append(["x@example.com", "a) Speed, reliability & uptime, b) Security / compliance", "Acme"])
+    ws.append(["y@example.com", "c) Price", "Beta"])
+    wb.save(sample)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    _start_new_client(at, tmp_path, "CQ Detect Client")
+    at.checkbox(key="cq_enabled").set_value(True).run()
+    at.text_input(key="cq_sample_path").set_value(sample).run()
+    at.button(key="cq_detect").click().run()
+    assert not at.exception
+    assert next(t for t in at.text_input if t.label == "Question column header").value == _CQ_HEADER
+
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    rule = load_profile("CQ Detect Client", get_clients_dir()).custom_questions.rules[0]
+    assert rule.column == _CQ_HEADER
+    assert rule.allowed_answers == [
+        "a) Speed, reliability & uptime", "b) Security / compliance", "c) Price"]
+    assert (rule.count_rule, rule.count) == ("at_most", 2)
+
+
+def test_switching_client_resets_custom_questions_widgets(tmp_path, monkeypatch):
+    # Same data-corruption class as the delivery-config switch test above:
+    # a keyed widget keeps the previous client's value after a profile
+    # switch unless the reset block clears it, and Save then writes it into
+    # the newly selected client.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import get_clients_dir
+    from core.models import ClientProfile, CustomQuestionRule, CustomQuestionsConfig
+    from core.profile_store import load_profile, save_profile
+
+    save_profile(ClientProfile(
+        name="CQ A", accumulated_report_path="A_acc.xlsx",
+        custom_questions=CustomQuestionsConfig(enabled=True, rules=[
+            CustomQuestionRule(column="A question?", question_text="A question?", allowed_answers=["Yes"]),
+        ]),
+    ), get_clients_dir())
+    save_profile(ClientProfile(name="CQ B", accumulated_report_path="B_acc.xlsx"), get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("CQ A").run()
+    assert at.checkbox(key="cq_enabled").value is True
+    assert [t.value for t in at.text_input if t.label == "Question column header"] == ["A question?"]
+
+    next(s for s in at.selectbox if s.label == "Client").set_value("CQ B").run()
+    assert not at.exception
+    assert at.checkbox(key="cq_enabled").value is False
+    at.checkbox(key="cq_enabled").set_value(True).run()
+    assert [t for t in at.text_input if t.label == "Question column header"] == []
+
+    at.checkbox(key="cq_enabled").set_value(False).run()
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+    saved_b = load_profile("CQ B", get_clients_dir())
+    assert saved_b.custom_questions.enabled is False
+    assert saved_b.custom_questions.rules == []
+
+    next(r for r in at.radio if r.label == "Mode").set_value("Create new client").run()
+    assert at.checkbox(key="cq_enabled").value is False
