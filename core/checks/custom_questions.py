@@ -3,7 +3,8 @@ from rapidfuzz import fuzz
 
 from core.check_result import CheckOutcome, ReviewDetail
 from core.custom_questions import (
-    NEAR_MISS_THRESHOLD, locate_questions, match_answers, normalize_question,
+    NEAR_MISS_THRESHOLD, CombinedPair, answers_score, find_pair, is_true_answer, locate_questions,
+    match_answers, normalize_question, parse_combined_pairs, strip_html,
 )
 from core.models import CustomQuestionRule, CustomQuestionsConfig
 
@@ -94,18 +95,103 @@ def _question_text_review(label: str, actual: str, expected: str, score: float, 
                     candidate_context="the configured question", score=score)
 
 
+def _shorten(text: str, limit: int = 60) -> str:
+    return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
+
+
+def _combined_cell_targets(new_leads: pd.DataFrame, config: CustomQuestionsConfig,
+                           combined_col) -> list[tuple[str, object]]:
+    """(normalized question, leadfile column) pairs a combined-cell pair can
+    be cross-checked against: each rule's question mapped to its own answer
+    column (when that column is in the leadfile), then every leadfile
+    header as a question of its own."""
+    targets: list[tuple[str, object]] = []
+    for rule in config.rules:
+        if rule.format == "header":
+            col, _ = _resolve_column(new_leads, rule.column or rule.question_text, allow_fuzzy=True)
+        elif rule.format == "columns":
+            col, _ = _resolve_column(new_leads, rule.column, allow_fuzzy=False)
+        else:
+            continue
+        if col is not None and col != combined_col and rule.question_text:
+            targets.append((normalize_question(rule.question_text), col))
+    targets.extend((normalize_question(col), col) for col in new_leads.columns if col != combined_col)
+    return [(q, col) for q, col in targets if q]
+
+
+def _cross_check_pair(pair: CombinedPair, targets: list[tuple[str, object]], row: pd.Series,
+                      findings: _LeadFindings) -> None:
+    asked = normalize_question(strip_html(pair.question))
+    if not asked:
+        return
+    best_col, best_score = None, 0.0
+    for question, col in targets:
+        score = 100.0 if asked == question else float(fuzz.ratio(asked, question))
+        if score > best_score:
+            best_col, best_score = col, score
+            if score == 100:
+                break
+    if best_col is None or best_score < NEAR_MISS_THRESHOLD:
+        return  # a pair about something the leadfile has no column for
+    column_value = _cell(row[best_col])
+    score = answers_score(pair.answer, column_value)
+    if score == 100:
+        return
+    if not column_value:
+        findings.fails.append(f"Custom cell says '{pair.answer}' but '{best_col}' column is blank")
+        return
+    if not pair.answer:
+        findings.fails.append(f"Custom cell leaves '{_shorten(pair.question)}' blank but '{best_col}' "
+                              f"column says '{column_value}'")
+        return
+    message = f"Custom cell says '{pair.answer}' but '{best_col}' column says '{column_value}'"
+    if score >= NEAR_MISS_THRESHOLD:
+        findings.review(message, lead_value=pair.answer, candidate_value=column_value,
+                        candidate_context=f"the '{best_col}' column", score=score)
+    else:
+        findings.fails.append(message)
+
+
+def _check_consent(pairs: list[CombinedPair], keys: list[str], findings: _LeadFindings) -> None:
+    for key in keys:
+        if not key.strip():
+            continue
+        pair, _ = find_pair(pairs, key, prefix=True)
+        label = _shorten(key.strip())
+        if pair is None:
+            findings.fails.append(f"Custom cell: consent '{label}' missing")
+        elif not is_true_answer(pair.answer):
+            findings.fails.append(f"Custom cell: consent '{label}' is '{pair.answer}', must be true")
+
+
 def check_custom_questions(new_leads: pd.DataFrame, config: CustomQuestionsConfig) -> CheckOutcome:
     """Validates each lead's answers to the client's configured custom
     questions. Clear failures (question missing/unanswered, an answer that
     isn't allowed, wrong number of answers) refund the lead; near misses
     (slightly reworded question, typo'd answer) send it to Needs Review.
     Every rule's problems on one lead combine into one reason, labelled
-    CQ1, CQ2, ... by the rule's position in the config."""
+    CQ1, CQ2, ... by the rule's position in the config.
+
+    With a combined "Q: a;Q: a" cell column configured, each pair in it is
+    also cross-checked against the leadfile column for the same question
+    (a clear mismatch refunds, a near miss goes to review); a "header" rule
+    whose column isn't in the leadfile is answered from that cell instead;
+    and required consent pairs must be present and true when switched on."""
     outcome = CheckOutcome()
-    if not config.enabled or not config.rules:
+    if not config.enabled or not (config.rules or config.combined_cell_column.strip()):
         return outcome
 
     findings = {idx: _LeadFindings() for idx in new_leads.index}
+
+    combined_col = None
+    pairs_by_lead: dict = {}
+    if config.combined_cell_column.strip():
+        combined_col, _ = _resolve_column(new_leads, config.combined_cell_column, allow_fuzzy=False)
+        if combined_col is None:
+            for idx in new_leads.index:
+                findings[idx].fails.append(f"Custom cell column '{config.combined_cell_column}' not found")
+        else:
+            pairs_by_lead = {idx: parse_combined_pairs(value) for idx, value in new_leads[combined_col].items()}
 
     # Combined-format rules sharing one cell are located together, so each
     # question's answers stop where the next configured question begins.
@@ -162,6 +248,20 @@ def check_custom_questions(new_leads: pd.DataFrame, config: CustomQuestionsConfi
 
         else:  # "header": the column header IS the question
             col, score = _resolve_column(new_leads, rule.column or rule.question_text, allow_fuzzy=True)
+            if col is not None and col == combined_col:
+                col = None
+            if col is None and combined_col is not None:
+                # No separate column: the answer only lives in the combined cell.
+                for idx in new_leads.index:
+                    pair, pair_score = find_pair(pairs_by_lead[idx], rule.question_text or rule.column)
+                    if pair is None:
+                        findings[idx].fails.append(f"{label} missing")
+                        continue
+                    if pair_score < 100:
+                        _question_text_review(label, pair.question, rule.question_text or rule.column,
+                                              pair_score, findings[idx])
+                    _evaluate_answer(label, rule, pair.answer, findings[idx])
+                continue
             if col is None:
                 for idx in new_leads.index:
                     findings[idx].fails.append(f"{label} missing")
@@ -171,6 +271,14 @@ def check_custom_questions(new_leads: pd.DataFrame, config: CustomQuestionsConfi
                     _question_text_review(label, str(col), rule.column or rule.question_text,
                                           score, findings[idx])
                 _evaluate_answer(label, rule, _cell(value), findings[idx])
+
+    if combined_col is not None:
+        targets = _combined_cell_targets(new_leads, config, combined_col)
+        for idx, row in new_leads.iterrows():
+            for pair in pairs_by_lead[idx]:
+                _cross_check_pair(pair, targets, row, findings[idx])
+            if config.require_consent_true:
+                _check_consent(pairs_by_lead[idx], config.consent_keys, findings[idx])
 
     for idx, found in findings.items():
         if found.fails:

@@ -10,6 +10,7 @@ Whatever text is left over once every matched answer is removed is an
 unrecognized answer. Splitting on the separator is only the fallback when
 there is no allowed list to match against.
 """
+import html
 import re
 from dataclasses import dataclass, field
 
@@ -350,3 +351,107 @@ def detect_question_rules(df: pd.DataFrame) -> list[CustomQuestionRule]:
             separator=separator,
         ))
     return rules
+
+
+# --- combined "Question: answer;Question: answer;..." cells -----------------
+#
+# A different shape from the "combined" rule format above: here every pair
+# carries its own "Question: answer" text, so the cell can be parsed on its
+# own without knowing the questions in advance. Consent statements are
+# routinely part of it, and their text contains colons, commas, brackets and
+# HTML links -- hence splitting each pair on its LAST ": ".
+
+# Only things that look like real tags ("<a ...>", "</a>", "<br/>"), so a
+# literal "<$10,000" answer is never eaten up to some later ">".
+_HTML_TAG = re.compile(r"</?[A-Za-z][^<>]*>")
+_TRUE_ANSWERS = {"true", "yes", "y", "1"}
+_FALSE_ANSWERS = {"false", "no", "n", "0"}
+
+
+@dataclass
+class CombinedPair:
+    question: str
+    answer: str
+
+
+def strip_html(text) -> str:
+    """Text with HTML tags removed and entities ("&amp;") decoded."""
+    return html.unescape(_HTML_TAG.sub("", _cell_text(text)))
+
+
+def parse_combined_pairs(cell) -> list[CombinedPair]:
+    """Split a "Q: a;Q: a;..." cell into pairs. HTML is stripped first (so
+    neither a tag attribute nor an "&amp;" entity can split a pair), pairs
+    are split on ";", and each pair's question/answer on its LAST ": ". A
+    piece with no ": " can't be a whole pair -- it's a ";" inside consent
+    text -- so it's rejoined with the piece after it."""
+    pairs: list[CombinedPair] = []
+    pending = ""
+    for segment in strip_html(cell).split(";"):
+        piece = f"{pending};{segment}" if pending else segment
+        stripped = piece.strip()
+        if not stripped:
+            pending = ""
+            continue
+        if stripped.endswith(":"):
+            pairs.append(CombinedPair(stripped[:-1].strip(), ""))
+            pending = ""
+            continue
+        cut = piece.rfind(": ")
+        if cut == -1:
+            pending = piece
+            continue
+        pairs.append(CombinedPair(piece[:cut].strip(), piece[cut + 2:].strip()))
+        pending = ""
+    if pending.strip():
+        pairs.append(CombinedPair(pending.strip(), ""))
+    return [p for p in pairs if p.question]
+
+
+def question_score(given, expected, prefix: bool = False) -> float:
+    """How closely question text `given` matches `expected` (numbering,
+    case, punctuation ignored): 100 for an exact match, else the fuzzy
+    ratio. With prefix=True, `expected` only has to match the START of
+    `given` -- for long consent statements keyed by their first words."""
+    g, e = normalize_question(strip_html(given)), normalize_question(expected)
+    if not g or not e:
+        return 0.0
+    if g == e:
+        return 100.0
+    if prefix:
+        if g.startswith(e) and (len(g) == len(e) or g[len(e)] == " "):
+            return 100.0
+        g = g[:_word_end(g, len(e))]
+    return float(fuzz.ratio(g, e))
+
+
+def find_pair(pairs: list[CombinedPair], question, prefix: bool = False) -> tuple[CombinedPair | None, float]:
+    """The pair whose question best matches `question`, with its score, if
+    at or above NEAR_MISS_THRESHOLD; else (None, 0)."""
+    best, best_score = None, 0.0
+    for pair in pairs:
+        score = question_score(pair.question, question, prefix=prefix)
+        if score > best_score:
+            best, best_score = pair, score
+    if best_score >= NEAR_MISS_THRESHOLD:
+        return best, best_score
+    return None, 0.0
+
+
+def is_true_answer(answer) -> bool:
+    return normalize_answer(answer) in _TRUE_ANSWERS
+
+
+def answers_score(a, b) -> float:
+    """100 when two answers say the same thing -- normalized equal, the
+    same words in any order ("Red, Blue" / "Blue, Red"), or both yes/true
+    or both no/false -- else their fuzzy ratio."""
+    a_norm, b_norm = normalize_answer(a), normalize_answer(b)
+    if a_norm == b_norm:
+        return 100.0
+    for group in (_TRUE_ANSWERS, _FALSE_ANSWERS):
+        if a_norm in group and b_norm in group:
+            return 100.0
+    if a_norm and b_norm and sorted(a_norm.split()) == sorted(b_norm.split()):
+        return 100.0
+    return float(fuzz.ratio(a_norm, b_norm))

@@ -143,3 +143,99 @@ def test_multiple_rule_failures_combine_into_one_reason():
     outcome = check_custom_questions(df, _config(_header_rule(), rule2))
     assert outcome.fail[0] == ("CQ1: 'Not an option' is not an allowed answer; "
                                "CQ2: 'Maybe later' is not an allowed answer")
+
+
+# --- combined "Custom" cell cross-check -------------------------------------
+
+CONSENT_TEXT = ('I agree to receive updates from Acme Widgets Ltd. (see <a href="https://acme.example/p">'
+                'Privacy Policy</a>), including: news, offers and events')
+WIDGET_Q = "Which widget do you use?"
+WIDGET_RULE = CustomQuestionRule(format="header", column="1. " + WIDGET_Q, question_text="1. " + WIDGET_Q,
+                                 allowed_answers=["Blue widget", "Red widget"])
+
+
+def _custom(budget="$10,000 to $50,000", widget="Blue widget", consent="true", timeframe="Within 6 months"):
+    return (f"{WIDGET_Q}: {widget};Budget: {budget};{CONSENT_TEXT}: {consent};"
+            f"Timeframe: {timeframe};Favourite colour: Teal")
+
+
+def _cc_config(*rules, **overrides) -> CustomQuestionsConfig:
+    base = dict(enabled=True, rules=list(rules), combined_cell_column="Custom")
+    base.update(overrides)
+    return CustomQuestionsConfig(**base)
+
+
+def test_combined_cell_matching_separate_columns_passes_and_ignores_unmatched_pairs():
+    df = pd.DataFrame({
+        "Custom": [_custom()],
+        "1. " + WIDGET_Q: ["Blue widget"], "Budget": ["$10,000 to $50,000"], "timeframe": ["within 6 months"],
+    })
+    outcome = check_custom_questions(df, _cc_config(WIDGET_RULE))
+    assert outcome.fail == {} and outcome.review == {}
+
+
+def test_combined_cell_clear_mismatch_with_a_column_refunds_with_both_values():
+    df = pd.DataFrame({
+        "Custom": [_custom(budget="Above $50,000"), _custom(widget="Red widget")],
+        "1. " + WIDGET_Q: ["Blue widget", "Blue widget"], "Budget": ["$10,000 to $50,000"] * 2,
+    })
+    outcome = check_custom_questions(df, _cc_config(WIDGET_RULE))
+    assert outcome.fail == {
+        0: "Custom cell says 'Above $50,000' but 'Budget' column says '$10,000 to $50,000'",
+        1: f"Custom cell says 'Red widget' but '1. {WIDGET_Q}' column says 'Blue widget'",
+    }
+
+
+def test_combined_cell_near_miss_goes_to_review():
+    df = pd.DataFrame({"Custom": [_custom(timeframe="Within 6 month")], "Timeframe": ["Within 6 months"]})
+    outcome = check_custom_questions(df, _cc_config())
+    assert outcome.fail == {}
+    detail = outcome.review[0]
+    assert detail.check == "Custom Questions"
+    assert detail.message == "Custom cell says 'Within 6 month' but 'Timeframe' column says 'Within 6 months'"
+    assert (detail.lead_value, detail.candidate_value) == ("Within 6 month", "Within 6 months")
+
+
+def test_combined_cell_blank_column_value_is_a_mismatch():
+    df = pd.DataFrame({"Custom": [_custom()], "Budget": [""]})
+    outcome = check_custom_questions(df, _cc_config())
+    assert outcome.fail == {0: "Custom cell says '$10,000 to $50,000' but 'Budget' column is blank"}
+
+
+def test_combined_only_mode_validates_answers_against_the_rule_when_its_column_is_absent():
+    df = pd.DataFrame({"Custom": [
+        _custom(), _custom(widget="Green widget"), "Budget: Above $50,000", _custom(widget="Blue widgett"),
+    ]})
+    outcome = check_custom_questions(df, _cc_config(WIDGET_RULE))
+    assert outcome.fail == {1: "CQ1: 'Green widget' is not an allowed answer", 2: "CQ1 missing"}
+    assert list(outcome.review) == [3]
+    assert "close to allowed answer 'Blue widget'" in outcome.review[3].message
+
+
+def test_without_a_combined_column_an_absent_rule_column_is_still_missing():
+    df = pd.DataFrame({"Custom": [_custom()]})
+    outcome = check_custom_questions(df, _config(WIDGET_RULE))
+    assert outcome.fail == {0: "CQ1 missing"}
+
+
+def test_required_consent_pairs_must_be_present_and_true():
+    df = pd.DataFrame({"Custom": [_custom(), _custom(consent="false"), "Budget: Above $50,000"]})
+    outcome = check_custom_questions(df, _cc_config(
+        require_consent_true=True, consent_keys=["I agree to receive updates from Acme"]))
+    assert outcome.fail == {
+        1: "Custom cell: consent 'I agree to receive updates from Acme' is 'false', must be true",
+        2: "Custom cell: consent 'I agree to receive updates from Acme' missing",
+    }
+
+
+def test_consent_keys_are_ignored_while_the_toggle_is_off():
+    df = pd.DataFrame({"Custom": [_custom(consent="false")]})
+    outcome = check_custom_questions(df, _cc_config(
+        require_consent_true=False, consent_keys=["I agree to receive updates from Acme"]))
+    assert outcome.fail == {} and outcome.review == {}
+
+
+def test_configured_combined_column_missing_from_leadfile_refunds_every_lead():
+    df = pd.DataFrame({"Email": ["a@example.com", "b@example.com"]})
+    outcome = check_custom_questions(df, _cc_config())
+    assert outcome.fail == {0: "Custom cell column 'Custom' not found", 1: "Custom cell column 'Custom' not found"}

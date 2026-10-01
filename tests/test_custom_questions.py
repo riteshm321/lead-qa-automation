@@ -143,3 +143,78 @@ def test_detect_question_rules_finds_header_style_questions_and_answer_options()
     assert r2.separator == ";"
     assert r2.allowed_answers == ["Email", "Phone"]
     assert (r2.count_rule, r2.count) == ("at_most", 2)
+
+
+# --- combined "Question: answer;..." cell parsing ---------------------------
+
+from core.custom_questions import (  # noqa: E402
+    CombinedPair, parse_combined_pairs, strip_html, find_pair, answers_score, is_true_answer,
+)
+
+CONSENT = ('I agree to receive updates from Acme Widgets Ltd. (see <a href="https://acme.example/privacy" '
+           'target="_blank">Privacy Policy</a>), including: news, offers and events')
+
+
+def test_parse_combined_pairs_splits_on_semicolon_and_last_colon_space():
+    cell = f"Which widget do you use?: Blue widget;Budget: Above $50,000;{CONSENT}: true;Timeframe: Within 6 months"
+    assert parse_combined_pairs(cell) == [
+        CombinedPair("Which widget do you use?", "Blue widget"),
+        CombinedPair("Budget", "Above $50,000"),
+        CombinedPair("I agree to receive updates from Acme Widgets Ltd. (see Privacy Policy), including: news, "
+                     "offers and events", "true"),
+        CombinedPair("Timeframe", "Within 6 months"),
+    ]
+
+
+def test_parse_combined_pairs_handles_blank_trailing_separator_and_empty_answer():
+    assert parse_combined_pairs(None) == []
+    assert parse_combined_pairs("") == []
+    assert parse_combined_pairs("Budget: Under $10,000;Comments: ;") == [
+        CombinedPair("Budget", "Under $10,000"), CombinedPair("Comments", "")]
+    assert parse_combined_pairs("Comments:") == [CombinedPair("Comments", "")]
+
+
+def test_parse_combined_pairs_rejoins_a_semicolon_inside_consent_text():
+    # A piece with no ": " can't be a whole pair, so it belongs to the next one.
+    assert parse_combined_pairs("I agree to the terms; and to be contacted by Acme Corp: false;Seats: 10") == [
+        CombinedPair("I agree to the terms; and to be contacted by Acme Corp", "false"),
+        CombinedPair("Seats", "10"),
+    ]
+
+
+def test_parse_combined_pairs_html_entities_do_not_split_pairs():
+    assert parse_combined_pairs("R&amp;D budget: Yes;Region: EMEA") == [
+        CombinedPair("R&D budget", "Yes"), CombinedPair("Region", "EMEA")]
+
+
+def test_strip_html_keeps_angle_brackets_that_are_not_tags():
+    assert strip_html("Budget: <$10,000") == "Budget: <$10,000"
+    assert strip_html("Read <b>this</b> &amp; that<br/>") == "Read this & that"
+
+
+def test_find_pair_exact_then_fuzzy_then_none():
+    pairs = parse_combined_pairs("1. Which widget do you use?: Blue widget;Budget: Above $50,000")
+    pair, score = find_pair(pairs, "which widget do you use")
+    assert (pair.answer, score) == ("Blue widget", 100.0)
+    pair, score = find_pair(pairs, "Which widgit do you use?")
+    assert pair.answer == "Blue widget" and 85 <= score < 100
+    assert find_pair(pairs, "Number of employees") == (None, 0.0)
+
+
+def test_find_pair_prefix_mode_matches_a_loose_prefix_of_long_consent_text():
+    pairs = parse_combined_pairs(f"{CONSENT}: true")
+    pair, score = find_pair(pairs, "I agree to receive updates from Acme", prefix=True)
+    assert pair.answer == "true" and score == 100.0
+    pair, _ = find_pair(pairs, "I agre to receive updates from Acme", prefix=True)
+    assert pair is not None
+    assert find_pair(pairs, "I accept the privacy policy", prefix=True) == (None, 0.0)
+
+
+def test_answers_score_normalizes_and_treats_yes_true_alike():
+    assert answers_score("$10,000 to $50,000", " $10,000 TO $50,000 ") == 100.0
+    assert answers_score("Yes", "true") == 100.0
+    assert answers_score("No", "FALSE") == 100.0
+    assert answers_score("Red, Blue", "Blue, Red") == 100.0
+    assert 85 <= answers_score("Within 6 month", "Within 6 months") < 100
+    assert answers_score("Above $50,000", "$10,000 to $50,000") < 85
+    assert is_true_answer("TRUE") and is_true_answer("yes") and not is_true_answer("false")
