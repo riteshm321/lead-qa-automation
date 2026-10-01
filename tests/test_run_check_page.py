@@ -1427,6 +1427,32 @@ def test_enabled_checks_caption_includes_lead_template_mapping(tmp_path, monkeyp
     assert "Lead Template Mapping" in enabled_caption.value
 
 
+def test_enabled_checks_caption_includes_custom_questions(tmp_path, monkeypatch):
+    from core.models import CustomQuestionRule, CustomQuestionsConfig
+
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        custom_questions=CustomQuestionsConfig(enabled=True, rules=[
+            CustomQuestionRule(column="Q1 Budget approved?", question_text="Q1 Budget approved?",
+                               allowed_answers=["Yes", "No"]),
+        ]),
+    )
+    save_profile(profile, get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+
+    enabled_caption = next(c for c in at.caption if "Enabled checks" in c.value)
+    assert "Custom Questions" in enabled_caption.value
+
+
 def test_complex_account_flags_asset_url_mismatch_for_review_check_does_not_mutate(tmp_path, monkeypatch):
     # Regression test: at Run Check time, a mismatch against the
     # specifications file must only be flagged for review, never silently

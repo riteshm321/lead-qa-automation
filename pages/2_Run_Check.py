@@ -214,6 +214,7 @@ _enabled_checks = ", ".join(
         ("Duplicate", profile.duplicate.enabled), ("Leadcap", profile.leadcap.enabled),
         ("Exclusion", profile.exclusion.enabled), ("TAL", profile.tal.enabled),
         ("Suppression", profile.suppression.enabled), ("Dedupe list", profile.dedupe_list.enabled),
+        ("Custom Questions", profile.custom_questions.enabled),
         ("Lead Template Mapping", any(r.mandatory for r in profile.lead_template_mapping.rules)),
     ] if on
 ) or "None"
@@ -392,6 +393,7 @@ if st.button("Run Check", disabled=not new_leads_file,
                 ("Checking TAL", profile.tal.enabled),
                 ("Checking Suppression List", profile.suppression.enabled),
                 ("Checking Dedupe List", profile.dedupe_list.enabled),
+                ("Checking Custom Questions", profile.custom_questions.enabled),
                 ("Checking Lead Template Mandatory Columns",
                  any(r.mandatory for r in profile.lead_template_mapping.rules)),
                 ("Checking Google Sheets Mandatory Columns",
@@ -505,6 +507,7 @@ if "run_result" in st.session_state:
             ("Duplicate", profile.duplicate.enabled), ("Leadcap", profile.leadcap.enabled),
             ("Exclusion", profile.exclusion.enabled), ("TAL", profile.tal.enabled),
             ("Suppression", profile.suppression.enabled), ("Dedupe list", profile.dedupe_list.enabled),
+            ("Custom Questions", profile.custom_questions.enabled),
             ("Lead Template Mapping", any(r.mandatory for r in profile.lead_template_mapping.rules)),
             ("Google Sheets Mapping", any(r.mandatory for r in profile.google_sheets.mapping.rules)),
         ] if on

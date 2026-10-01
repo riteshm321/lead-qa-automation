@@ -263,3 +263,33 @@ def test_apply_refund_overrides_approving_all_empties_refund_bucket():
 
     assert sorted(final_valid) == [1, 2]
     assert final_refund_reasons == {}
+
+
+def test_custom_questions_check_runs_in_pipeline_with_refund_review_and_valid():
+    from core.models import CustomQuestionRule, CustomQuestionsConfig
+
+    question = "1. Which widget features matter most to you?"
+    allowed = ["a) Speed, reliability & uptime", "b) Security / compliance", "c) Price"]
+    profile = _profile(custom_questions=CustomQuestionsConfig(enabled=True, rules=[
+        CustomQuestionRule(format="header", column=question, question_text=question,
+                           allowed_answers=allowed, count_rule="at_most", count=2),
+    ]))
+    base = {"emailaddress": "a@x.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1"}
+    new_leads = pd.DataFrame([
+        {**base, question: "a) Speed, reliability & uptime, b) Security / compliance"},
+        {**base, question: "d) Free lunches"},
+        {**base, question: "b) Security / complaince"},
+        {**base, question: ""},
+    ])
+    accumulated = pd.DataFrame(columns=list(base))
+    seen_labels = []
+
+    result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[],
+                          on_progress=seen_labels.append)
+
+    assert seen_labels == ["Checking Custom Questions"]
+    assert result.valid_indices == [0]
+    assert result.refund_reasons == {1: "CQ1: 'd) Free lunches' is not an allowed answer",
+                                     3: "CQ1 not answered"}
+    assert list(result.review_reasons) == [2]
+    assert result.review_reasons[2][0].check == "Custom Questions"
