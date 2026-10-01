@@ -137,6 +137,45 @@ class CustomQuestionRule:
 class CustomQuestionsConfig:
     enabled: bool = False
     rules: list[CustomQuestionRule] = field(default_factory=list)
+    # Optional leadfile column whose cell holds "Question: answer;Question:
+    # answer;..." pairs (consent statements included, often with HTML).
+    # Blank = off. Each pair whose question matches a rule's question or a
+    # leadfile column header is cross-checked against that column's value;
+    # a "header" rule whose column is absent from the leadfile is answered
+    # from this cell instead. See core/custom_questions.parse_combined_pairs.
+    combined_cell_column: str = ""
+    # When on, every consent_keys entry (matched as a loose prefix of a
+    # pair's question) must be present in the combined cell and answered
+    # true. Unmatched pairs are otherwise ignored.
+    require_consent_true: bool = False
+    consent_keys: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LeadNotesField:
+    # "email" / "phone" / "first_name" / "last_name" / "company" /
+    # "job_title" / "value" (any other lead column whose value should
+    # appear in the notes, e.g. Budget or Timeframe).
+    kind: str = "email"
+    # The leadfile column holding the lead's own value for this field.
+    column: str = ""
+    # Display name used in reasons; only meaningful for "value" (defaults
+    # to `column` when blank).
+    label: str = ""
+    # Required: the notes must mention it. Optional: only a contradicting
+    # value (a different email/phone) is flagged.
+    required: bool = False
+    # "review" (Needs Review) or "refund", applied to a mismatch or a
+    # required field the notes don't mention.
+    action: str = "review"
+
+
+@dataclass
+class LeadNotesConfig:
+    enabled: bool = False
+    # Leadfile column holding the narrative notes paragraph.
+    notes_column: str = ""
+    fields: list[LeadNotesField] = field(default_factory=list)
 
 
 @dataclass
@@ -396,6 +435,7 @@ class ClientProfile:
     suppression: SuppressionConfig = field(default_factory=SuppressionConfig)
     dedupe_list: DedupeListConfig = field(default_factory=DedupeListConfig)
     custom_questions: CustomQuestionsConfig = field(default_factory=CustomQuestionsConfig)
+    lead_notes: LeadNotesConfig = field(default_factory=LeadNotesConfig)
     complex_account: ComplexAccountConfig = field(default_factory=ComplexAccountConfig)
     box_tracker: BoxTrackerConfig = field(default_factory=BoxTrackerConfig)
     convertr: ConvertrConfig = field(default_factory=ConvertrConfig)

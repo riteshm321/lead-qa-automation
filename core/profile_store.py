@@ -10,6 +10,7 @@ from core.models import (
     BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping, EnhancioConfig, EnhancioAllocationMapping,
     IntegrateConfig, LeadTemplateColumnRule, LeadTemplateMappingConfig,
     GoogleSheetTab, GoogleSheetsConfig, CustomQuestionRule, CustomQuestionsConfig,
+    LeadNotesConfig, LeadNotesField,
 )
 
 
@@ -56,6 +57,16 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
     custom_questions = CustomQuestionsConfig(
         enabled=_cq_data.get("enabled", False),
         rules=[CustomQuestionRule(**r) for r in _cq_data.get("rules", [])],
+        combined_cell_column=_cq_data.get("combined_cell_column", ""),
+        require_consent_true=_cq_data.get("require_consent_true", False),
+        consent_keys=list(_cq_data.get("consent_keys", [])),
+    )
+
+    _ln_data = data.get("lead_notes") or {}
+    lead_notes = LeadNotesConfig(
+        enabled=_ln_data.get("enabled", False),
+        notes_column=_ln_data.get("notes_column", ""),
+        fields=[LeadNotesField(**f) for f in _ln_data.get("fields", [])],
     )
 
     lead_template_tabs = [LeadTemplateTab(**t) for t in data.get("lead_template_tabs", [])]
@@ -123,6 +134,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         suppression=SuppressionConfig(**suppression),
         dedupe_list=DedupeListConfig(**dedupe_list),
         custom_questions=custom_questions,
+        lead_notes=lead_notes,
         complex_account=ComplexAccountConfig(**(data.get("complex_account") or {})),
         box_tracker=BoxTrackerConfig(**(data.get("box_tracker") or {})),
         convertr=ConvertrConfig(**convertr),

@@ -658,3 +658,54 @@ def test_load_profile_defaults_custom_questions_for_old_schema_json(tmp_path):
     loaded = load_profile("Old CQ", clients_dir)
     assert loaded.custom_questions.enabled is False
     assert loaded.custom_questions.rules == []
+
+
+def test_custom_questions_combined_cell_settings_round_trip_through_save_and_load(tmp_path):
+    from core.models import CustomQuestionsConfig
+
+    clients_dir = str(tmp_path / "clients")
+    profile = ClientProfile(
+        name="CQ Combined Client", accumulated_report_path="acc.xlsx",
+        custom_questions=CustomQuestionsConfig(
+            enabled=True, combined_cell_column="Custom", require_consent_true=True,
+            consent_keys=["I agree to receive widget updates", "I accept the privacy policy"]),
+    )
+    save_profile(profile, clients_dir=clients_dir)
+
+    loaded = load_profile("CQ Combined Client", clients_dir=clients_dir)
+    assert loaded.custom_questions == profile.custom_questions
+
+
+def test_lead_notes_config_round_trips_through_save_and_load(tmp_path):
+    from core.models import LeadNotesConfig, LeadNotesField
+
+    clients_dir = str(tmp_path / "clients")
+    profile = ClientProfile(
+        name="Notes Client", accumulated_report_path="acc.xlsx",
+        lead_notes=LeadNotesConfig(enabled=True, notes_column="Signal Notes", fields=[
+            LeadNotesField(kind="email", column="Email", required=True, action="refund"),
+            LeadNotesField(kind="phone", column="Phone"),
+            LeadNotesField(kind="value", column="Budget", label="Budget", required=True, action="review"),
+        ]),
+    )
+    save_profile(profile, clients_dir=clients_dir)
+
+    loaded = load_profile("Notes Client", clients_dir=clients_dir)
+    assert loaded.lead_notes == profile.lead_notes
+    assert isinstance(loaded.lead_notes.fields[0], LeadNotesField)
+
+
+def test_load_profile_defaults_lead_notes_and_combined_cell_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "Old Notes.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "Old Notes", "accumulated_report_path": "acc.xlsx",
+                   "custom_questions": {"enabled": True, "rules": []}}, f)
+
+    loaded = load_profile("Old Notes", clients_dir)
+    assert loaded.lead_notes.enabled is False
+    assert loaded.lead_notes.notes_column == ""
+    assert loaded.lead_notes.fields == []
+    assert loaded.custom_questions.combined_cell_column == ""
+    assert loaded.custom_questions.require_consent_true is False
+    assert loaded.custom_questions.consent_keys == []
