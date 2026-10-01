@@ -4,7 +4,7 @@ from typing import Callable
 import pandas as pd
 
 from core.check_result import CheckOutcome
-from core.checks import duplicate, leadcap, exclusion, tal, suppression, dedupe_list, lead_template_mapping, custom_questions
+from core.checks import duplicate, leadcap, exclusion, tal, suppression, dedupe_list, lead_template_mapping, custom_questions, lead_notes
 from core.models import ClientProfile
 
 
@@ -68,6 +68,10 @@ def run_pipeline(
     if profile.custom_questions.enabled:
         report("Checking Custom Questions")
         merge(custom_questions.check_custom_questions(new_leads, profile.custom_questions))
+
+    if profile.lead_notes.enabled:
+        report("Checking Lead Notes")
+        merge(lead_notes.check_lead_notes(new_leads, profile.lead_notes, alias_groups))
 
     if any(r.mandatory for r in profile.lead_template_mapping.rules):
         report("Checking Lead Template Mandatory Columns")

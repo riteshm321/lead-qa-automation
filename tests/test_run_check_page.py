@@ -2298,3 +2298,27 @@ def test_row_decisions_ignore_select_ticks_and_leave_undecided_rows_in_review(tm
     assert result.valid_indices == [1]
     assert list(result.review_reasons) == [0]  # ticked but undecided -> still needs review
     assert result.refund_reasons == {}
+
+
+def test_enabled_checks_caption_includes_lead_notes(tmp_path, monkeypatch):
+    from core.models import LeadNotesConfig, LeadNotesField
+
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    profile = ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        lead_notes=LeadNotesConfig(enabled=True, notes_column="Lead Notes", fields=[
+            LeadNotesField(kind="email", column="Email_Address", required=True)]),
+    )
+    save_profile(profile, get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+
+    enabled_caption = next(c for c in at.caption if "Enabled checks" in c.value)
+    assert "Lead Notes" in enabled_caption.value

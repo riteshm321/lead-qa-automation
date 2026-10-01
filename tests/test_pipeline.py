@@ -293,3 +293,48 @@ def test_custom_questions_check_runs_in_pipeline_with_refund_review_and_valid():
                                      3: "CQ1 not answered"}
     assert list(result.review_reasons) == [2]
     assert result.review_reasons[2][0].check == "Custom Questions"
+
+
+def test_lead_notes_check_runs_in_pipeline_with_refund_review_and_valid():
+    from core.models import LeadNotesConfig, LeadNotesField
+
+    profile = _profile(lead_notes=LeadNotesConfig(enabled=True, notes_column="Lead Notes", fields=[
+        LeadNotesField(kind="email", column="emailaddress", required=True, action="refund"),
+        LeadNotesField(kind="job_title", column="Title", required=True),
+    ]))
+    base = {"emailaddress": "jane@acme.example", "firstname": "Jane", "lastname": "Doe", "company": "Acme",
+            "CID": "1", "Title": "Director of Sales"}
+    new_leads = pd.DataFrame([
+        {**base, "Lead Notes": "Jane, Director of Sales, asked for a demo at jane@acme.example."},
+        {**base, "Lead Notes": "Jane, Director of Sales, asked for a demo at jd@globex.example."},
+        {**base, "Lead Notes": "Jane asked for a demo at jane@acme.example."},
+    ])
+    accumulated = pd.DataFrame(columns=list(base))
+    seen_labels = []
+
+    result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[],
+                          on_progress=seen_labels.append)
+
+    assert seen_labels == ["Checking Lead Notes"]
+    assert result.valid_indices == [0]
+    assert result.refund_reasons == {
+        1: "Notes: email jd@globex.example doesn't match lead email jane@acme.example"}
+    assert list(result.review_reasons) == [2]
+    assert result.review_reasons[2][0].check == "Lead Notes"
+
+
+def test_custom_questions_combined_cell_runs_in_pipeline_without_rules():
+    from core.models import CustomQuestionsConfig
+
+    profile = _profile(custom_questions=CustomQuestionsConfig(enabled=True, combined_cell_column="Custom"))
+    base = {"emailaddress": "a@x.example", "firstname": "A", "lastname": "B", "company": "X", "CID": "1",
+            "Budget": "$10,000 to $50,000"}
+    new_leads = pd.DataFrame([
+        {**base, "Custom": "Budget: $10,000 to $50,000;I agree: true"},
+        {**base, "Custom": "Budget: Above $50,000;I agree: true"},
+    ])
+    result = run_pipeline(new_leads, profile, pd.DataFrame(columns=list(base)), reference_data={},
+                          alias_groups=[])
+    assert result.valid_indices == [0]
+    assert result.refund_reasons == {
+        1: "Custom cell says 'Above $50,000' but 'Budget' column says '$10,000 to $50,000'"}
