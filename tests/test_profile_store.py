@@ -621,3 +621,40 @@ def test_list_profile_groups_ignores_non_utf8_json_in_same_folder(tmp_path, monk
         f.write(b"\xff\xfe\x00\x01not valid utf-8 \xbf")
 
     assert list_profile_groups(clients_dir) == {"Valid Client": "Group B"}
+
+
+def test_custom_questions_config_round_trips_through_save_and_load(tmp_path):
+    # Regression guard for the known bug class: a new config dataclass on
+    # ClientProfile that load_profile never deserializes silently loads back
+    # as plain dicts (or defaults), dropping the saved rules.
+    from core.models import CustomQuestionRule, CustomQuestionsConfig
+
+    clients_dir = str(tmp_path / "clients")
+    profile = ClientProfile(
+        name="CQ Client", accumulated_report_path="acc.xlsx",
+        custom_questions=CustomQuestionsConfig(enabled=True, rules=[
+            CustomQuestionRule(format="header", column="1. Which widget do you use?",
+                               question_text="1. Which widget do you use?", mode="full",
+                               allowed_answers=["a) Red widget, large", "b) Blue widget"],
+                               count_rule="at_most", count=2, separator=";"),
+            CustomQuestionRule(format="columns", column="Answer 2", question_column="Question 2",
+                               question_text="Budget approved?", mode="exists",
+                               count_rule="exactly", count=3, separator="|"),
+        ]),
+    )
+    save_profile(profile, clients_dir=clients_dir)
+
+    loaded = load_profile("CQ Client", clients_dir=clients_dir)
+    assert loaded.custom_questions == profile.custom_questions
+    assert isinstance(loaded.custom_questions.rules[0], CustomQuestionRule)
+
+
+def test_load_profile_defaults_custom_questions_for_old_schema_json(tmp_path):
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    with open(os.path.join(clients_dir, "Old CQ.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "Old CQ", "accumulated_report_path": "acc.xlsx"}, f)
+
+    loaded = load_profile("Old CQ", clients_dir)
+    assert loaded.custom_questions.enabled is False
+    assert loaded.custom_questions.rules == []

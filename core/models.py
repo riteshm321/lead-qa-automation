@@ -100,6 +100,46 @@ class DedupeListConfig:
 
 
 @dataclass
+class CustomQuestionRule:
+    # How the question/answers are laid out in the leadfile:
+    #   "header"   -- `column` is the leadfile column whose HEADER is the
+    #                 question; each cell holds that lead's answer(s).
+    #   "combined" -- `column` is one leadfile column whose cell holds
+    #                 several questions with their answers; each question's
+    #                 `question_text` is located inside the cell and the text
+    #                 up to the next configured question is its answer.
+    #   "columns"  -- `question_column` holds the question text per lead and
+    #                 `column` holds the answer(s).
+    # Column names and question text are matched loosely (case, whitespace,
+    # punctuation, smart quotes, leading "1."/"Q1:" numbering ignored) -- see
+    # core/custom_questions.py.
+    format: str = "header"
+    column: str = ""
+    question_column: str = ""
+    # For "header" this mirrors `column` (the header IS the question).
+    question_text: str = ""
+    # "exists": only the question's presence and a non-blank answer are
+    # checked. "full": every answer must be one of allowed_answers (when
+    # the list is non-empty) and the count rule must hold.
+    mode: str = "full"
+    allowed_answers: list[str] = field(default_factory=list)
+    # "any" / "exactly" / "at_least" / "at_most", applied to `count`.
+    count_rule: str = "any"
+    count: int = 1
+    # Only used to split answers for counting when there is no allowed list
+    # to match against (and for reporting unrecognized leftovers) -- answers
+    # are otherwise found by matching, since real answer text often
+    # contains the separator itself.
+    separator: str = ","
+
+
+@dataclass
+class CustomQuestionsConfig:
+    enabled: bool = False
+    rules: list[CustomQuestionRule] = field(default_factory=list)
+
+
+@dataclass
 class LeadTemplateTab:
     sheet_name: str
     cids: list[str] = field(default_factory=list)
@@ -355,6 +395,7 @@ class ClientProfile:
     tal: TalConfig = field(default_factory=TalConfig)
     suppression: SuppressionConfig = field(default_factory=SuppressionConfig)
     dedupe_list: DedupeListConfig = field(default_factory=DedupeListConfig)
+    custom_questions: CustomQuestionsConfig = field(default_factory=CustomQuestionsConfig)
     complex_account: ComplexAccountConfig = field(default_factory=ComplexAccountConfig)
     box_tracker: BoxTrackerConfig = field(default_factory=BoxTrackerConfig)
     convertr: ConvertrConfig = field(default_factory=ConvertrConfig)

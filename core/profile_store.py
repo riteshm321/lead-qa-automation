@@ -9,7 +9,7 @@ from core.models import (
     DuplicateConfig, DedupeListConfig, ReferenceSource, LeadTemplateTab, ComplexAccountConfig,
     BoxTrackerConfig, ConvertrConfig, ConvertrCampaignMapping, EnhancioConfig, EnhancioAllocationMapping,
     IntegrateConfig, LeadTemplateColumnRule, LeadTemplateMappingConfig,
-    GoogleSheetTab, GoogleSheetsConfig,
+    GoogleSheetTab, GoogleSheetsConfig, CustomQuestionRule, CustomQuestionsConfig,
 )
 
 
@@ -51,6 +51,12 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
 
     dedupe_list = data.get("dedupe_list") or {}
     dedupe_list["sources"] = [ReferenceSource(**s) for s in dedupe_list.get("sources", [])]
+
+    _cq_data = data.get("custom_questions") or {}
+    custom_questions = CustomQuestionsConfig(
+        enabled=_cq_data.get("enabled", False),
+        rules=[CustomQuestionRule(**r) for r in _cq_data.get("rules", [])],
+    )
 
     lead_template_tabs = [LeadTemplateTab(**t) for t in data.get("lead_template_tabs", [])]
 
@@ -116,6 +122,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         tal=TalConfig(**tal),
         suppression=SuppressionConfig(**suppression),
         dedupe_list=DedupeListConfig(**dedupe_list),
+        custom_questions=custom_questions,
         complex_account=ComplexAccountConfig(**(data.get("complex_account") or {})),
         box_tracker=BoxTrackerConfig(**(data.get("box_tracker") or {})),
         convertr=ConvertrConfig(**convertr),
