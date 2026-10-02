@@ -30,6 +30,7 @@ from core.complex_account import (
 from core import google_sheets_client, jira_client
 from core.google_sheets_client import GoogleSheetsError
 from core.jira_client import JiraError
+from core.jira_summary import jira_greeting, jira_reporter_name
 from core.matching import load_alias_groups, add_alias_pair
 from core.models import FieldMapping
 from core.pipeline import run_pipeline, apply_refund_overrides
@@ -933,7 +934,7 @@ if "run_result" in st.session_state:
         st.session_state["last_finalized_summary"] = {
             "client_name": client_name,
             "ticket_key": jira_client.extract_ticket_key(profile.jira_ticket_key),
-            "reporter_name": profile.jira_reporter_name,
+            "reporter_name": jira_reporter_name(profile),
             "run_date_display": datetime.date.today().strftime("%d-%m-%y"),
             "leads_in": total_leads_in,
             "valid": valid_count,
@@ -1109,7 +1110,7 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
     st.subheader("Post to Jira")
     st.caption("Nothing is sent until you click Post below — review (and edit) everything first.")
 
-    _greeting = f"Hi {_pending_summary['reporter_name']}," if _pending_summary["reporter_name"] else "Hi,"
+    _greeting = jira_greeting(_pending_summary["reporter_name"])
     _default_opening = (
         f"{_greeting}\n"
         f"PFB summary for the Lead QA dated {_pending_summary['run_date_display']}. "

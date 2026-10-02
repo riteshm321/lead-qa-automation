@@ -31,6 +31,7 @@ from core.excel_io import (
 )
 from core import jira_client
 from core.jira_client import JiraError
+from core.jira_summary import jira_greeting, jira_reporter_name, seed_message_default
 from core.models import resolve_field_mapping
 from core.profile_store import list_profile_names, load_profile
 from core.toast import queue_toast_before_rerun, show_pending_toast
@@ -746,9 +747,10 @@ with st.container(border=True):
                 f"Reconciled Enhancio decisions: {_reconcile_summary['accepted']} accepted, "
                 f"{_reconcile_summary['rejected']} rejected (moved to Refund)."
             )
-        _greeting = f"Hi {profile.jira_reporter_name}," if profile.jira_reporter_name else "Hi,"
+        _greeting = jira_greeting(jira_reporter_name(profile))
         _default_opening = _greeting + "\n" + ("\n".join(_summary_lines) if _summary_lines else "")
-        st.text_area("Message", _default_opening, key="enhancio_jira_message", height=120)
+        seed_message_default("enhancio_jira_message", _default_opening)
+        st.text_area("Message", key="enhancio_jira_message", height=120)
 
         st.caption("Optional attachment (uploaded after the comment posts):")
         _attachment_file = st.file_uploader("Attach a file", key="enhancio_jira_attachment")
