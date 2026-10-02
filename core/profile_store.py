@@ -115,7 +115,6 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
         client_group=data.get("client_group", ""),
         accumulated_report_link=data.get("accumulated_report_link", ""),
         lead_template_link=data.get("lead_template_link", ""),
-        client_mode=data.get("client_mode", "Lead QA"),
         collation_enabled=data.get("collation_enabled", False),
         lead_template_path=data.get("lead_template_path", ""),
         lead_template_sheet_name=data.get("lead_template_sheet_name", ""),

@@ -85,10 +85,9 @@ def test_list_profile_names_ignores_non_utf8_json_in_same_folder(tmp_path):
     assert list_profile_names(clients_dir=clients_dir) == ["Basware"]
 
 
-def test_client_mode_and_lead_template_round_trip(tmp_path):
+def test_lead_template_round_trip(tmp_path):
     clients_dir = str(tmp_path / "clients")
     profile = _sample_profile()
-    profile.client_mode = "Lead QA"
     profile.lead_template_path = "sample_data/template.xlsx"
     profile.lead_template_sheet_name = "Sheet1"
 
@@ -234,7 +233,31 @@ def test_load_profile_defaults_collation_enabled_false_for_old_schema_json(tmp_p
     assert loaded.collation_enabled is False
 
 
-def test_load_profile_defaults_client_mode_for_old_schema_json(tmp_path):
+def test_load_profile_tolerates_retired_client_mode_key_and_resave_drops_it(tmp_path):
+    # Client Mode was removed; old profile JSON still carries it and must
+    # load unchanged, and saving it again no longer writes the key.
+    clients_dir = str(tmp_path / "clients")
+    os.makedirs(clients_dir, exist_ok=True)
+    path = os.path.join(clients_dir, "OldUploadClient.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({
+            "name": "OldUploadClient",
+            "accumulated_report_path": "sample_data/x.xlsx",
+            "client_mode": "Lead QA & Upload",
+            "lead_template_path": "",
+        }, f)
+
+    loaded = load_profile("OldUploadClient", clients_dir=clients_dir)
+    assert loaded.name == "OldUploadClient"
+    assert loaded.lead_template_path == ""
+    assert not hasattr(loaded, "client_mode")
+
+    save_profile(loaded, clients_dir=clients_dir)
+    with open(path, encoding="utf-8") as f:
+        assert "client_mode" not in json.load(f)
+
+
+def test_load_profile_defaults_lead_template_for_old_schema_json(tmp_path):
     clients_dir = str(tmp_path / "clients")
     os.makedirs(clients_dir, exist_ok=True)
     with open(os.path.join(clients_dir, "OldClient.json"), "w", encoding="utf-8") as f:
@@ -244,7 +267,6 @@ def test_load_profile_defaults_client_mode_for_old_schema_json(tmp_path):
         }, f)
 
     loaded = load_profile("OldClient", clients_dir=clients_dir)
-    assert loaded.client_mode == "Lead QA"
     assert loaded.lead_template_path == ""
     assert loaded.lead_template_sheet_name == ""
     assert loaded.accumulated_field_mapping is None

@@ -412,7 +412,9 @@ class ClientProfile:
     # that only opens on the machine it was posted from.
     accumulated_report_link: str = ""
     lead_template_link: str = ""
-    client_mode: str = "Lead QA"
+    # (A retired "client_mode" key -- "Lead QA" / "Lead QA & Upload" -- may
+    # still be in old profile JSON; core/profile_store.py ignores it. Lead
+    # Template delivery is decided by lead_template_path/_tabs alone.)
     # Offers the "collate multiple files into one New Leads file" option on
     # Run Check for this client -- NOT forced on, since the same client can
     # arrive with an already-collated file on any given run (see

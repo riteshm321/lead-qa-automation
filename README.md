@@ -66,16 +66,13 @@ Each client is configured **once**, then reused every time you run a check for t
   link is automatically reduced to just the key. Set this to enable a "Post
   summary to Jira" button after Finalize - see [Section 13](#13-posting-a-run-summary-to-jira-optional).
 
-### 3.2 Client Mode
+### 3.2 Lead Template (optional)
 
-- **Lead QA** - leads also get appended to a separate **Lead Template** file (e.g.
-  for uploading to a client's own portal), configured as below. Despite the name,
-  this is the mode *with* Lead Template support.
-- **Lead QA & Upload** - leads only go into the Accumulated Report; no Lead
-  Template section is shown at all (reserved for a future direct-upload
-  mechanism that isn't file-based).
-
-When mode is **Lead QA**, configure:
+There's no per-client mode any more: each delivery destination (Lead Template,
+Google Sheets, Convertr/Enhancio/Integrate, Box Tracker) has its own setting.
+Valid leads also get appended to a separate **Lead Template** file (e.g. for
+uploading to a client's own portal) whenever one is configured here; leave it
+blank and leads only go into the Accumulated Report. To use it, configure:
   - **Lead Template path** and its **sheet name** (single-tab). This can be left
     blank if every CID group has its own separate file (see below) - a shared
     default isn't required.
