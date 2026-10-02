@@ -219,7 +219,7 @@ _enabled_checks = ", ".join(
         ("Lead Template Mapping", any(r.mandatory for r in profile.lead_template_mapping.rules)),
     ] if on
 ) or "None"
-st.caption(f"Mode: **{profile.client_mode}** · Enabled checks: {_enabled_checks}")
+st.caption(f"Enabled checks: {_enabled_checks}")
 st.divider()
 
 _collated_key = f"collated_new_leads_{client_name}"
@@ -690,7 +690,10 @@ if "run_result" in st.session_state:
     # routes to its own separate file — gating on lead_template_path alone
     # would wrongly skip the whole Lead Template step (and its Jira link)
     # for a client whose CID groups each go to a completely different file.
-    lead_template_configured = profile.client_mode == "Lead QA" and (
+    # Decided purely by the template's own config -- there's no per-client
+    # mode any more (a retired "Lead QA & Upload" profile never had any
+    # template config saved, so it still comes out False here).
+    lead_template_configured = bool(
         (profile.lead_template_multi_tab and profile.lead_template_tabs)
         or (not profile.lead_template_multi_tab and profile.lead_template_path)
     )
@@ -798,11 +801,9 @@ if "run_result" in st.session_state:
             _tmpl_expected = [v for v in [
                 _tmpl_fm.email, _tmpl_fm.first_name, _tmpl_fm.last_name, _tmpl_fm.company, _tmpl_fm.cid,
             ] if v] if _tmpl_fm else None
-            # Highlight this run's newly added rows in the Lead Report — only
-            # for plain Lead QA clients, never Complex Account, per design.
-            _tmpl_highlight = (
-                "C6E0B4" if profile.client_mode == "Lead QA" and not profile.complex_account.enabled else None
-            )
+            # Highlight this run's newly added rows in the Lead Report — never
+            # for Complex Account, per design.
+            _tmpl_highlight = "C6E0B4" if not profile.complex_account.enabled else None
 
             if profile.lead_template_multi_tab:
                 groups, unmatched = route_leads_by_cid(

@@ -907,11 +907,10 @@ def test_post_summary_to_jira_includes_pacing_overview_as_native_table(tmp_path,
     assert data_row_1["content"][1]["content"][0]["content"][0]["text"] == "118118"
 
 
-def test_jira_summary_includes_lead_report_link_for_lead_qa_mode_with_template(tmp_path, monkeypatch):
-    # Regression test: the "Lead Report" file link must key off client_mode
-    # == "Lead QA" (the mode that actually has lead_template_path set —
-    # counterintuitively, "Lead QA & Upload" mode has no Lead Template at
-    # all), not "Lead QA & Upload".
+def test_jira_summary_includes_lead_report_link_when_a_lead_template_is_configured(tmp_path, monkeypatch):
+    # Regression test: the "Lead Report" file link is included whenever this
+    # client has a Lead Template configured (there's no per-client mode any
+    # more -- the template's own config decides it).
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
     _make_accumulated_report(acc_path)
@@ -929,7 +928,6 @@ def test_jira_summary_includes_lead_report_link_for_lead_qa_mode_with_template(t
         field_mapping=fm,
         duplicate=DuplicateConfig(enabled=True),
         jira_ticket_key="PROJ-1234",
-        client_mode="Lead QA",
         lead_template_path=template_path,
         lead_template_sheet_name="Sheet",
     )
@@ -972,7 +970,6 @@ def test_finalize_writes_to_a_csv_lead_template(tmp_path, monkeypatch):
         name="Test Client",
         accumulated_report_path=acc_path,
         field_mapping=fm,
-        client_mode="Lead QA",
         lead_template_path=template_path,
         lead_template_sheet_name="(CSV file)",
     )
@@ -997,7 +994,7 @@ def test_finalize_writes_to_a_csv_lead_template(tmp_path, monkeypatch):
     assert "bob@new.com" in result_df["Email_Address"].values
 
 
-def test_jira_summary_omits_lead_report_link_for_lead_qa_and_upload_mode(tmp_path, monkeypatch):
+def test_jira_summary_omits_lead_report_link_when_no_lead_template_is_configured(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
     _make_accumulated_report(acc_path)
@@ -1011,7 +1008,6 @@ def test_jira_summary_omits_lead_report_link_for_lead_qa_and_upload_mode(tmp_pat
         field_mapping=fm,
         duplicate=DuplicateConfig(enabled=True),
         jira_ticket_key="PROJ-1234",
-        client_mode="Lead QA & Upload",
     )
     save_profile(profile, get_clients_dir())
 
@@ -1032,6 +1028,110 @@ def test_jira_summary_omits_lead_report_link_for_lead_qa_and_upload_mode(tmp_pat
 
     assert not any(c.key == "jira_link_Lead Report" for c in at.checkbox)
     assert any(c.key == "jira_link_Accumulated File" for c in at.checkbox)
+
+
+def _save_profile_with_legacy_client_mode(profile, legacy_mode: str) -> None:
+    """Saves profile, then injects the retired "client_mode" key into its
+    JSON exactly as an old profile file (saved before Client Mode was
+    removed) still carries it."""
+    import json
+    path = save_profile(profile, get_clients_dir())
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    data["client_mode"] = legacy_mode
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
+def _finalize_one_lead(client_name: str = "Test Client"):
+    new_leads = pd.DataFrame([
+        {"Email_Address": "bob@new.com", "First_Name": "Bob", "Last_Name": "Lee", "Company_Name": "Beta", "CID": "1"},
+    ])
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.session_state["run_new_leads"] = new_leads
+    at.session_state["run_result"] = PipelineResult(valid_indices=[0], refund_reasons={})
+    at.session_state["run_result_for"] = client_name
+    at.run()
+    assert not at.exception
+    pre_finalize_captions = [c.value for c in at.caption]
+    next(b for b in at.button if b.label == "Finalize").click().run()
+    assert not at.exception
+    return at, pre_finalize_captions
+
+
+def test_legacy_lead_qa_and_upload_profile_with_template_configured_writes_lead_template(tmp_path, monkeypatch):
+    # Client Mode was removed: whether Finalize writes the Lead Template now
+    # depends only on the template's own config. An old profile still saved
+    # with client_mode="Lead QA & Upload" but with a template configured must
+    # load fine and get its Lead Template written.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    template_path = str(tmp_path / "lead_report.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Sheet"
+    wb.active.append(["Email_Address", "First_Name", "Last_Name", "Company_Name", "CID"])
+    wb.save(template_path)
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    _save_profile_with_legacy_client_mode(ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        lead_template_path=template_path, lead_template_sheet_name="Sheet",
+    ), "Lead QA & Upload")
+
+    at, captions = _finalize_one_lead()
+
+    assert any("+ Lead Template" in c for c in captions)
+    wb = openpyxl.load_workbook(template_path)
+    emails = [row[0] for row in wb["Sheet"].iter_rows(min_row=2, values_only=True)]
+    wb.close()
+    assert emails == ["bob@new.com"]
+
+
+def test_legacy_lead_qa_profile_without_template_writes_no_lead_template(tmp_path, monkeypatch):
+    # The other half: an old plain "Lead QA" profile with no Lead Template
+    # configured still only writes the Accumulated Report -- no Lead Template
+    # step, and no "Lead Report" Jira link.
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    save_jira_settings("https://example.atlassian.net", "me@example.com", "token123")
+
+    fm = FieldMapping(email="Email_Address", first_name="First_Name", last_name="Last_Name",
+                       company="Company_Name", cid="CID")
+    _save_profile_with_legacy_client_mode(ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
+        jira_ticket_key="PROJ-1234",
+    ), "Lead QA")
+
+    at, captions = _finalize_one_lead()
+
+    assert any("lead(s) → Accumulated Report" in c for c in captions)
+    assert not any("+ Lead Template" in c for c in captions)
+    assert not any(c.key == "jira_link_Lead Report" for c in at.checkbox)
+    assert any(c.key == "jira_link_Accumulated File" for c in at.checkbox)
+    wb = openpyxl.load_workbook(acc_path)
+    assert any(r and "bob@new.com" in r for r in wb.active.iter_rows(min_row=2, values_only=True))
+    wb.close()
+
+
+def test_run_check_caption_no_longer_shows_a_client_mode(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    _make_accumulated_report(acc_path)
+    _save_profile_with_legacy_client_mode(ClientProfile(
+        name="Test Client", accumulated_report_path=acc_path,
+        duplicate=DuplicateConfig(enabled=True),
+    ), "Lead QA & Upload")
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    enabled_caption = next(c for c in at.caption if "Enabled checks" in c.value)
+    assert "Mode:" not in enabled_caption.value
+    assert "Lead QA" not in enabled_caption.value
+    assert "Duplicate" in enabled_caption.value
 
 
 def test_multi_tab_routes_different_cids_to_completely_different_files(tmp_path, monkeypatch):
@@ -1062,7 +1162,6 @@ def test_multi_tab_routes_different_cids_to_completely_different_files(tmp_path,
         name="Test Client",
         accumulated_report_path=acc_path,
         field_mapping=fm,
-        client_mode="Lead QA",
         lead_template_path=shared_path,
         lead_template_multi_tab=True,
         lead_template_tabs=[
@@ -1132,7 +1231,6 @@ def test_jira_summary_uses_per_tab_sharepoint_links_for_multiple_lead_template_f
         accumulated_report_link="https://madlog.sharepoint.com/:x:/s/Team/AccLink",
         field_mapping=fm,
         jira_ticket_key="PROJ-1234",
-        client_mode="Lead QA",
         lead_template_path=shared_path,
         lead_template_link="https://madlog.sharepoint.com/:x:/s/Team/SharedLink",
         lead_template_multi_tab=True,
@@ -1716,7 +1814,7 @@ def test_finalize_applies_lead_template_mapping_date_format_to_written_column(tm
                        company="Company_Name", cid="CID")
     profile = ClientProfile(
         name="Test Client", accumulated_report_path=acc_path, field_mapping=fm,
-        client_mode="Lead QA", lead_template_path=template_path, lead_template_sheet_name="Sheet",
+        lead_template_path=template_path, lead_template_sheet_name="Sheet",
         lead_template_mapping=LeadTemplateMappingConfig(rules=[
             LeadTemplateColumnRule(template_column="Opt-In Date", date_format="MM/DD/YYYY"),
         ]),
