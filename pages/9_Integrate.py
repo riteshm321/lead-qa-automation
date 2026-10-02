@@ -7,6 +7,10 @@ from core.app_settings import get_clients_dir, get_integrate_credentials
 from core.branding import configure_page
 from core.errors import render_error, render_problem
 from core.excel_io import read_leadfile
+from core.failed_leads import (
+    failed_leads_memory, failed_leads_source_df, load_failed_leads, make_failed_entry, pop_retry_request,
+    render_failed_leads_section, update_failed_leads,
+)
 from core import integrate_client
 from core.integrate_client import IntegrateError
 from core.integrate_sync import filter_already_uploaded, load_uploaded_emails, save_uploaded_emails
@@ -92,6 +96,77 @@ if not _integrate.sid:
                    "It's under **Client Setup → Delivery → Integrate Upload**.")
     st.stop()
 
+def _upload_leads(send_df: pd.DataFrame, dup_df: pd.DataFrame) -> None:
+    """Sends send_df to Integrate one lead at a time and records every
+    outcome: an accepted lead's email goes to the already-uploaded store
+    (only then -- a failed lead must stay re-sendable), a failed lead goes
+    to the persistent failed-leads list with its full original row, and the
+    per-lead results table goes to session_state. Shared by "Upload to
+    Integrate" and "Retry failed leads" so both take the exact same path.
+    """
+    email_column = _leadfile_mapping.email
+    results = []
+    succeeded_emails: set[str] = set()
+    failed_entries: list = []
+    for _, lead in dup_df.iterrows():
+        results.append({"Email": lead.get(email_column, ""), "Result": "Skipped (already uploaded previously)"})
+        # Already at Integrate per this tool's own record -- nothing left
+        # to retry for it.
+        succeeded_emails.add(_nan_safe_cell(lead.get(email_column, "")))
+
+    total_to_send = len(send_df)
+    send_progress = st.progress(0.0, text=f"Uploading 0 / {total_to_send} lead(s) to Integrate...") \
+        if total_to_send else None
+    sent_so_far = 0
+
+    for _, lead in send_df.iterrows():
+        attributes = {
+            integrate_attr: _nan_safe_cell(lead.get(leadfile_col, ""))
+            for leadfile_col, integrate_attr in _integrate.field_mapping.items()
+        }
+        attributes.update(_integrate.fixed_field_values)
+        email = _nan_safe_cell(lead.get(email_column, ""))
+        if not email:
+            # Skip BEFORE submit_lead/save_uploaded_emails -- a blank
+            # email that reached save_uploaded_emails used to
+            # normalize to the literal string "nan" and get saved to
+            # the dedup store, which then made every SUBSEQUENT
+            # blank-email row for this client match that same "nan"
+            # entry in filter_already_uploaded and get silently
+            # skipped as "already uploaded" forever. Surfacing it here
+            # instead keeps it visible in the results table.
+            results.append({"Email": email, "Result": "Failed — No email value for this row"})
+            failed_entries.append(make_failed_entry(lead.to_dict(), email, "No email value for this row"))
+        else:
+            try:
+                response = integrate_client.submit_lead(
+                    _integrate.sid, _api_key, _api_secret, attributes, callback_url=_integrate.callback_url,
+                )
+                lead_id = str(response.get("id", ""))
+                results.append({"Email": email, "Result": f"Uploaded — Lead ID {lead_id}"})
+                # Saved per-lead, not batched to the end of the whole loop
+                # -- same reasoning as pages/7_Convertr.py's per-CID
+                # incremental save: an exception on a LATER lead must
+                # never discard an earlier, already-succeeded lead's
+                # dedup record.
+                save_uploaded_emails(client_name, {str(email)})
+                succeeded_emails.add(email)
+            except IntegrateError as exc:
+                results.append({"Email": email, "Result": f"Failed — {exc}"})
+                failed_entries.append(make_failed_entry(lead.to_dict(), email, str(exc)))
+        sent_so_far += 1
+        if send_progress is not None:
+            send_progress.progress(
+                sent_so_far / total_to_send,
+                text=f"Uploading {sent_so_far} / {total_to_send} lead(s) to Integrate...")
+    if send_progress is not None:
+        send_progress.empty()
+
+    update_failed_leads("integrate", client_name, failed_entries, succeeded_emails,
+                        memory=failed_leads_memory("integrate"))
+    st.session_state["integrate_upload_results"] = pd.DataFrame(results)
+
+
 with st.container(border=True):
     st.subheader(":material/upload: Upload leads to Integrate")
     st.caption(
@@ -172,57 +247,24 @@ with st.container(border=True):
             st.stop()
 
         if st.button("Upload to Integrate", type="primary"):
-            results = []
-            for _, lead in _dup_df.iterrows():
-                results.append({"Email": lead.get(email_column, ""), "Result": "Skipped (already uploaded previously)"})
+            _upload_leads(_send_df, _dup_df)
 
-            _total_to_send = len(_send_df)
-            _send_progress = st.progress(0.0, text=f"Uploading 0 / {_total_to_send} lead(s) to Integrate...") \
-                if _total_to_send else None
-            _sent_so_far = 0
-            _newly_uploaded_emails: set[str] = set()
-
-            for _, lead in _send_df.iterrows():
-                attributes = {
-                    integrate_attr: _nan_safe_cell(lead.get(leadfile_col, ""))
-                    for leadfile_col, integrate_attr in _integrate.field_mapping.items()
-                }
-                attributes.update(_integrate.fixed_field_values)
-                email = _nan_safe_cell(lead.get(email_column, ""))
-                if not email:
-                    # Skip BEFORE submit_lead/save_uploaded_emails -- a blank
-                    # email that reached save_uploaded_emails used to
-                    # normalize to the literal string "nan" and get saved to
-                    # the dedup store, which then made every SUBSEQUENT
-                    # blank-email row for this client match that same "nan"
-                    # entry in filter_already_uploaded and get silently
-                    # skipped as "already uploaded" forever. Surfacing it here
-                    # instead keeps it visible in the results table.
-                    results.append({"Email": email, "Result": "Failed — No email value for this row"})
-                else:
-                    try:
-                        response = integrate_client.submit_lead(
-                            _integrate.sid, _api_key, _api_secret, attributes, callback_url=_integrate.callback_url,
-                        )
-                        lead_id = str(response.get("id", ""))
-                        results.append({"Email": email, "Result": f"Uploaded — Lead ID {lead_id}"})
-                        # Saved per-lead, not batched to the end of the whole loop
-                        # -- same reasoning as pages/7_Convertr.py's per-CID
-                        # incremental save: an exception on a LATER lead must
-                        # never discard an earlier, already-succeeded lead's
-                        # dedup record.
-                        save_uploaded_emails(client_name, {str(email)})
-                    except IntegrateError as exc:
-                        results.append({"Email": email, "Result": f"Failed — {exc}"})
-                _sent_so_far += 1
-                if _send_progress is not None:
-                    _send_progress.progress(
-                        _sent_so_far / _total_to_send,
-                        text=f"Uploading {_sent_so_far} / {_total_to_send} lead(s) to Integrate...")
-            if _send_progress is not None:
-                _send_progress.empty()
-
-            st.session_state["integrate_upload_results"] = pd.DataFrame(results)
+    if pop_retry_request("integrate"):
+        # Test mode is deliberately not applied -- a retry sends every
+        # stored failed lead. Dedup still is, so a lead accepted since (e.g.
+        # by a teammate) is skipped rather than resent.
+        _retry_df = failed_leads_source_df(
+            load_failed_leads("integrate", client_name, failed_leads_memory("integrate")))
+        if not _retry_df.empty:
+            if not _leadfile_mapping or not _leadfile_mapping.email or not _integrate.field_mapping:
+                render_problem("This client's Integrate mapping isn't set up, so the failed leads can't be retried.",
+                               "Fix it under Client Setup → Delivery → Integrate Upload.")
+            elif _leadfile_mapping.email not in _retry_df.columns:
+                render_problem(f"The stored failed leads have no \"{_leadfile_mapping.email}\" column to retry by.",
+                               "Download them, fix the file, and upload it instead.")
+            else:
+                _upload_leads(*filter_already_uploaded(
+                    _retry_df, _leadfile_mapping.email, load_uploaded_emails(client_name)))
 
     if st.session_state.get("integrate_upload_results") is not None:
         _results_df = st.session_state["integrate_upload_results"]
@@ -235,3 +277,9 @@ with st.container(border=True):
             ("Skipped", _skipped, "skip_next"),
         ])
         st.dataframe(_results_df, hide_index=True)
+        # Clears only this summary -- the failed-leads list below has its
+        # own Clear button.
+        st.button("Clear upload summary", key="integrate_clear_summary", icon=":material/clear_all:",
+                  on_click=lambda: st.session_state.pop("integrate_upload_results", None))
+
+    render_failed_leads_section("integrate", "Integrate", client_name)

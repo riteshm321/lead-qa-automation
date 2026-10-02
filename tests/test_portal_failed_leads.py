@@ -9,6 +9,7 @@ import os
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import (
@@ -242,3 +243,161 @@ def test_is_accepted_submission_requires_a_lead_id_and_a_non_failure_status():
     assert not is_accepted_submission({"leadId": "1", "status": "Rejected"})
     assert not is_accepted_submission({"leadId": "1", "status": " duplicate "})
     assert not is_accepted_submission("not a dict")
+
+
+# ------------------------------------------- persistent failed-leads list
+#
+# Each portal is driven through the same scenario: upload two leads, one
+# fails; a FRESH AppTest (simulating navigating away and back, or a
+# restart) with no file uploaded still shows the failed lead, offers it as
+# a download with every original column plus "Failure reason", and
+# "Retry failed leads" resends only that lead -- dropping it from the list
+# once it succeeds.
+
+_PORTALS = {
+    "convertr": (_CONVERTR_PAGE, "Upload to Convertr"),
+    "enhancio": (_ENHANCIO_PAGE, "Upload to Enhancio"),
+    "integrate": (_INTEGRATE_PAGE, "Upload to Integrate"),
+}
+
+
+class _Portal:
+    """Sets up one portal for the synthetic client and patches its API
+    client; `reject` toggles whether a Company of "REJECT" fails."""
+
+    def __init__(self, name, tmp_path, monkeypatch):
+        self.name = name
+        self.page, self.upload_label = _PORTALS[name]
+        self.calls: list = []
+        self.reject = True
+        {"convertr": _setup_convertr, "enhancio": _setup_enhancio, "integrate": _setup_integrate}[name](
+            tmp_path, monkeypatch)
+        self._patchers = self._make_patchers()
+
+    def _is_bad(self, company) -> bool:
+        return self.reject and company == "REJECT"
+
+    def _make_patchers(self):
+        if self.name == "convertr":
+            def _submit(enterprise, token, publisher_id, campaign_id, form_id, form_data, link_id=""):
+                self.calls.append(form_data["email"])
+                if self._is_bad(form_data["company"]):
+                    raise ConvertrError("Convertr returned 422: company is required")
+                return {"data": f"lead-{len(self.calls)}"}
+            return [patch("core.convertr_client.login", return_value={"access_token": "tok"}),
+                    patch("core.convertr_client.submit_lead_as_publisher", side_effect=_submit)]
+        if self.name == "enhancio":
+            def _import(token, allocation_uid, leads):
+                submitted, errors = [], []
+                for lead in leads:
+                    self.calls.append(lead["Email Address"])
+                    if self._is_bad(lead["Company Name"]):
+                        errors.append({"message": "Company Name is mandatory"})
+                    else:
+                        submitted.append({"leadId": f"lead-{len(self.calls)}", "status": "Submitted",
+                                          "email": lead["Email Address"]})
+                return {"submitted": submitted, "errors": errors}
+            return [patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}),
+                    patch("core.enhancio_client.import_leads", side_effect=_import)]
+
+        def _submit_integrate(sid, api_key, api_secret, attributes, callback_url=""):
+            self.calls.append(attributes["email"])
+            if self._is_bad(attributes["company"]):
+                raise IntegrateError("Integrate returned 422: company is required")
+            return {"id": f"lead-{len(self.calls)}"}
+        return [patch("core.integrate_client.submit_lead", side_effect=_submit_integrate)]
+
+    def __enter__(self):
+        for patcher in self._patchers:
+            patcher.start()
+        return self
+
+    def __exit__(self, *exc):
+        for patcher in self._patchers:
+            patcher.stop()
+
+    def fresh(self) -> AppTest:
+        at = AppTest.from_file(self.page, default_timeout=15)
+        at.run()
+        assert not at.exception
+        return at
+
+
+def _button(at: AppTest, label: str):
+    return next(b for b in at.button if b.label == label)
+
+
+def _has_button(at: AppTest, label: str) -> bool:
+    return any(b.label == label for b in at.button)
+
+
+@pytest.mark.parametrize("portal", ["integrate"])
+def test_failed_leads_persist_download_and_retry(portal, tmp_path, monkeypatch):
+    with _Portal(portal, tmp_path, monkeypatch) as p:
+        at = p.fresh()
+        _upload(at, _two_leads_csv(tmp_path), p.upload_label)
+        assert sorted(p.calls) == ["bad@example.com", "good@example.com"]
+
+        # A fresh session with no file uploaded still has the failed lead.
+        import core.failed_leads as failed_leads_module
+        real_to_excel = failed_leads_module.dataframe_to_excel_bytes
+        captured = {}
+
+        def _capture(df, sheet_name="Sheet1"):
+            captured["df"] = df.copy()
+            return real_to_excel(df, sheet_name=sheet_name)
+
+        with patch("core.failed_leads.dataframe_to_excel_bytes", side_effect=_capture):
+            at2 = p.fresh()
+        download = next(d for d in at2.get("download_button") if d.proto.label == "Download failed leads (.xlsx)")
+        assert download.proto.icon == ":material/download:"
+        df = captured["df"]
+        assert list(df.columns) == ["CID", "Email", "First Name", "Last Name", "Company", "Failure reason"]
+        assert list(df["Email"]) == ["bad@example.com"]
+        assert df.iloc[0]["Company"] == "REJECT"
+        assert df.iloc[0]["Failure reason"]
+
+        # Retry sends only the failed lead; once it succeeds it leaves the list.
+        p.calls.clear()
+        p.reject = False
+        _button(at2, "Retry failed leads").click().run()
+        assert not at2.exception
+        assert p.calls == ["bad@example.com"]
+        assert not _has_button(at2, "Retry failed leads")
+        assert not _has_button(p.fresh(), "Retry failed leads")
+
+
+@pytest.mark.parametrize("portal", ["integrate"])
+def test_retry_ignores_test_mode_and_a_lead_that_fails_again_stays_listed(portal, tmp_path, monkeypatch):
+    with _Portal(portal, tmp_path, monkeypatch) as p:
+        at = p.fresh()
+        _upload(at, _two_leads_csv(tmp_path), p.upload_label)
+        p.calls.clear()
+        _set_test_mode(at)
+        _button(at, "Retry failed leads").click().run()
+        assert not at.exception
+        assert p.calls == ["bad@example.com"]
+        assert _has_button(at, "Retry failed leads")
+
+
+@pytest.mark.parametrize("portal", ["integrate"])
+def test_clear_upload_summary_keeps_the_failed_list_and_clear_failed_list_empties_it(
+        portal, tmp_path, monkeypatch):
+    with _Portal(portal, tmp_path, monkeypatch) as p:
+        at = p.fresh()
+        _upload(at, _two_leads_csv(tmp_path), p.upload_label)
+        results_key = f"{portal}_upload_results"
+        assert at.session_state[results_key] is not None
+
+        clear_summary = _button(at, "Clear upload summary")
+        assert clear_summary.proto.icon == ":material/clear_all:"
+        clear_summary.click().run()
+        assert not at.exception
+        assert results_key not in at.session_state
+        assert not _has_button(at, "Clear upload summary")
+        assert _has_button(at, "Retry failed leads")
+
+        _button(at, "Clear failed list").click().run()
+        assert not at.exception
+        assert not _has_button(at, "Retry failed leads")
+        assert not _has_button(p.fresh(), "Retry failed leads")
