@@ -554,12 +554,12 @@ def test_saving_when_template_is_unreadable_does_not_wipe_existing_rules(tmp_pat
     assert rule.mandatory is True
 
 
-def test_saving_in_lead_qa_and_upload_mode_does_not_raise_and_saves_no_rules(tmp_path, monkeypatch):
+def test_saving_with_no_lead_template_configured_does_not_raise_and_saves_no_rules(tmp_path, monkeypatch):
     # Regression test for a previously-fixed NameError risk:
-    # lead_template_mapping_rules used to only be defined inside the
-    # `if client_mode == "Lead QA":` block, so saving a profile in
-    # "Lead QA & Upload" mode (which skips that whole block) would have
-    # raised NameError on Save. Confirms the pre-initialization fix holds.
+    # lead_template_mapping_rules used to only be defined inside a
+    # Client-Mode-gated block, so saving a client with no Lead Template
+    # (then "Lead QA & Upload" mode, now just a blank Lead Template path)
+    # could have raised NameError on Save.
     monkeypatch.chdir(tmp_path)
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
@@ -567,7 +567,6 @@ def test_saving_in_lead_qa_and_upload_mode_does_not_raise_and_saves_no_rules(tmp
 
     next(t for t in at.text_input if t.label == "Client name").set_value("LTM Upload Mode Client").run()
     at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
-    next(r for r in at.radio if r.options == ["Lead QA", "Lead QA & Upload"]).set_value("Lead QA & Upload").run()
 
     next(b for b in at.button if "Save Client Profile" in b.label).click().run()
     assert not at.exception
@@ -577,6 +576,22 @@ def test_saving_in_lead_qa_and_upload_mode_does_not_raise_and_saves_no_rules(tmp
 
     saved = load_profile("LTM Upload Mode Client", get_clients_dir())
     assert saved.lead_template_mapping.rules == []
+    assert saved.lead_template_path == ""
+    assert saved.lead_template_multi_tab is False
+    assert saved.lead_template_tabs == []
+
+
+def test_client_mode_radio_is_gone_and_lead_template_section_always_shows(tmp_path, monkeypatch):
+    # Client Mode ("Lead QA" / "Lead QA & Upload") was removed -- the Lead
+    # Template section is always offered and decides itself by whether a
+    # path is filled in.
+    monkeypatch.chdir(tmp_path)
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert not any("Lead QA & Upload" in r.options for r in at.radio)
+    assert [r.label for r in at.radio].count("Mode") == 1
+    assert any(t.key == "lead_template_path_input" for t in at.text_input)
 
 
 def test_accumulated_field_mapping_saves_as_none_when_every_dropdown_left_unset(tmp_path, monkeypatch):
@@ -1498,7 +1513,8 @@ def test_sections_live_in_their_new_tabs(tmp_path, monkeypatch):
     assert any(t.label == "Jira ticket key or link (optional)" for t in basics.text_input)
     assert any(c.label == "Enable file collation for this client" for c in basics.checkbox)
 
-    assert any(r.label == "Mode" for r in delivery.radio)
+    assert not any(r.label == "Mode" for r in delivery.radio)
+    assert any(t.key == "lead_template_path_input" for t in delivery.text_input)
     delivery_boxes = {c.label for c in delivery.checkbox}
     assert "This client delivers leads to Google Sheets" in delivery_boxes
     assert "This client uploads to Convertr" in delivery_boxes
@@ -1512,7 +1528,7 @@ def test_sections_live_in_their_new_tabs(tmp_path, monkeypatch):
 
 def test_new_edit_mode_radio_stays_above_the_tabs(tmp_path, monkeypatch):
     # Nine existing tests pick the FIRST radio labeled "Mode" to mean the
-    # New/Edit radio; Client Mode's radio shares that label.
+    # New/Edit radio (the old Client Mode radio used to share that label).
     monkeypatch.chdir(tmp_path)
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()

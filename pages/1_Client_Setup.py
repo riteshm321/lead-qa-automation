@@ -876,293 +876,284 @@ with tab_basics:
 
 with tab_delivery:
     with st.container(border=True):
-        st.subheader("Client Mode")
-        _CLIENT_MODES = ["Lead QA", "Lead QA & Upload"]
-        _mode_default = profile.client_mode if profile and profile.client_mode in _CLIENT_MODES else "Lead QA"
-        client_mode = st.radio("Mode", _CLIENT_MODES, index=_CLIENT_MODES.index(_mode_default), horizontal=True)
-
-        lead_template_path = ""
-        lead_template_link = ""
+        # There's no per-client mode any more: the Lead Template step runs on
+        # Finalize whenever a Lead Template path (or multi-tab tabs) is set
+        # below, and is skipped when it's left blank.
+        st.subheader("Lead Template (optional)")
         lead_template_sheet_name = ""
-        lead_template_multi_tab = False
         lead_template_tabs_result: list[LeadTemplateTab] = []
         lead_template_field_mapping_result = None
-        # Pre-initialized (matching every other Lead-QA-only variable above)
-        # so the ClientProfile(...) call below never raises NameError when
-        # client_mode == "Lead QA & Upload" skips the whole block that
-        # would otherwise build this list.
         lead_template_mapping_rules: list[LeadTemplateColumnRule] = []
-        if client_mode == "Lead QA":
-            lead_template_path = _path_input_with_browse(
-                "Lead Template path", "lead_template_path_input",
-                profile.lead_template_path if profile else "")
-            st.caption("The default/shared Lead Template file. Leave this blank if every CID group below has "
-                       "its own separate file — a shared default isn't required.")
-            lead_template_link = st.text_input(
-                "Lead Template SharePoint link (optional)",
-                value=profile.lead_template_link if profile else "",
-                placeholder="e.g. https://madlog.sharepoint.com/:x:/s/.../...",
-                help="Used as the \"Lead Report\" link when posting a summary to Jira, instead of a local "
-                     "file path. This is the default for every tab below — a tab with its own file (and its "
-                     "own SharePoint link) can override it individually.",
+        lead_template_path = _path_input_with_browse(
+            "Lead Template path", "lead_template_path_input",
+            profile.lead_template_path if profile else "")
+        st.caption("The default/shared Lead Template file. Leave this blank if every CID group below has "
+                   "its own separate file — a shared default isn't required.")
+        lead_template_link = st.text_input(
+            "Lead Template SharePoint link (optional)",
+            value=profile.lead_template_link if profile else "",
+            placeholder="e.g. https://madlog.sharepoint.com/:x:/s/.../...",
+            help="Used as the \"Lead Report\" link when posting a summary to Jira, instead of a local "
+                 "file path. This is the default for every tab below — a tab with its own file (and its "
+                 "own SharePoint link) can override it individually.",
+        )
+
+        lead_template_multi_tab = st.checkbox(
+            "Route different CIDs to different tabs and/or separate files",
+            value=profile.lead_template_multi_tab if profile else False)
+
+        lead_template_clear_existing = st.checkbox(
+            "Clear existing leads before adding new ones",
+            value=profile.lead_template_clear_existing if profile else False,
+            help="On: removes all existing data rows (keeping the header and its formatting, which is "
+                 "reused for the new rows) before pasting this run's leads — for a Lead Report that's "
+                 "re-sent fresh each time rather than accumulated. Off (default): new leads are appended "
+                 "below whatever's already there, like the Accumulated Report.",
+        )
+
+        if lead_template_multi_tab:
+            st.info(
+                "Add one tab below for each group of CIDs. By default a tab writes into the shared Lead "
+                "Template file above, on the sheet you pick for it — set **\"File for this tab\"** only "
+                "when that CID group's leads go into a completely **different workbook** (its own "
+                "SharePoint file), not just a different sheet in the same file. A lead whose CID matches "
+                "no tab is skipped for the Lead Template step (with a warning) — it still goes to the "
+                "Accumulated Report normally."
             )
-
-            lead_template_multi_tab = st.checkbox(
-                "Route different CIDs to different tabs and/or separate files",
-                value=profile.lead_template_multi_tab if profile else False)
-
-            lead_template_clear_existing = st.checkbox(
-                "Clear existing leads before adding new ones",
-                value=profile.lead_template_clear_existing if profile else False,
-                help="On: removes all existing data rows (keeping the header and its formatting, which is "
-                     "reused for the new rows) before pasting this run's leads — for a Lead Report that's "
-                     "re-sent fresh each time rather than accumulated. Off (default): new leads are appended "
-                     "below whatever's already there, like the Accumulated Report.",
+            lead_template_tabs_result = _render_lead_template_tabs(lead_template_path)
+            if not lead_template_tabs_result:
+                render_problem("Multi-tab is enabled but no tabs are configured — "
+                               "no leads will be pasted into the Lead Template.",
+                               "Click **Add Tab** above, or untick **Route different CIDs to different "
+                               "tabs and/or separate files**.", level="warning")
+            _header_source_sheet = lead_template_tabs_result[0].sheet_name if lead_template_tabs_result else ""
+            # A tab can point at a completely different workbook than the shared
+            # path above — the column-mapping preview must read from whichever
+            # file the first tab will actually write to, not always the shared
+            # default (which can legitimately be left blank).
+            _header_source_path = (
+                (lead_template_tabs_result[0].file_path or lead_template_path)
+                if lead_template_tabs_result else lead_template_path
             )
-
-            if lead_template_multi_tab:
-                st.info(
-                    "Add one tab below for each group of CIDs. By default a tab writes into the shared Lead "
-                    "Template file above, on the sheet you pick for it — set **\"File for this tab\"** only "
-                    "when that CID group's leads go into a completely **different workbook** (its own "
-                    "SharePoint file), not just a different sheet in the same file. A lead whose CID matches "
-                    "no tab is skipped for the Lead Template step (with a warning) — it still goes to the "
-                    "Accumulated Report normally."
+        else:
+            template_sheet_options: list[str] = []
+            if lead_template_path:
+                try:
+                    template_sheet_options = list_sheet_names(lead_template_path)
+                except Exception as exc:
+                    render_error(exc)
+            if template_sheet_options:
+                default_template_sheet = profile.lead_template_sheet_name if profile else ""
+                template_sheet_idx = (
+                    template_sheet_options.index(default_template_sheet)
+                    if default_template_sheet in template_sheet_options else 0
                 )
-                lead_template_tabs_result = _render_lead_template_tabs(lead_template_path)
-                if not lead_template_tabs_result:
-                    render_problem("Multi-tab is enabled but no tabs are configured — "
-                                   "no leads will be pasted into the Lead Template.",
-                                   "Click **Add Tab** above, or untick **Route different CIDs to different "
-                                   "tabs and/or separate files**.", level="warning")
-                _header_source_sheet = lead_template_tabs_result[0].sheet_name if lead_template_tabs_result else ""
-                # A tab can point at a completely different workbook than the shared
-                # path above — the column-mapping preview must read from whichever
-                # file the first tab will actually write to, not always the shared
-                # default (which can legitimately be left blank).
-                _header_source_path = (
-                    (lead_template_tabs_result[0].file_path or lead_template_path)
-                    if lead_template_tabs_result else lead_template_path
-                )
+                lead_template_sheet_name = st.selectbox("Lead Template sheet", template_sheet_options,
+                                                          index=template_sheet_idx, key="lead_template_sheet_select", filter_mode=None)
             else:
-                template_sheet_options: list[str] = []
-                if lead_template_path:
-                    try:
-                        template_sheet_options = list_sheet_names(lead_template_path)
-                    except Exception as exc:
-                        render_error(exc)
-                if template_sheet_options:
-                    default_template_sheet = profile.lead_template_sheet_name if profile else ""
-                    template_sheet_idx = (
-                        template_sheet_options.index(default_template_sheet)
-                        if default_template_sheet in template_sheet_options else 0
-                    )
-                    lead_template_sheet_name = st.selectbox("Lead Template sheet", template_sheet_options,
-                                                              index=template_sheet_idx, key="lead_template_sheet_select", filter_mode=None)
+                lead_template_sheet_name = st.text_input(
+                    "Lead Template sheet name (enter a valid file path above to pick from a list)",
+                    value=profile.lead_template_sheet_name if profile else "", key="lead_template_sheet_text")
+            _header_source_sheet = lead_template_sheet_name
+            _header_source_path = lead_template_path
+
+        _tmpl_file_identity = f"{_header_source_path}::{_header_source_sheet}"
+        _tmpl_fm_match = (
+            profile.lead_template_field_mapping
+            if profile and profile.lead_template_path == lead_template_path
+            and (profile.lead_template_multi_tab == lead_template_multi_tab)
+            and ((not lead_template_multi_tab and profile.lead_template_sheet_name == lead_template_sheet_name)
+                 or (lead_template_multi_tab and profile.lead_template_tabs
+                     and profile.lead_template_tabs[0].sheet_name == _header_source_sheet))
+            else None
+        )
+        _tmpl_expected_for_detection = [v for v in [
+            _tmpl_fm_match.email, _tmpl_fm_match.first_name, _tmpl_fm_match.last_name,
+            _tmpl_fm_match.company, _tmpl_fm_match.cid,
+        ] if v] if _tmpl_fm_match else None
+        template_headers, template_headers_error = _safe_read_template_headers(
+            _header_source_path, _header_source_sheet, _tmpl_expected_for_detection)
+
+        # Same reset requirement as the Accumulated Report mapping above —
+        # a keyed selectbox won't pick up a new default on its own when the
+        # underlying file/sheet changes.
+        if st.session_state.get("_tmpl_mapping_for") != _tmpl_file_identity:
+            st.session_state["_tmpl_mapping_for"] = _tmpl_file_identity
+            _tmpl_guess = guess_target_field_mapping(template_headers) if not _tmpl_fm_match else {}
+            st.session_state["tmpl_map_email"] = _tmpl_fm_match.email if _tmpl_fm_match else _tmpl_guess.get("email", "")
+            st.session_state["tmpl_map_first"] = _tmpl_fm_match.first_name if _tmpl_fm_match else _tmpl_guess.get("first_name", "")
+            st.session_state["tmpl_map_last"] = _tmpl_fm_match.last_name if _tmpl_fm_match else _tmpl_guess.get("last_name", "")
+            st.session_state["tmpl_map_company"] = _tmpl_fm_match.company if _tmpl_fm_match else _tmpl_guess.get("company", "")
+            st.session_state["tmpl_map_cid"] = _tmpl_fm_match.cid if _tmpl_fm_match else _tmpl_guess.get("cid", "")
+
+        with st.expander("Map Lead Template columns (optional)", icon=":material/link:"):
+            lead_template_field_mapping_result = _render_target_field_mapping(
+                "Lead Template", "tmpl", template_headers)
+            if template_headers_error:
+                render_error(template_headers_error)
+            elif not template_headers:
+                st.caption("Enter a valid Lead Template path and sheet above to map its columns — for "
+                           "multiple tabs/files, this reads from the first tab's own file if it has one, "
+                           "otherwise the shared Lead Template path.")
+            else:
+                st.caption("Header row auto-detected — rows above it (titles, instructions) are left untouched.")
+
+        st.divider()
+        st.markdown("**Lead Template Column Mapping (optional)**")
+        st.caption(
+            "Preview which Lead Template columns the app can auto-match from a leadfile, mark specific "
+            "columns as mandatory (a blank value gets flagged for review instead of silently left blank), "
+            "manually override a column's source, or set a specific date format for a column. Every "
+            "column left untouched here keeps working exactly as it does today."
+        )
+        # Reads from _header_source_path/_header_source_sheet (same as the
+        # field-mapping preview section just above) instead of
+        # lead_template_path/lead_template_sheet_name directly -- in
+        # multi-tab mode lead_template_sheet_name is always "" (each tab
+        # has its own sheet), so guarding on it here made this whole
+        # section always render zero columns for a multi-tab client, and
+        # since lead_template_mapping_rules starts as [] with nothing to
+        # append to, saving silently wiped that client's existing rules.
+        _ltm_template_headers: list[str] = []
+        if _header_source_path and _header_source_sheet:
+            _ltm_template_headers, _ltm_err = _safe_read_template_headers(
+                _header_source_path, _header_source_sheet)
+            if _ltm_err is not None:
+                render_error(_ltm_err)
+
+        # Built via normalize_header_text on each literal, not typed out
+        # by hand -- normalize_header_text strips ALL non-alphanumeric
+        # characters INCLUDING SPACES, so a hand-typed "refund reason"
+        # (with a space) would never match normalize_header_text("Refund
+        # Reason") == "refundreason". Reuses the same literals as
+        # core.excel_io._REASON_HEADER_NAMES/append_leads' own
+        # skip_normalized set so this stays in sync with that logic.
+        _ltm_skip = {normalize_header_text(s) for s in ("date", "comment", "status", "reason", "refund reason")}
+
+        _ltm_formula_headers: set[str] = set()
+        if _header_source_path and _header_source_sheet:
+            try:
+                _ltm_formula_headers = detect_formula_columns(_header_source_path, _header_source_sheet)
+            except Exception as exc:
+                render_error(exc)
+        _ltm_formula_headers_norm = {normalize_header_text(h) for h in _ltm_formula_headers if h is not None}
+
+        _ltm_template_headers = [
+            h for h in _ltm_template_headers
+            if normalize_header_text(h) not in _ltm_skip and normalize_header_text(h) not in _ltm_formula_headers_norm
+        ]
+
+        _ltm_sample_file = st.file_uploader(
+            "Sample leadfile (optional — lets this preview show real auto-match results and pick a source "
+            "column from a dropdown instead of typing it)",
+            type=["xlsx", "csv"], key="ltm_sample_file")
+        _ltm_sample_df = None
+        _ltm_sample_headers: list[str] = []
+        if _ltm_sample_file is not None:
+            try:
+                _ltm_sample_df = read_leadfile(_ltm_sample_file)
+                _ltm_sample_headers = list(_ltm_sample_df.columns)
+            except Exception as exc:
+                render_error(exc)
+        # This client's real field mappings — used so the preview's
+        # auto-match resolves exactly the way append_leads/the mandatory
+        # check would (target role -> synonym -> fuzzy), not a
+        # fuzzy-match-only reimplementation that can silently disagree.
+        _ltm_preview_fm = profile.field_mapping if profile else FieldMapping(
+            email="", first_name="", last_name="", company="", cid="")
+        _ltm_preview_target_fm = profile.lead_template_field_mapping if profile else None
+
+        _existing_ltm_rules = {r.template_column: r for r in (profile.lead_template_mapping.rules if profile else [])}
+        _DATE_FORMAT_OPTIONS = [
+            "(no special formatting)", "MM/DD/YYYY", "DD/MM/YYYY", "DD-MMM-YY",
+            "YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS", "Custom...",
+        ]
+
+        lead_template_mapping_rules: list[LeadTemplateColumnRule] = []
+        if not _ltm_template_headers:
+            st.caption("Set a Lead Template path and sheet above to configure column mapping.")
+        for _ltm_col in _ltm_template_headers:
+            _existing_rule = _existing_ltm_rules.get(_ltm_col)
+            with st.container(border=True):
+                if _ltm_sample_headers:
+                    _auto_match = resolve_one_header_source(
+                        _ltm_col, _ltm_sample_df, _ltm_preview_fm, _ltm_preview_target_fm)
+                    st.write(
+                        f"**{_ltm_col}** — auto-matches: *{_auto_match}*" if _auto_match
+                        else f"**{_ltm_col}** — :material/warning: no auto-match found")
                 else:
-                    lead_template_sheet_name = st.text_input(
-                        "Lead Template sheet name (enter a valid file path above to pick from a list)",
-                        value=profile.lead_template_sheet_name if profile else "", key="lead_template_sheet_text")
-                _header_source_sheet = lead_template_sheet_name
-                _header_source_path = lead_template_path
+                    st.write(f"**{_ltm_col}**")
 
-            _tmpl_file_identity = f"{_header_source_path}::{_header_source_sheet}"
-            _tmpl_fm_match = (
-                profile.lead_template_field_mapping
-                if profile and profile.lead_template_path == lead_template_path
-                and (profile.lead_template_multi_tab == lead_template_multi_tab)
-                and ((not lead_template_multi_tab and profile.lead_template_sheet_name == lead_template_sheet_name)
-                     or (lead_template_multi_tab and profile.lead_template_tabs
-                         and profile.lead_template_tabs[0].sheet_name == _header_source_sheet))
-                else None
-            )
-            _tmpl_expected_for_detection = [v for v in [
-                _tmpl_fm_match.email, _tmpl_fm_match.first_name, _tmpl_fm_match.last_name,
-                _tmpl_fm_match.company, _tmpl_fm_match.cid,
-            ] if v] if _tmpl_fm_match else None
-            template_headers, template_headers_error = _safe_read_template_headers(
-                _header_source_path, _header_source_sheet, _tmpl_expected_for_detection)
+                _col_a, _col_b = st.columns(2)
+                _ltm_mandatory = _col_a.checkbox(
+                    "Mandatory", value=_existing_rule.mandatory if _existing_rule else False,
+                    key=f"ltm_mandatory_{_ltm_col}")
 
-            # Same reset requirement as the Accumulated Report mapping above —
-            # a keyed selectbox won't pick up a new default on its own when the
-            # underlying file/sheet changes.
-            if st.session_state.get("_tmpl_mapping_for") != _tmpl_file_identity:
-                st.session_state["_tmpl_mapping_for"] = _tmpl_file_identity
-                _tmpl_guess = guess_target_field_mapping(template_headers) if not _tmpl_fm_match else {}
-                st.session_state["tmpl_map_email"] = _tmpl_fm_match.email if _tmpl_fm_match else _tmpl_guess.get("email", "")
-                st.session_state["tmpl_map_first"] = _tmpl_fm_match.first_name if _tmpl_fm_match else _tmpl_guess.get("first_name", "")
-                st.session_state["tmpl_map_last"] = _tmpl_fm_match.last_name if _tmpl_fm_match else _tmpl_guess.get("last_name", "")
-                st.session_state["tmpl_map_company"] = _tmpl_fm_match.company if _tmpl_fm_match else _tmpl_guess.get("company", "")
-                st.session_state["tmpl_map_cid"] = _tmpl_fm_match.cid if _tmpl_fm_match else _tmpl_guess.get("cid", "")
-
-            with st.expander("Map Lead Template columns (optional)", icon=":material/link:"):
-                lead_template_field_mapping_result = _render_target_field_mapping(
-                    "Lead Template", "tmpl", template_headers)
-                if template_headers_error:
-                    render_error(template_headers_error)
-                elif not template_headers:
-                    st.caption("Enter a valid Lead Template path and sheet above to map its columns — for "
-                               "multiple tabs/files, this reads from the first tab's own file if it has one, "
-                               "otherwise the shared Lead Template path.")
+                if _ltm_sample_headers:
+                    _override_options = ["(auto)"] + _ltm_sample_headers
+                    _default_override = _existing_rule.source_column if _existing_rule and _existing_rule.source_column else "(auto)"
+                    _override_idx = _override_options.index(_default_override) if _default_override in _override_options else 0
+                    _ltm_source_selected = _col_b.selectbox(
+                        "Source column", _override_options, index=_override_idx, key=f"ltm_source_{_ltm_col}", filter_mode=None)
+                    _ltm_source = "" if _ltm_source_selected == "(auto)" else _ltm_source_selected
                 else:
-                    st.caption("Header row auto-detected — rows above it (titles, instructions) are left untouched.")
+                    _ltm_source = _col_b.text_input(
+                        "Source column override (blank = auto)",
+                        value=_existing_rule.source_column if _existing_rule else "",
+                        key=f"ltm_source_text_{_ltm_col}")
 
-            st.divider()
-            st.markdown("**Lead Template Column Mapping (optional)**")
-            st.caption(
-                "Preview which Lead Template columns the app can auto-match from a leadfile, mark specific "
-                "columns as mandatory (a blank value gets flagged for review instead of silently left blank), "
-                "manually override a column's source, or set a specific date format for a column. Every "
-                "column left untouched here keeps working exactly as it does today."
-            )
-            # Reads from _header_source_path/_header_source_sheet (same as the
-            # field-mapping preview section just above) instead of
-            # lead_template_path/lead_template_sheet_name directly -- in
-            # multi-tab mode lead_template_sheet_name is always "" (each tab
-            # has its own sheet), so guarding on it here made this whole
-            # section always render zero columns for a multi-tab client, and
-            # since lead_template_mapping_rules starts as [] with nothing to
-            # append to, saving silently wiped that client's existing rules.
-            _ltm_template_headers: list[str] = []
-            if _header_source_path and _header_source_sheet:
-                _ltm_template_headers, _ltm_err = _safe_read_template_headers(
-                    _header_source_path, _header_source_sheet)
-                if _ltm_err is not None:
-                    render_error(_ltm_err)
-
-            # Built via normalize_header_text on each literal, not typed out
-            # by hand -- normalize_header_text strips ALL non-alphanumeric
-            # characters INCLUDING SPACES, so a hand-typed "refund reason"
-            # (with a space) would never match normalize_header_text("Refund
-            # Reason") == "refundreason". Reuses the same literals as
-            # core.excel_io._REASON_HEADER_NAMES/append_leads' own
-            # skip_normalized set so this stays in sync with that logic.
-            _ltm_skip = {normalize_header_text(s) for s in ("date", "comment", "status", "reason", "refund reason")}
-
-            _ltm_formula_headers: set[str] = set()
-            if _header_source_path and _header_source_sheet:
-                try:
-                    _ltm_formula_headers = detect_formula_columns(_header_source_path, _header_source_sheet)
-                except Exception as exc:
-                    render_error(exc)
-            _ltm_formula_headers_norm = {normalize_header_text(h) for h in _ltm_formula_headers if h is not None}
-
-            _ltm_template_headers = [
-                h for h in _ltm_template_headers
-                if normalize_header_text(h) not in _ltm_skip and normalize_header_text(h) not in _ltm_formula_headers_norm
-            ]
-
-            _ltm_sample_file = st.file_uploader(
-                "Sample leadfile (optional — lets this preview show real auto-match results and pick a source "
-                "column from a dropdown instead of typing it)",
-                type=["xlsx", "csv"], key="ltm_sample_file")
-            _ltm_sample_df = None
-            _ltm_sample_headers: list[str] = []
-            if _ltm_sample_file is not None:
-                try:
-                    _ltm_sample_df = read_leadfile(_ltm_sample_file)
-                    _ltm_sample_headers = list(_ltm_sample_df.columns)
-                except Exception as exc:
-                    render_error(exc)
-            # This client's real field mappings — used so the preview's
-            # auto-match resolves exactly the way append_leads/the mandatory
-            # check would (target role -> synonym -> fuzzy), not a
-            # fuzzy-match-only reimplementation that can silently disagree.
-            _ltm_preview_fm = profile.field_mapping if profile else FieldMapping(
-                email="", first_name="", last_name="", company="", cid="")
-            _ltm_preview_target_fm = profile.lead_template_field_mapping if profile else None
-
-            _existing_ltm_rules = {r.template_column: r for r in (profile.lead_template_mapping.rules if profile else [])}
-            _DATE_FORMAT_OPTIONS = [
-                "(no special formatting)", "MM/DD/YYYY", "DD/MM/YYYY", "DD-MMM-YY",
-                "YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS", "Custom...",
-            ]
-
-            lead_template_mapping_rules: list[LeadTemplateColumnRule] = []
-            if not _ltm_template_headers:
-                st.caption("Set a Lead Template path and sheet above to configure column mapping.")
-            for _ltm_col in _ltm_template_headers:
-                _existing_rule = _existing_ltm_rules.get(_ltm_col)
-                with st.container(border=True):
-                    if _ltm_sample_headers:
-                        _auto_match = resolve_one_header_source(
-                            _ltm_col, _ltm_sample_df, _ltm_preview_fm, _ltm_preview_target_fm)
-                        st.write(
-                            f"**{_ltm_col}** — auto-matches: *{_auto_match}*" if _auto_match
-                            else f"**{_ltm_col}** — :material/warning: no auto-match found")
+                _default_fmt = _existing_rule.date_format if _existing_rule else ""
+                if not is_date_column(_ltm_col, _default_fmt):
+                    # Only date/time-named columns (or ones that already
+                    # have a saved format) get a Date format selector --
+                    # offering it on "Email" or "Company Size" just
+                    # invites a nonsense config.
+                    _ltm_date_format = ""
+                else:
+                    if _default_fmt in _DATE_FORMAT_OPTIONS:
+                        _fmt_idx = _DATE_FORMAT_OPTIONS.index(_default_fmt)
+                    elif _default_fmt:
+                        # A saved custom format (not one of the presets) must
+                        # still select "Custom..." here -- otherwise this
+                        # falls through to index 0 ("(no special formatting)")
+                        # and the custom text box below is never shown/
+                        # pre-filled, silently dropping the saved value the
+                        # next time this profile is saved.
+                        _fmt_idx = _DATE_FORMAT_OPTIONS.index("Custom...")
                     else:
-                        st.write(f"**{_ltm_col}**")
-
-                    _col_a, _col_b = st.columns(2)
-                    _ltm_mandatory = _col_a.checkbox(
-                        "Mandatory", value=_existing_rule.mandatory if _existing_rule else False,
-                        key=f"ltm_mandatory_{_ltm_col}")
-
-                    if _ltm_sample_headers:
-                        _override_options = ["(auto)"] + _ltm_sample_headers
-                        _default_override = _existing_rule.source_column if _existing_rule and _existing_rule.source_column else "(auto)"
-                        _override_idx = _override_options.index(_default_override) if _default_override in _override_options else 0
-                        _ltm_source_selected = _col_b.selectbox(
-                            "Source column", _override_options, index=_override_idx, key=f"ltm_source_{_ltm_col}", filter_mode=None)
-                        _ltm_source = "" if _ltm_source_selected == "(auto)" else _ltm_source_selected
-                    else:
-                        _ltm_source = _col_b.text_input(
-                            "Source column override (blank = auto)",
-                            value=_existing_rule.source_column if _existing_rule else "",
-                            key=f"ltm_source_text_{_ltm_col}")
-
-                    _default_fmt = _existing_rule.date_format if _existing_rule else ""
-                    if not is_date_column(_ltm_col, _default_fmt):
-                        # Only date/time-named columns (or ones that already
-                        # have a saved format) get a Date format selector --
-                        # offering it on "Email" or "Company Size" just
-                        # invites a nonsense config.
+                        _fmt_idx = 0
+                    _ltm_fmt_selected = st.selectbox(
+                        "Date format", _DATE_FORMAT_OPTIONS, index=_fmt_idx, key=f"ltm_fmt_{_ltm_col}", filter_mode=None)
+                    if _ltm_fmt_selected == "Custom...":
+                        _ltm_date_format = st.text_input(
+                            "Custom date format (Python strftime, e.g. %d %b %Y)",
+                            value=_default_fmt if _default_fmt not in _DATE_FORMAT_OPTIONS else "",
+                            key=f"ltm_fmt_custom_{_ltm_col}")
+                    elif _ltm_fmt_selected == "(no special formatting)":
                         _ltm_date_format = ""
                     else:
-                        if _default_fmt in _DATE_FORMAT_OPTIONS:
-                            _fmt_idx = _DATE_FORMAT_OPTIONS.index(_default_fmt)
-                        elif _default_fmt:
-                            # A saved custom format (not one of the presets) must
-                            # still select "Custom..." here -- otherwise this
-                            # falls through to index 0 ("(no special formatting)")
-                            # and the custom text box below is never shown/
-                            # pre-filled, silently dropping the saved value the
-                            # next time this profile is saved.
-                            _fmt_idx = _DATE_FORMAT_OPTIONS.index("Custom...")
-                        else:
-                            _fmt_idx = 0
-                        _ltm_fmt_selected = st.selectbox(
-                            "Date format", _DATE_FORMAT_OPTIONS, index=_fmt_idx, key=f"ltm_fmt_{_ltm_col}", filter_mode=None)
-                        if _ltm_fmt_selected == "Custom...":
-                            _ltm_date_format = st.text_input(
-                                "Custom date format (Python strftime, e.g. %d %b %Y)",
-                                value=_default_fmt if _default_fmt not in _DATE_FORMAT_OPTIONS else "",
-                                key=f"ltm_fmt_custom_{_ltm_col}")
-                        elif _ltm_fmt_selected == "(no special formatting)":
-                            _ltm_date_format = ""
-                        else:
-                            _ltm_date_format = _ltm_fmt_selected
+                        _ltm_date_format = _ltm_fmt_selected
 
-                if _ltm_mandatory or _ltm_source or _ltm_date_format:
-                    lead_template_mapping_rules.append(LeadTemplateColumnRule(
-                        template_column=_ltm_col, source_column=_ltm_source,
-                        mandatory=_ltm_mandatory, date_format=_ltm_date_format,
-                    ))
+            if _ltm_mandatory or _ltm_source or _ltm_date_format:
+                lead_template_mapping_rules.append(LeadTemplateColumnRule(
+                    template_column=_ltm_col, source_column=_ltm_source,
+                    mandatory=_ltm_mandatory, date_format=_ltm_date_format,
+                ))
 
-            # Never silently drop a saved rule for a column that simply
-            # wasn't RENDERED this run (the template couldn't be read at all,
-            # or this particular column isn't among the currently-read
-            # headers) -- that's an unrelated save, not the user removing the
-            # rule. Start from every existing saved rule and only add/replace
-            # entries for columns that actually rendered above; a rendered
-            # column left at every default is still correctly absent (it's
-            # simply never added to lead_template_mapping_rules above).
-            _ltm_rendered_normalized = {normalize_header_text(h) for h in _ltm_template_headers}
-            _ltm_preserved_rules = [
-                r for r in (profile.lead_template_mapping.rules if profile else [])
-                if normalize_header_text(r.template_column) not in _ltm_rendered_normalized
-            ]
-            lead_template_mapping_rules = _ltm_preserved_rules + lead_template_mapping_rules
+        # Never silently drop a saved rule for a column that simply
+        # wasn't RENDERED this run (the template couldn't be read at all,
+        # or this particular column isn't among the currently-read
+        # headers) -- that's an unrelated save, not the user removing the
+        # rule. Start from every existing saved rule and only add/replace
+        # entries for columns that actually rendered above; a rendered
+        # column left at every default is still correctly absent (it's
+        # simply never added to lead_template_mapping_rules above).
+        _ltm_rendered_normalized = {normalize_header_text(h) for h in _ltm_template_headers}
+        _ltm_preserved_rules = [
+            r for r in (profile.lead_template_mapping.rules if profile else [])
+            if normalize_header_text(r.template_column) not in _ltm_rendered_normalized
+        ]
+        lead_template_mapping_rules = _ltm_preserved_rules + lead_template_mapping_rules
 
 with tab_delivery:
     with st.container(border=True):
@@ -1958,7 +1949,7 @@ if st.button("Save Client Profile", icon=":material/save:", type="primary"):
     elif lead_template_multi_tab and _blank_tab_count:
         render_problem(f"{_blank_tab_count} Lead Template tab(s) are missing a sheet name. "
                        "Pick a sheet for every tab before saving.",
-                       "Open **Delivery → Client Mode** and pick a sheet for every tab.")
+                       "Open **Delivery → Lead Template** and pick a sheet for every tab.")
     elif _name_error:
         render_problem(_name_error, "Give every source in that check a non-empty, unique name.")
     elif _cq_problems:
@@ -1978,15 +1969,14 @@ if st.button("Save Client Profile", icon=":material/save:", type="primary"):
             jira_ticket_key=extract_ticket_key(jira_ticket_key) if jira_ticket_key.strip() else "",
             jira_reporter_name=jira_reporter_name.strip(),
             accumulated_report_link=accumulated_report_link.strip(),
-            lead_template_link=lead_template_link.strip() if client_mode == "Lead QA" else "",
-            client_mode=client_mode,
+            lead_template_link=lead_template_link.strip(),
             collation_enabled=collation_enabled,
-            lead_template_path=lead_template_path if client_mode == "Lead QA" else "",
+            lead_template_path=lead_template_path,
             lead_template_sheet_name=(
-                lead_template_sheet_name if client_mode == "Lead QA" and not lead_template_multi_tab else ""),
-            lead_template_multi_tab=lead_template_multi_tab if client_mode == "Lead QA" else False,
+                lead_template_sheet_name if not lead_template_multi_tab else ""),
+            lead_template_multi_tab=lead_template_multi_tab,
             lead_template_tabs=(
-                lead_template_tabs_result if client_mode == "Lead QA" and lead_template_multi_tab else []),
+                lead_template_tabs_result if lead_template_multi_tab else []),
             lead_template_mapping=LeadTemplateMappingConfig(rules=lead_template_mapping_rules),
             google_sheets=GoogleSheetsConfig(
                 enabled=gs_enabled,
@@ -1995,10 +1985,10 @@ if st.button("Save Client Profile", icon=":material/save:", type="primary"):
                 clear_existing=gs_clear_existing if gs_enabled else False,
             ),
             lead_template_clear_existing=(
-                lead_template_clear_existing if client_mode == "Lead QA" else False),
+                lead_template_clear_existing),
             field_mapping=profile.field_mapping if profile else None,
             accumulated_field_mapping=accumulated_field_mapping_result,
-            lead_template_field_mapping=lead_template_field_mapping_result if client_mode == "Lead QA" else None,
+            lead_template_field_mapping=lead_template_field_mapping_result,
             duplicate=DuplicateConfig(enabled=duplicate_enabled),
             leadcap=LeadcapConfig(enabled=leadcap_enabled, segmented=leadcap_segmented,
                                    flat_cap=int(leadcap_flat_cap) if leadcap_flat_cap else None,
