@@ -265,13 +265,14 @@ class _Portal:
     """Sets up one portal for the synthetic client and patches its API
     client; `reject` toggles whether a Company of "REJECT" fails."""
 
-    def __init__(self, name, tmp_path, monkeypatch):
+    def __init__(self, name, tmp_path, monkeypatch, setup=True):
         self.name = name
         self.page, self.upload_label = _PORTALS[name]
         self.calls: list = []
         self.reject = True
-        {"convertr": _setup_convertr, "enhancio": _setup_enhancio, "integrate": _setup_integrate}[name](
-            tmp_path, monkeypatch)
+        if setup:
+            {"convertr": _setup_convertr, "enhancio": _setup_enhancio, "integrate": _setup_integrate}[name](
+                tmp_path, monkeypatch)
         self._patchers = self._make_patchers()
 
     def _is_bad(self, company) -> bool:
@@ -331,7 +332,7 @@ def _has_button(at: AppTest, label: str) -> bool:
     return any(b.label == label for b in at.button)
 
 
-@pytest.mark.parametrize("portal", ["convertr", "integrate"])
+@pytest.mark.parametrize("portal", sorted(_PORTALS))
 def test_failed_leads_persist_download_and_retry(portal, tmp_path, monkeypatch):
     with _Portal(portal, tmp_path, monkeypatch) as p:
         at = p.fresh()
@@ -367,7 +368,7 @@ def test_failed_leads_persist_download_and_retry(portal, tmp_path, monkeypatch):
         assert not _has_button(p.fresh(), "Retry failed leads")
 
 
-@pytest.mark.parametrize("portal", ["convertr", "integrate"])
+@pytest.mark.parametrize("portal", sorted(_PORTALS))
 def test_retry_ignores_test_mode_and_a_lead_that_fails_again_stays_listed(portal, tmp_path, monkeypatch):
     with _Portal(portal, tmp_path, monkeypatch) as p:
         at = p.fresh()
@@ -380,7 +381,7 @@ def test_retry_ignores_test_mode_and_a_lead_that_fails_again_stays_listed(portal
         assert _has_button(at, "Retry failed leads")
 
 
-@pytest.mark.parametrize("portal", ["convertr", "integrate"])
+@pytest.mark.parametrize("portal", sorted(_PORTALS))
 def test_clear_upload_summary_keeps_the_failed_list_and_clear_failed_list_empties_it(
         portal, tmp_path, monkeypatch):
     with _Portal(portal, tmp_path, monkeypatch) as p:
@@ -401,3 +402,45 @@ def test_clear_upload_summary_keeps_the_failed_list_and_clear_failed_list_emptie
         assert not at.exception
         assert not _has_button(at, "Retry failed leads")
         assert not _has_button(p.fresh(), "Retry failed leads")
+
+
+def test_enhancio_retry_of_a_lead_pulled_from_the_accumulated_report_stamps_its_status(tmp_path, monkeypatch):
+    import datetime
+
+    import openpyxl
+
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    acc_path = str(tmp_path / "acc.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Accumulated"
+    ws.append(["Date", "CID", "Email", "First Name", "Last Name", "Company", "Status"])
+    ws.append([datetime.date.today(), "111", "acc@example.com", "Acc", "Lead", "REJECT", ""])
+    wb.save(acc_path)
+    save_profile(ClientProfile(
+        name=_CLIENT, accumulated_report_path=acc_path, field_mapping=_FM,
+        enhancio=EnhancioConfig(
+            enabled=True, allocations=[EnhancioAllocationMapping(cid="111", allocation_uid="L-1")],
+            field_mapping={"Email": "Email Address", "Company": "Company Name"},
+        ),
+    ), get_clients_dir())
+    save_enhancio_client_id("client-id")
+
+    with _Portal("enhancio", tmp_path, monkeypatch, setup=False) as p:
+        at = p.fresh()
+        at.radio(key="enhancio_lead_source").set_value("Pull from Accumulated Report by date range").run()
+        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+        assert not at.exception
+        assert p.calls == ["acc@example.com"]
+
+        p.calls.clear()
+        p.reject = False
+        at2 = p.fresh()
+        _button(at2, "Retry failed leads").click().run()
+        assert not at2.exception
+        assert p.calls == ["acc@example.com"]
+        assert not _has_button(at2, "Retry failed leads")
+
+    status = pd.read_excel(acc_path, sheet_name="Accumulated")["Status"].iloc[0]
+    assert str(status).startswith("Uploaded to Enhancio")
