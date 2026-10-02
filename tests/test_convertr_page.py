@@ -6,11 +6,18 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_convertr_account_credentials, save_app_settings
-from core.convertr_sync import save_pending_leads, load_pending_leads
+from core.convertr_sync import save_pending_leads as _save_pending_leads, load_pending_leads
 from core.models import ClientProfile, FieldMapping, ConvertrConfig, ConvertrCampaignMapping
 from core.profile_store import save_profile
 
 _PAGE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pages", "7_Convertr.py")
+
+
+def save_pending_leads(client_name, lead_id_to_row, batch_id="20260101T000000000000"):
+    # These tests stand in for leads saved by an Upload click, so they carry
+    # an upload-batch tag like real ones (an untagged lead counts as an
+    # earlier upload and isn't fetched by default).
+    _save_pending_leads(client_name, lead_id_to_row, batch_id=batch_id)
 
 
 def _make_accumulated(path: str) -> None:
@@ -602,3 +609,94 @@ def test_switching_client_resets_the_jira_message_to_the_new_clients_default(tmp
     next(s for s in at.selectbox if s.label == "Client").set_value("Switch B").run()
     assert not at.exception
     assert at.text_area(key="convertr_jira_message").value.startswith("Hi Bob,")
+
+
+def _upload_csv(at, tmp_path, name, rows):
+    path = tmp_path / name
+    pd.DataFrame(rows).to_csv(path, index=False)
+    with open(path, "rb") as f:
+        at.get("file_uploader")[0].set_value((name, f.read(), "text/csv")).run()
+    next(b for b in at.button if b.label == "Upload to Convertr").click().run()
+    assert not at.exception
+
+
+def test_fetch_decisions_polls_only_the_latest_upload_unless_earlier_ones_are_ticked(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+
+    submit_calls = []
+    polled = []
+
+    def _fake_submit(enterprise, token, publisher_id, campaign_id, form_id, form_data, link_id=""):
+        submit_calls.append(form_data)
+        return {"data": len(submit_calls), "message": "ok"}
+
+    def _fake_get_lead_result(enterprise, token, publisher_id, lead_id):
+        polled.append(lead_id)
+        return {"status": "pending"}
+
+    with patch("core.convertr_client.login", return_value={"access_token": "tok"}),          patch("core.convertr_client.submit_lead_as_publisher", side_effect=_fake_submit),          patch("core.convertr_client.get_lead_result", side_effect=_fake_get_lead_result):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        _upload_csv(at, tmp_path, "first.csv", [{"CID": "120022", "Email": "first@x.com"}])
+        _upload_csv(at, tmp_path, "second.csv", [
+            {"CID": "120022", "Email": "second@x.com"}, {"CID": "120028", "Email": "third@x.com"}])
+        assert len(submit_calls) == 3
+
+        assert any(c.value.startswith("Checking the latest upload: 2 lead(s) (uploaded ") for c in at.caption)
+        include_earlier = at.checkbox(key="convertr_fetch_include_earlier")
+        assert include_earlier.label == "Also check 1 pending lead(s) from earlier uploads"
+
+        next(b for b in at.button if b.label == "Fetch decisions from Convertr").click().run()
+        assert not at.exception
+        assert sorted(polled) == ["2", "3"]
+
+        polled.clear()
+        at.checkbox(key="convertr_fetch_include_earlier").check().run()
+        next(b for b in at.button if b.label == "Fetch decisions from Convertr").click().run()
+        assert not at.exception
+        assert sorted(polled) == ["1", "2", "3"]
+
+
+def test_untagged_pending_leads_from_before_batching_count_as_earlier_uploads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_convertr_account_credentials("Amazon Business EMEA", "me@x.com", "hunter2")
+    _save_pending_leads("Amazon Business EMEA", {"901": {"Email": "legacy@x.com", "CID": "120022"}})
+
+    polled = []
+
+    def _fake_get_lead_result(enterprise, token, publisher_id, lead_id):
+        polled.append(lead_id)
+        return {"status": "pending"}
+
+    with patch("core.convertr_client.login", return_value={"access_token": "tok"}),          patch("core.convertr_client.get_lead_result", side_effect=_fake_get_lead_result):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        assert at.checkbox(key="convertr_fetch_include_earlier").label ==             "Also check 1 pending lead(s) from earlier uploads"
+        next(b for b in at.button if b.label == "Fetch decisions from Convertr").click().run()
+        assert polled == []
+
+        at.checkbox(key="convertr_fetch_include_earlier").check().run()
+        next(b for b in at.button if b.label == "Fetch decisions from Convertr").click().run()
+        assert polled == ["901"]
+
+
+def test_no_earlier_uploads_checkbox_when_every_pending_lead_is_from_the_latest_upload(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _save_profile(str(tmp_path / "accumulated.xlsx"))
+    save_pending_leads("Amazon Business EMEA", {"1": {"Email": "a@x.com", "CID": "120022"}})
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert not any(c.key == "convertr_fetch_include_earlier" for c in at.checkbox)
+    assert any(c.value == "Checking the latest upload: 1 lead(s) (uploaded 01 Jan 2026 00:00)." for c in at.caption)

@@ -5,6 +5,7 @@ import pandas as pd
 
 from core.app_settings import get_shared_root_dir
 from core.atomic_io import atomic_write_json
+from core.upload_batches import split_rows_and_batches, tag_rows
 
 
 def rejection_reason_from_result(result: dict) -> str:
@@ -76,8 +77,19 @@ def load_pending_leads(client_name: str) -> dict[str, dict]:
     all for an accepted lead, so the only reliable source for a decided
     lead's data is what we ourselves submitted -- reconcile polls each of
     these ids via get_lead_result instead of pulling a whole campaign's
-    leads back from Convertr.
+    leads back from Convertr. The upload-batch tag stored with each row is
+    stripped here -- see load_pending_lead_batches.
     """
+    return split_rows_and_batches(_load_raw_pending_leads(client_name))[0]
+
+
+def load_pending_lead_batches(client_name: str) -> dict[str, str]:
+    """{lead_id: the upload batch id it was saved with} for every pending
+    lead -- "" for a lead saved before batch tagging existed."""
+    return split_rows_and_batches(_load_raw_pending_leads(client_name))[1]
+
+
+def _load_raw_pending_leads(client_name: str) -> dict[str, dict]:
     path = _pending_leads_path(client_name)
     if not path or not os.path.isfile(path):
         return {}
@@ -85,12 +97,14 @@ def load_pending_leads(client_name: str) -> dict[str, dict]:
         return json.load(f)
 
 
-def save_pending_leads(client_name: str, lead_id_to_row: dict[str, dict]) -> None:
+def save_pending_leads(client_name: str, lead_id_to_row: dict[str, dict], batch_id: str = "") -> None:
+    """batch_id (core.upload_batches.new_batch_id, one per Upload click) is
+    what lets "Fetch decisions" poll only the latest upload."""
     path = _pending_leads_path(client_name)
     if not path:
         return
-    existing = load_pending_leads(client_name)
-    existing.update({str(lead_id): row for lead_id, row in lead_id_to_row.items()})
+    existing = _load_raw_pending_leads(client_name)
+    existing.update({str(lead_id): row for lead_id, row in tag_rows(lead_id_to_row, batch_id).items()})
     atomic_write_json(path, existing)
 
 
@@ -102,7 +116,7 @@ def remove_pending_leads(client_name: str, lead_ids: list[str]) -> None:
     path = _pending_leads_path(client_name)
     if not path:
         return
-    existing = load_pending_leads(client_name)
+    existing = _load_raw_pending_leads(client_name)
     for lead_id in lead_ids:
         existing.pop(str(lead_id), None)
     atomic_write_json(path, existing)

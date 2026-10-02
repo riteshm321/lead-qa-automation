@@ -3,7 +3,7 @@ import pandas as pd
 from core.app_settings import save_app_settings
 from core.convertr_sync import (
     rejection_reason_from_result, select_rows_for_test_mode, filter_already_uploaded,
-    load_pending_leads, save_pending_leads, remove_pending_leads,
+    load_pending_leads, load_pending_lead_batches, save_pending_leads, remove_pending_leads,
     load_uploaded_emails, save_uploaded_emails, remove_uploaded_emails,
 )
 
@@ -146,3 +146,28 @@ def test_remove_pending_leads_drops_only_the_given_ids(tmp_path, monkeypatch):
     remove_pending_leads("Amazon Business EMEA", ["1", "3"])
 
     assert load_pending_leads("Amazon Business EMEA") == {"2": {"Email": "b@x.com"}}
+
+
+def test_pending_leads_are_tagged_with_their_upload_batch(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    save_pending_leads("Amazon Business EMEA", {"1": {"Email": "a@x.com"}}, batch_id="20261001T090000000000")
+    save_pending_leads("Amazon Business EMEA", {"2": {"Email": "b@x.com"}}, batch_id="20261002T090000000000")
+
+    # The batch tag never leaks into the row itself (that row is what gets
+    # written to Accumulated/Refund).
+    assert load_pending_leads("Amazon Business EMEA") == {"1": {"Email": "a@x.com"}, "2": {"Email": "b@x.com"}}
+    assert load_pending_lead_batches("Amazon Business EMEA") == {
+        "1": "20261001T090000000000", "2": "20261002T090000000000"}
+
+    remove_pending_leads("Amazon Business EMEA", ["1"])
+    assert load_pending_lead_batches("Amazon Business EMEA") == {"2": "20261002T090000000000"}
+
+
+def test_pending_leads_saved_without_a_batch_are_untagged(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+
+    save_pending_leads("Amazon Business EMEA", {"1": {"Email": "legacy@x.com"}})
+    assert load_pending_lead_batches("Amazon Business EMEA") == {"1": ""}

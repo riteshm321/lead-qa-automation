@@ -7,11 +7,20 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core.app_settings import get_clients_dir, save_enhancio_client_id, save_app_settings
-from core.enhancio_sync import save_pending_leads, load_pending_leads, save_uploaded_emails, load_uploaded_emails
+from core.enhancio_sync import (
+    save_pending_leads as _save_pending_leads, load_pending_leads, save_uploaded_emails, load_uploaded_emails,
+)
 from core.models import ClientProfile, FieldMapping, EnhancioConfig, EnhancioAllocationMapping
 from core.profile_store import save_profile
 
 _PAGE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pages", "8_Enhancio.py")
+
+
+def save_pending_leads(client_name, lead_id_to_row, batch_id="20260101T000000000000"):
+    # These tests stand in for leads saved by an Upload click, so they carry
+    # an upload-batch tag like real ones (an untagged lead counts as an
+    # earlier upload and isn't fetched by default).
+    _save_pending_leads(client_name, lead_id_to_row, batch_id=batch_id)
 
 
 def _make_accumulated(path: str) -> None:
@@ -1224,3 +1233,88 @@ def test_switching_client_resets_the_jira_message_to_the_new_clients_default(tmp
     next(s for s in at.selectbox if s.label == "Client").set_value("Switch B").run()
     assert not at.exception
     assert at.text_area(key="enhancio_jira_message").value.startswith("Hi Bob,")
+
+
+def _upload_csv(at, tmp_path, name, rows):
+    path = tmp_path / name
+    pd.DataFrame(rows).to_csv(path, index=False)
+    with open(path, "rb") as f:
+        at.get("file_uploader")[0].set_value((name, f.read(), "text/csv")).run()
+    next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
+    assert not at.exception
+
+
+def test_fetch_decisions_polls_only_the_latest_upload_unless_earlier_ones_are_ticked(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_enhancio_client_id("CID123")
+
+    issued = []
+    polled = []
+
+    def _fake_import_leads(token, allocation_uid, leads):
+        submitted = []
+        for lead in leads:
+            issued.append(f"lead-{len(issued) + 1}")
+            submitted.append({"leadId": issued[-1], "status": "Submitted", "email": lead["Email Address"]})
+        return {"submitted": submitted, "errors": []}
+
+    def _fake_get_lead_status(token, lead_ids):
+        polled.extend(lead_ids)
+        return []  # nothing decided yet
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}),          patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads),          patch("core.enhancio_client.get_lead_status", side_effect=_fake_get_lead_status):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        _upload_csv(at, tmp_path, "first.csv", [{"CID": "120022", "Email": "first@x.com", "First Name": "A"}])
+        _upload_csv(at, tmp_path, "second.csv", [
+            {"CID": "120022", "Email": "second@x.com", "First Name": "B"},
+            {"CID": "120028", "Email": "third@x.com", "First Name": "C"},
+        ])
+        assert issued == ["lead-1", "lead-2", "lead-3"]
+
+        assert any(c.value.startswith("Checking the latest upload: 2 lead(s) (uploaded ") for c in at.caption)
+        assert at.checkbox(key="enhancio_fetch_include_earlier").label ==             "Also check 1 pending lead(s) from earlier uploads"
+
+        next(b for b in at.button if b.label == "Fetch decisions from Enhancio").click().run()
+        assert not at.exception
+        assert sorted(polled) == ["lead-2", "lead-3"]
+
+        polled.clear()
+        at.checkbox(key="enhancio_fetch_include_earlier").check().run()
+        next(b for b in at.button if b.label == "Fetch decisions from Enhancio").click().run()
+        assert not at.exception
+        assert sorted(polled) == ["lead-1", "lead-2", "lead-3"]
+
+
+def test_untagged_pending_leads_from_before_batching_count_as_earlier_uploads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    acc_path = str(tmp_path / "accumulated.xlsx")
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    _make_accumulated(acc_path)
+    _save_profile(acc_path)
+    save_enhancio_client_id("CID123")
+    _save_pending_leads("Amazon Business EMEA", {"legacy-1": {"Email": "legacy@x.com", "CID": "120022"}})
+    save_pending_leads("Amazon Business EMEA", {"new-1": {"Email": "new@x.com", "CID": "120022"}})
+
+    polled = []
+
+    def _fake_get_lead_status(token, lead_ids):
+        polled.extend(lead_ids)
+        return []
+
+    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}),          patch("core.enhancio_client.get_lead_status", side_effect=_fake_get_lead_status):
+        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+        at.run()
+        assert any(c.value == "Checking the latest upload: 1 lead(s) (uploaded 01 Jan 2026 00:00)."
+                   for c in at.caption)
+        next(b for b in at.button if b.label == "Fetch decisions from Enhancio").click().run()
+        assert polled == ["new-1"]
+
+        polled.clear()
+        at.checkbox(key="enhancio_fetch_include_earlier").check().run()
+        next(b for b in at.button if b.label == "Fetch decisions from Enhancio").click().run()
+        assert sorted(polled) == ["legacy-1", "new-1"]

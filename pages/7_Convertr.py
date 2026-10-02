@@ -11,7 +11,8 @@ from core.branding import configure_page
 from core import convertr_client
 from core.convertr_client import ConvertrError
 from core.convertr_sync import (
-    rejection_reason_from_result, load_pending_leads, save_pending_leads, remove_pending_leads,
+    rejection_reason_from_result, load_pending_leads, load_pending_lead_batches, save_pending_leads,
+    remove_pending_leads,
     load_uploaded_emails, save_uploaded_emails, remove_uploaded_emails, filter_already_uploaded,
     select_rows_for_test_mode,
 )
@@ -27,6 +28,7 @@ from core.models import resolve_field_mapping
 from core.profile_store import list_profile_names, load_profile
 from core.ui_components import render_metric_cards, render_status_strip, setup_state
 from core.toast import queue_toast_before_rerun, show_pending_toast
+from core.upload_batches import new_batch_id, render_fetch_scope
 
 _current_user = configure_page("Convertr")
 show_pending_toast()
@@ -204,6 +206,9 @@ def _upload_leads(source_df: pd.DataFrame, test_mode: bool, reupload: bool) -> N
         st.stop()
 
     results = []
+    # One batch id for everything this click sends, so "Fetch decisions"
+    # can default to polling just this upload.
+    _batch_id = new_batch_id()
 
     _send_by_cid, _skip_results, _failed_entries = _plan_sends(source_df, test_mode, reupload)
     results.extend(_skip_results)
@@ -267,7 +272,7 @@ def _upload_leads(source_df: pd.DataFrame, test_mode: bool, reupload: bool) -> N
         # so a retry would resend them as "new," creating real
         # duplicate leads.
         if _cid_newly_pending:
-            save_pending_leads(client_name, _cid_newly_pending)
+            save_pending_leads(client_name, _cid_newly_pending, batch_id=_batch_id)
         if _cid_newly_uploaded_emails:
             save_uploaded_emails(client_name, _cid_newly_uploaded_emails)
     if _send_progress is not None:
@@ -401,13 +406,15 @@ with st.container(border=True):
 with st.container(border=True):
     st.subheader(":material/sync: 2. Reconcile accepted/rejected leads")
     st.caption(
-        "Polls Convertr for every lead uploaded in step 1 that hasn't been resolved yet, and writes accepted "
+        "Polls Convertr for the leads uploaded in step 1 that haven't been resolved yet (the latest upload by "
+        "default), and writes accepted "
         "ones into the Accumulated tab and rejected ones into the Refund tab (with Convertr's reason) — "
         "matched by column header, same as any other lead write, with that day's date under Date and each "
         "lead's own CID from the leadfile it was uploaded from. A lead still mid-QA is left pending and "
         "checked again on the next sync; once written, it's never fetched or written again."
     )
 
+    _lead_ids_to_fetch = render_fetch_scope("convertr", load_pending_lead_batches(client_name))
     if st.button("Fetch decisions from Convertr"):
         _creds = get_convertr_account_credentials(client_name)
         if not _creds["username"] or not _creds["password"]:
@@ -421,7 +428,8 @@ with st.container(border=True):
             render_error(exc)
             st.stop()
 
-        pending = load_pending_leads(client_name)
+        _all_pending = load_pending_leads(client_name)
+        pending = {_id: _all_pending[_id] for _id in _lead_ids_to_fetch if _id in _all_pending}
         accepted_rows, rejected_rows = [], []
         # Per-lead try/except -- this used to wrap the WHOLE loop in one
         # try/except, so a single pending lead that became permanently

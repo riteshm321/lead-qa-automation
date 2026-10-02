@@ -17,7 +17,8 @@ from core import enhancio_client
 from core.enhancio_client import EnhancioError
 from core.errors import render_error, render_problem
 from core.enhancio_sync import (
-    rejection_reason_from_status_entry, load_pending_leads, save_pending_leads, remove_pending_leads,
+    rejection_reason_from_status_entry, load_pending_leads, load_pending_lead_batches, save_pending_leads,
+    remove_pending_leads,
     load_uploaded_emails, save_uploaded_emails, remove_uploaded_emails, clear_uploaded_emails,
     filter_already_uploaded, select_rows_for_test_mode, format_enhancio_field_value, is_accepted_submission,
 )
@@ -35,6 +36,7 @@ from core.models import resolve_field_mapping
 from core.profile_store import list_profile_names, load_profile
 from core.toast import queue_toast_before_rerun, show_pending_toast
 from core.ui_components import render_empty_state, render_metric_cards, render_status_strip, setup_state
+from core.upload_batches import new_batch_id, render_fetch_scope
 
 _current_user = configure_page("Enhancio")
 show_pending_toast()
@@ -238,6 +240,9 @@ def _upload_leads(
 
     results = []
     _newly_uploaded_emails_by_allocation: dict[str, set[str]] = defaultdict(set)
+    # One batch id for everything this click sends, so "Fetch decisions"
+    # can default to polling just this upload.
+    _batch_id = new_batch_id()
 
     _send_by_allocation, _skip_results, _failed_entries = _plan_sends(
         source_df, leadfile_mapping, test_mode, reupload,
@@ -395,7 +400,7 @@ def _upload_leads(
         # them as "new," creating real duplicate leads. Confirmed real
         # by the audit.
         if _allocation_newly_pending:
-            save_pending_leads(client_name, _allocation_newly_pending)
+            save_pending_leads(client_name, _allocation_newly_pending, batch_id=_batch_id)
         if _newly_uploaded_emails_by_allocation[allocation_uid]:
             save_uploaded_emails(
                 client_name, allocation_uid, _newly_uploaded_emails_by_allocation[allocation_uid])
@@ -693,17 +698,20 @@ with st.container(border=True):
 with st.container(border=True):
     st.subheader(":material/sync: 2. Reconcile accepted/rejected leads")
     st.caption(
-        "Polls Enhancio for every lead uploaded in step 1 that hasn't been resolved yet, and writes accepted "
+        "Polls Enhancio for the leads uploaded in step 1 that haven't been resolved yet (the latest upload by "
+        "default), and writes accepted "
         "ones into the Accumulated tab and rejected ones into the Refund tab (with Enhancio's own reason) — "
         "matched by column header, same as any other lead write, with that day's date under Date and each "
         "lead's own CID from the leadfile it was uploaded from. A lead still mid-processing is left pending "
         "and checked again on the next sync; once written, it's never fetched or written again."
     )
 
+    _lead_ids_to_fetch = render_fetch_scope("enhancio", load_pending_lead_batches(client_name))
     if st.button("Fetch decisions from Enhancio"):
         _token = _get_token()
 
-        pending = load_pending_leads(client_name)
+        _all_pending = load_pending_leads(client_name)
+        pending = {_id: _all_pending[_id] for _id in _lead_ids_to_fetch if _id in _all_pending}
         accepted_rows, rejected_rows = [], []
         try:
             with st.spinner(f"Checking {len(pending)} pending lead(s)..."):
