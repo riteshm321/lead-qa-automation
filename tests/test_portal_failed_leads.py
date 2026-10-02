@@ -331,7 +331,7 @@ def _has_button(at: AppTest, label: str) -> bool:
     return any(b.label == label for b in at.button)
 
 
-@pytest.mark.parametrize("portal", ["integrate"])
+@pytest.mark.parametrize("portal", ["convertr", "integrate"])
 def test_failed_leads_persist_download_and_retry(portal, tmp_path, monkeypatch):
     with _Portal(portal, tmp_path, monkeypatch) as p:
         at = p.fresh()
@@ -367,7 +367,7 @@ def test_failed_leads_persist_download_and_retry(portal, tmp_path, monkeypatch):
         assert not _has_button(p.fresh(), "Retry failed leads")
 
 
-@pytest.mark.parametrize("portal", ["integrate"])
+@pytest.mark.parametrize("portal", ["convertr", "integrate"])
 def test_retry_ignores_test_mode_and_a_lead_that_fails_again_stays_listed(portal, tmp_path, monkeypatch):
     with _Portal(portal, tmp_path, monkeypatch) as p:
         at = p.fresh()
@@ -380,7 +380,7 @@ def test_retry_ignores_test_mode_and_a_lead_that_fails_again_stays_listed(portal
         assert _has_button(at, "Retry failed leads")
 
 
-@pytest.mark.parametrize("portal", ["integrate"])
+@pytest.mark.parametrize("portal", ["convertr", "integrate"])
 def test_clear_upload_summary_keeps_the_failed_list_and_clear_failed_list_empties_it(
         portal, tmp_path, monkeypatch):
     with _Portal(portal, tmp_path, monkeypatch) as p:

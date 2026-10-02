@@ -17,6 +17,10 @@ from core.convertr_sync import (
 )
 from core.errors import render_error, render_problem
 from core.excel_io import read_leadfile, append_leads, dataframe_to_excel_bytes
+from core.failed_leads import (
+    failed_leads_memory, failed_leads_source_df, load_failed_leads, make_failed_entry, pop_retry_request,
+    render_failed_leads_section, update_failed_leads,
+)
 from core import jira_client
 from core.jira_client import JiraError
 from core.models import resolve_field_mapping
@@ -105,6 +109,175 @@ render_status_strip([
     ("Jira ticket", setup_state(bool(profile.jira_ticket_key), required=False)),
 ])
 
+
+def _plan_sends(
+        source_df: pd.DataFrame, test_mode: bool, reupload: bool,
+) -> tuple[dict[str, pd.DataFrame], list[dict], list]:
+    """Exactly which leads would be sent for which CID, applying
+    per-client dedup and test mode -- the single source of truth both
+    the preview below and the actual "Upload to Convertr" button use,
+    so they can never disagree about what's about to go out. Grouped
+    by CID (not campaign_id), matching the leadfile's own routing key
+    -- a campaign can be shared by more than one CID.
+    Returns ({cid: send_df}, [skip/error result dicts], [failed-lead
+    entries for core.failed_leads, one per "Failed" result]).
+    """
+    cid_column = _leadfile_mapping.cid
+    failed_entries: list = []
+    skip_results: list[dict] = []
+
+    already_uploaded = load_uploaded_emails(client_name)
+    upload_df, dup_df = filter_already_uploaded(source_df, _leadfile_mapping.email, already_uploaded)
+    if reupload:
+        upload_df = pd.concat([upload_df, dup_df])
+        dup_df = dup_df.iloc[0:0]
+    for _, lead in dup_df.iterrows():
+        skip_results.append({
+            "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
+            "Result": "Skipped (already uploaded previously)",
+        })
+
+    if test_mode:
+        cid_to_campaign_id = {cid: m.campaign_id for cid, m in _campaign_by_cid.items()}
+        send_df, skipped_df = select_rows_for_test_mode(upload_df, cid_column, cid_to_campaign_id)
+        for _, lead in skipped_df.iterrows():
+            _cid = str(lead[cid_column])
+            skip_results.append({
+                "CID": _cid, "Email": lead.get(_leadfile_mapping.email, ""),
+                "Result": f"Skipped (test mode — campaign {cid_to_campaign_id[_cid]} "
+                          "already tested via another CID)",
+            })
+        # A CID with no campaign mapping at all is excluded from both
+        # send_df/skipped_df above (test mode has nothing to do with
+        # that) -- keep those rows in play so they still get the
+        # correct "No Convertr campaign mapped" error below, not
+        # silently vanish.
+        unmapped_df = upload_df[~upload_df[cid_column].astype(str).isin(cid_to_campaign_id)]
+        upload_df = pd.concat([send_df, unmapped_df])
+
+    send_by_cid: dict[str, pd.DataFrame] = {}
+    for cid, group in upload_df.groupby(upload_df[cid_column].astype(str)):
+        mapping = _campaign_by_cid.get(cid)
+        if mapping is None:
+            for _, lead in group.iterrows():
+                skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
+                                 "Result": "Failed — No Convertr campaign mapped for this CID"})
+                failed_entries.append(make_failed_entry(
+                    lead.to_dict(), lead.get(_leadfile_mapping.email, ""), "No Convertr campaign mapped for this CID"))
+            continue
+        if not mapping.global_form_id:
+            for _, lead in group.iterrows():
+                skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
+                                 "Result": f"Failed — No Form ID saved for campaign {mapping.campaign_id}"})
+                failed_entries.append(make_failed_entry(
+                    lead.to_dict(), lead.get(_leadfile_mapping.email, ""),
+                    f"No Form ID saved for campaign {mapping.campaign_id}"))
+            continue
+        send_by_cid[cid] = group
+
+    return send_by_cid, skip_results, failed_entries
+
+
+def _upload_leads(source_df: pd.DataFrame, test_mode: bool, reupload: bool) -> None:
+    """Logs in, sends every lead _plan_sends picks, and records every
+    outcome: a lead Convertr accepted goes to the pending and
+    already-uploaded stores (only then -- a failed lead must stay
+    re-sendable), a failed one to the persistent failed-leads list with
+    its full original row, and the results table to session_state.
+    Shared by "Upload to Convertr" and "Retry failed leads".
+    """
+    _creds = get_convertr_account_credentials(client_name)
+    if not _creds["username"] or not _creds["password"]:
+        render_problem("Save this client's Convertr account username/password on Client Setup first.",
+                       "It's under **Client Setup → Delivery → Convertr Upload**.")
+        st.stop()
+    try:
+        with st.spinner("Logging in to Convertr..."):
+            _token = convertr_client.login(_convertr.enterprise, _creds["username"], _creds["password"])["access_token"]
+    except (ConvertrError, requests.exceptions.RequestException, KeyError) as exc:
+        # Only ConvertrError was caught before -- a network hiccup
+        # (requests.exceptions.RequestException, e.g. a timeout/DNS/
+        # connection drop) or an unexpected response shape missing
+        # "access_token" (KeyError) crashed the whole page with a raw
+        # traceback instead of this same friendly, logged error.
+        render_error(exc)
+        st.stop()
+
+    results = []
+
+    _send_by_cid, _skip_results, _failed_entries = _plan_sends(source_df, test_mode, reupload)
+    results.extend(_skip_results)
+    # Leads skipped as already accepted are at Convertr per this tool's
+    # own record -- nothing left to retry for them.
+    _succeeded_emails: set[str] = {
+        str(r["Email"]) for r in _skip_results if r["Result"].startswith("Skipped (already uploaded")
+    }
+
+    # A single live API call per lead with no progress indicator made a
+    # batch of 50-100 leads look hung -- every other slow/multi-step
+    # operation on this page (or Run Check's Finalize) already gives
+    # some form of feedback while it works.
+    _total_to_send = sum(len(group) for group in _send_by_cid.values())
+    _send_progress = st.progress(0.0, text=f"Uploading 0 / {_total_to_send} lead(s) to Convertr...") \
+        if _total_to_send else None
+    _sent_so_far = 0
+
+    for cid, group in _send_by_cid.items():
+        mapping = _campaign_by_cid[cid]
+        _cid_newly_pending: dict[str, dict] = {}
+        _cid_newly_uploaded_emails: set[str] = set()
+        for _, lead in group.iterrows():
+            form_data = {
+                convertr_field: str(lead.get(leadfile_col, "") or "")
+                for leadfile_col, convertr_field in _convertr.field_mapping.items()
+            }
+            email = lead.get(_leadfile_mapping.email, "")
+            try:
+                response = convertr_client.submit_lead_as_publisher(
+                    _convertr.enterprise, _token, _convertr.publisher_id, mapping.campaign_id,
+                    mapping.global_form_id, form_data, link_id=mapping.campaign_link_id,
+                )
+                lead_id = str(response.get("data"))
+                # The original leadfile row, kept exactly as uploaded --
+                # a "valid" lead's own get_lead_result comes back with
+                # NO data at all, so this is the only reliable source
+                # for that lead's fields (CID included) once reconcile
+                # writes it to Accumulated/Refund.
+                _cid_newly_pending[lead_id] = {col: lead.get(col, "") for col in source_df.columns}
+                _cid_newly_uploaded_emails.add(str(email))
+                results.append({"CID": cid, "Email": email, "Result": f"Uploaded — Lead ID {lead_id}"})
+                _succeeded_emails.add(str(email))
+            except ConvertrError as exc:
+                results.append({"CID": cid, "Email": email, "Result": f"Failed — {exc}"})
+                _failed_entries.append(make_failed_entry(lead.to_dict(), email, str(exc)))
+            _sent_so_far += 1
+            if _send_progress is not None:
+                _send_progress.progress(
+                    _sent_so_far / _total_to_send,
+                    text=f"Uploading {_sent_so_far} / {_total_to_send} lead(s) to Convertr...")
+
+        # Persist THIS cid group's results immediately, not batched to
+        # the end of the whole multi-CID loop -- previously an
+        # uncaught exception anywhere outside the per-lead try/except
+        # (e.g. in the per-row form_data construction) could abort the
+        # handler before the single end-of-loop save, discarding
+        # tracking for every EARLIER CID group that had already
+        # succeeded -- those leads exist at Convertr with real lead
+        # IDs, but this tool would have no record they were ever sent,
+        # so a retry would resend them as "new," creating real
+        # duplicate leads.
+        if _cid_newly_pending:
+            save_pending_leads(client_name, _cid_newly_pending)
+        if _cid_newly_uploaded_emails:
+            save_uploaded_emails(client_name, _cid_newly_uploaded_emails)
+    if _send_progress is not None:
+        _send_progress.empty()
+
+    update_failed_leads("convertr", client_name, _failed_entries, _succeeded_emails,
+                        memory=failed_leads_memory("convertr"))
+    st.session_state["convertr_upload_results"] = pd.DataFrame(results)
+
+
 with st.container(border=True):
     st.subheader(":material/upload: 1. Upload leads to Convertr")
     st.caption(
@@ -161,64 +334,8 @@ with st.container(border=True):
                      "resend leads Convertr already accepted; that creates duplicate submissions.",
             )
 
-        def _plan_sends(source_df: pd.DataFrame) -> tuple[dict[str, pd.DataFrame], list[dict]]:
-            """Exactly which leads would be sent for which CID, applying
-            per-client dedup and test mode -- the single source of truth both
-            the preview below and the actual "Upload to Convertr" button use,
-            so they can never disagree about what's about to go out. Grouped
-            by CID (not campaign_id), matching the leadfile's own routing key
-            -- a campaign can be shared by more than one CID.
-            Returns ({cid: send_df}, [skip/error result dicts]).
-            """
-            skip_results: list[dict] = []
 
-            already_uploaded = load_uploaded_emails(client_name)
-            upload_df, dup_df = filter_already_uploaded(source_df, _leadfile_mapping.email, already_uploaded)
-            if _reupload_duplicates:
-                upload_df = pd.concat([upload_df, dup_df])
-                dup_df = dup_df.iloc[0:0]
-            for _, lead in dup_df.iterrows():
-                skip_results.append({
-                    "CID": lead.get(cid_column, ""), "Email": lead.get(_leadfile_mapping.email, ""),
-                    "Result": "Skipped (already uploaded previously)",
-                })
-
-            if _test_mode:
-                cid_to_campaign_id = {cid: m.campaign_id for cid, m in _campaign_by_cid.items()}
-                send_df, skipped_df = select_rows_for_test_mode(upload_df, cid_column, cid_to_campaign_id)
-                for _, lead in skipped_df.iterrows():
-                    _cid = str(lead[cid_column])
-                    skip_results.append({
-                        "CID": _cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                        "Result": f"Skipped (test mode — campaign {cid_to_campaign_id[_cid]} "
-                                  "already tested via another CID)",
-                    })
-                # A CID with no campaign mapping at all is excluded from both
-                # send_df/skipped_df above (test mode has nothing to do with
-                # that) -- keep those rows in play so they still get the
-                # correct "No Convertr campaign mapped" error below, not
-                # silently vanish.
-                unmapped_df = upload_df[~upload_df[cid_column].astype(str).isin(cid_to_campaign_id)]
-                upload_df = pd.concat([send_df, unmapped_df])
-
-            send_by_cid: dict[str, pd.DataFrame] = {}
-            for cid, group in upload_df.groupby(upload_df[cid_column].astype(str)):
-                mapping = _campaign_by_cid.get(cid)
-                if mapping is None:
-                    for _, lead in group.iterrows():
-                        skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                                         "Result": "Failed — No Convertr campaign mapped for this CID"})
-                    continue
-                if not mapping.global_form_id:
-                    for _, lead in group.iterrows():
-                        skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                                         "Result": f"Failed — No Form ID saved for campaign {mapping.campaign_id}"})
-                    continue
-                send_by_cid[cid] = group
-
-            return send_by_cid, skip_results
-
-        _preview_send_by_cid, _preview_skip_results = _plan_sends(leads_df)
+        _preview_send_by_cid, _preview_skip_results, _ = _plan_sends(leads_df, _test_mode, _reupload_duplicates)
         with st.expander(
             f"Preview leads to send ({sum(len(df) for df in _preview_send_by_cid.values())} lead(s) "
             f"across {len(_preview_send_by_cid)} CID(s))",
@@ -245,87 +362,23 @@ with st.container(border=True):
                 )
 
         if st.button("Upload to Convertr", type="primary"):
-            _creds = get_convertr_account_credentials(client_name)
-            if not _creds["username"] or not _creds["password"]:
-                render_problem("Save this client's Convertr account username/password on Client Setup first.",
-                               "It's under **Client Setup → Delivery → Convertr Upload**.")
-                st.stop()
-            try:
-                with st.spinner("Logging in to Convertr..."):
-                    _token = convertr_client.login(_convertr.enterprise, _creds["username"], _creds["password"])["access_token"]
-            except (ConvertrError, requests.exceptions.RequestException, KeyError) as exc:
-                # Only ConvertrError was caught before -- a network hiccup
-                # (requests.exceptions.RequestException, e.g. a timeout/DNS/
-                # connection drop) or an unexpected response shape missing
-                # "access_token" (KeyError) crashed the whole page with a raw
-                # traceback instead of this same friendly, logged error.
-                render_error(exc)
-                st.stop()
+            _upload_leads(leads_df, _test_mode, _reupload_duplicates)
 
-            results = []
-
-            _send_by_cid, _skip_results = _plan_sends(leads_df)
-            results.extend(_skip_results)
-
-            # A single live API call per lead with no progress indicator made a
-            # batch of 50-100 leads look hung -- every other slow/multi-step
-            # operation on this page (or Run Check's Finalize) already gives
-            # some form of feedback while it works.
-            _total_to_send = sum(len(group) for group in _send_by_cid.values())
-            _send_progress = st.progress(0.0, text=f"Uploading 0 / {_total_to_send} lead(s) to Convertr...") \
-                if _total_to_send else None
-            _sent_so_far = 0
-
-            for cid, group in _send_by_cid.items():
-                mapping = _campaign_by_cid[cid]
-                _cid_newly_pending: dict[str, dict] = {}
-                _cid_newly_uploaded_emails: set[str] = set()
-                for _, lead in group.iterrows():
-                    form_data = {
-                        convertr_field: str(lead.get(leadfile_col, "") or "")
-                        for leadfile_col, convertr_field in _convertr.field_mapping.items()
-                    }
-                    email = lead.get(_leadfile_mapping.email, "")
-                    try:
-                        response = convertr_client.submit_lead_as_publisher(
-                            _convertr.enterprise, _token, _convertr.publisher_id, mapping.campaign_id,
-                            mapping.global_form_id, form_data, link_id=mapping.campaign_link_id,
-                        )
-                        lead_id = str(response.get("data"))
-                        # The original leadfile row, kept exactly as uploaded --
-                        # a "valid" lead's own get_lead_result comes back with
-                        # NO data at all, so this is the only reliable source
-                        # for that lead's fields (CID included) once reconcile
-                        # writes it to Accumulated/Refund.
-                        _cid_newly_pending[lead_id] = {col: lead.get(col, "") for col in leads_df.columns}
-                        _cid_newly_uploaded_emails.add(str(email))
-                        results.append({"CID": cid, "Email": email, "Result": f"Uploaded — Lead ID {lead_id}"})
-                    except ConvertrError as exc:
-                        results.append({"CID": cid, "Email": email, "Result": f"Failed — {exc}"})
-                    _sent_so_far += 1
-                    if _send_progress is not None:
-                        _send_progress.progress(
-                            _sent_so_far / _total_to_send,
-                            text=f"Uploading {_sent_so_far} / {_total_to_send} lead(s) to Convertr...")
-
-                # Persist THIS cid group's results immediately, not batched to
-                # the end of the whole multi-CID loop -- previously an
-                # uncaught exception anywhere outside the per-lead try/except
-                # (e.g. in the per-row form_data construction) could abort the
-                # handler before the single end-of-loop save, discarding
-                # tracking for every EARLIER CID group that had already
-                # succeeded -- those leads exist at Convertr with real lead
-                # IDs, but this tool would have no record they were ever sent,
-                # so a retry would resend them as "new," creating real
-                # duplicate leads.
-                if _cid_newly_pending:
-                    save_pending_leads(client_name, _cid_newly_pending)
-                if _cid_newly_uploaded_emails:
-                    save_uploaded_emails(client_name, _cid_newly_uploaded_emails)
-            if _send_progress is not None:
-                _send_progress.empty()
-
-            st.session_state["convertr_upload_results"] = pd.DataFrame(results)
+    if pop_retry_request("convertr"):
+        # Test mode is deliberately not applied -- a retry sends every
+        # stored failed lead. Dedup still is, so a lead accepted since (e.g.
+        # by a teammate) is skipped rather than resent.
+        _retry_df = failed_leads_source_df(
+            load_failed_leads("convertr", client_name, failed_leads_memory("convertr")))
+        if not _retry_df.empty:
+            if not _leadfile_mapping or not _leadfile_mapping.cid or not _leadfile_mapping.email:
+                render_problem("This client has no Convertr leadfile mapping, so the failed leads can't be retried.",
+                               "Fix it under Client Setup → Delivery → Convertr Upload.")
+            elif not {_leadfile_mapping.cid, _leadfile_mapping.email} <= set(_retry_df.columns):
+                render_problem("The stored failed leads don't have this client's CID/Email columns to retry by.",
+                               "Download them, fix the file, and upload it instead.")
+            else:
+                _upload_leads(_retry_df, test_mode=False, reupload=False)
 
     if st.session_state.get("convertr_upload_results") is not None:
         _results_df = st.session_state["convertr_upload_results"]
@@ -338,6 +391,12 @@ with st.container(border=True):
             ("Skipped", _skipped, "skip_next"),
         ])
         st.dataframe(_results_df, hide_index=True)
+        # Clears only this summary -- the failed-leads list below has its
+        # own Clear button.
+        st.button("Clear upload summary", key="convertr_clear_summary", icon=":material/clear_all:",
+                  on_click=lambda: st.session_state.pop("convertr_upload_results", None))
+
+    render_failed_leads_section("convertr", "Convertr", client_name)
 
 with st.container(border=True):
     st.subheader(":material/sync: 2. Reconcile accepted/rejected leads")
