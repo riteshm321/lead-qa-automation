@@ -187,9 +187,8 @@ def test_pending_leads_round_trip(tmp_path, monkeypatch):
 
 
 def test_save_pending_leads_serializes_timestamp_and_nan_values(tmp_path, monkeypatch):
-    # Regression test: a row pulled from a re-read Excel sheet (the
-    # Enhancio page's "pull from Accumulated Report" mode) carries real
-    # pd.Timestamp/NaN values -- json.dump can't serialize those at all,
+    # Regression test: a row read from an uploaded .xlsx leadfile can
+    # carry real pd.Timestamp/NaN values -- json.dump can't serialize those at all,
     # which crashed the whole upload after Enhancio had already accepted
     # the lead.
     monkeypatch.chdir(tmp_path)

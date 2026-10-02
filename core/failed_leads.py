@@ -6,7 +6,7 @@ of living only in the transient upload results table.
 Stored on disk under the shared root as
 <root>/<portal>_failed_leads/<client>.json, next to the portals' own
 pending/uploaded-email stores, as {key: entry} where key is the lead's
-normalized email and entry is {"row": {...}, "reason": str, "meta": {...}}.
+normalized email and entry is {"row": {...}, "reason": str}.
 A `memory` dict (the page passes a st.session_state-backed one) mirrors it
 and is the only store when no shared root is configured.
 """
@@ -46,7 +46,7 @@ def _json_safe_value(value):
     return value
 
 
-def make_failed_entry(row: dict, email, reason: str, meta: dict | None = None) -> tuple[str, dict]:
+def make_failed_entry(row: dict, email, reason: str) -> tuple[str, dict]:
     """(key, entry) for one failed lead. A lead with no email can't be
     matched against a later success, so it's keyed by its own content."""
     safe_row = {str(col): _json_safe_value(value) for col, value in row.items() if col != FAILURE_REASON_COLUMN}
@@ -54,7 +54,7 @@ def make_failed_entry(row: dict, email, reason: str, meta: dict | None = None) -
     if not key:
         digest = hashlib.sha1(json.dumps(safe_row, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
         key = f"(no email) {digest}"
-    return key, {"row": safe_row, "reason": str(reason), "meta": dict(meta or {})}
+    return key, {"row": safe_row, "reason": str(reason)}
 
 
 def _path(portal: str, client_name: str) -> str:

@@ -1,4 +1,3 @@
-import datetime
 import os
 from unittest.mock import patch
 
@@ -364,66 +363,6 @@ def test_upload_forces_industry_to_the_fixed_value_for_covered_cids(tmp_path, mo
         assert not at.exception
 
     assert captured_leads["leads"][0]["Industry"] == "All"
-
-
-def _make_accumulated_with_status(path: str, rows: list[dict]) -> None:
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Accumulated"
-    ws.append(["Date", "CID", "Email", "First Name", "Last Name", "Company", "Status"])
-    for row in rows:
-        ws.append([
-            row.get("Date"), row["CID"], row["Email"], row.get("First Name", ""),
-            row.get("Last Name", ""), row.get("Company", ""), row.get("Status", ""),
-        ])
-    wb.create_sheet("Refund").append(
-        ["Date", "CID", "Email", "First Name", "Last Name", "Company", "Refund Reason"])
-    wb.save(path)
-
-
-def test_pull_from_accumulated_report_filters_by_date_range_and_stamps_status(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
-    today = datetime.date.today()
-    yesterday = today - datetime.timedelta(days=1)
-    too_old = today - datetime.timedelta(days=10)
-    _make_accumulated_with_status(acc_path, [
-        {"Date": yesterday, "CID": "120022", "Email": "in_range@x.com",
-         "First Name": "A", "Last Name": "One", "Company": "Acme"},
-        {"Date": too_old, "CID": "120022", "Email": "too_old@x.com",
-         "First Name": "B", "Last Name": "Two", "Company": "Acme"},
-    ])
-    _save_profile(acc_path)
-    save_enhancio_client_id("CID123")
-
-    def _fake_import_leads(token, allocation_uid, leads):
-        return {"submitted": [
-            {"leadId": f"lead-{i}", "status": "Submitted", "email": lead["Email Address"]}
-            for i, lead in enumerate(leads)
-        ], "errors": []}
-
-    with patch("core.enhancio_client.get_access_token", return_value={"access_token": "tok"}), \
-         patch("core.enhancio_client.import_leads", side_effect=_fake_import_leads):
-        at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-        at.run()
-        next(s for s in at.selectbox if s.label == "Client").set_value("Amazon Business EMEA").run()
-        at.radio(key="enhancio_lead_source").set_value("Pull from Accumulated Report by date range").run()
-        at.date_input(key="enhancio_range_start").set_value(yesterday).run()
-        at.date_input(key="enhancio_range_end").set_value(today).run()
-        next(b for b in at.button if b.label == "Upload to Enhancio").click().run()
-        assert not at.exception
-
-    results_df = at.session_state["enhancio_upload_results"]
-    assert results_df["Result"].str.startswith("Uploaded").sum() == 1
-    assert "in_range@x.com" in results_df["Email"].values
-    assert "too_old@x.com" not in results_df["Email"].values
-
-    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
-    status = accumulated_df.loc[accumulated_df["Email"] == "in_range@x.com", "Status"].iloc[0]
-    assert status.startswith("Uploaded to Enhancio")
-    old_status = accumulated_df.loc[accumulated_df["Email"] == "too_old@x.com", "Status"].iloc[0]
-    assert old_status == "" or pd.isna(old_status)
 
 
 def test_warns_when_no_client_has_enhancio_enabled(tmp_path, monkeypatch):
@@ -1185,23 +1124,17 @@ def test_enhancio_upload_summary_uses_icon_metric_cards(tmp_path, monkeypatch):
         ":material/check_circle:", ":material/error:", ":material/skip_next:"]
 
 
-def test_enhancio_empty_date_range_and_preview_download_use_icons(tmp_path, monkeypatch):
+def test_enhancio_preview_download_uses_icons(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
     save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
-    _make_accumulated(acc_path)  # header row only -- no leads on any date
+    _make_accumulated(acc_path)
     _save_profile(acc_path)
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
     assert any(c.value.startswith(":material/confirmation_number: No Jira ticket configured") for c in at.caption)
 
-    at.radio(key="enhancio_lead_source").set_value("Pull from Accumulated Report by date range").run()
-    assert not at.exception
-    assert any(c.value.startswith(":material/event_busy: No leads in the Accumulated Report between")
-               for c in at.caption)
-
-    at.radio(key="enhancio_lead_source").set_value("Upload a file").run()
     leads_csv = tmp_path / "leads.csv"
     pd.DataFrame([{"CID": "120022", "Email": "a@x.com", "First Name": "A", "Last Name": "One",
                    "Company": "Acme"}]).to_csv(leads_csv, index=False)
@@ -1211,6 +1144,18 @@ def test_enhancio_empty_date_range_and_preview_download_use_icons(tmp_path, monk
     download = next(d for d in at.download_button if d.key == "enhancio_preview_download")
     assert download.proto.label == "Download these leads (.xlsx)"
     assert download.proto.icon == ":material/download:"
+
+
+def test_upload_a_file_is_the_only_lead_source(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _save_profile(str(tmp_path / "accumulated.xlsx"))
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert not any(r.key == "enhancio_lead_source" for r in at.radio)
+    assert len(at.date_input) == 0
+    assert len(at.get("file_uploader")) >= 1
 
 
 def test_switching_client_resets_the_jira_message_to_the_new_clients_default(tmp_path, monkeypatch):

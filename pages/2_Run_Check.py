@@ -714,9 +714,8 @@ if "run_result" in st.session_state:
     #
     # EXCEPT a Box Tracker client (IBM APAC, the only one today): its real
     # approval pipeline is Finalize -> Accumulated -> Box Tracker (client
-    # approval) -> Enhancio, pulled later from Accumulated by date range
-    # (see pages/8_Enhancio.py's "Pull from Accumulated Report by date
-    # range") -- never fed from Finalize's own diverted valid-leads output
+    # approval) -> Enhancio, uploaded later as a file on pages/8_Enhancio.py
+    # -- never fed from Finalize's own diverted valid-leads output
     # at all. Diverting it away here just meant it silently never reached
     # Accumulated. Confirmed by the user: IBM APAC needs Finalize to write
     # straight to Accumulated like any plain client, Enhancio enabled or not.

@@ -9,7 +9,7 @@ from openpyxl.worksheet.table import Table
 
 from core.excel_io import (
     append_leads, guess_target_field_mapping, find_header_row, read_sheet_headers, route_leads_by_cid,
-    set_status_for_emails, set_status_by_row_index,
+    set_status_by_row_index,
 )
 from core.models import FieldMapping, LeadTemplateColumnRule, LeadTemplateMappingConfig, LeadTemplateTab
 
@@ -1144,55 +1144,13 @@ def test_read_sheet_headers_on_genuinely_empty_sheet_returns_empty_list_not_inde
     assert read_sheet_headers(path, "Blank", header_row) == []
 
 
-def test_set_status_for_emails_matches_by_email_not_row_position(tmp_path):
-    path = str(tmp_path / "accumulated.xlsx")
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Accumulated"
-    ws.append(["Email", "Status"])
-    ws.append(["a@x.com", ""])
-    ws.append(["b@x.com", ""])
-    ws.append(["c@x.com", "Untouched"])
-    wb.save(path)
-
-    set_status_for_emails(path, "Accumulated", "Status", "Email", {"a@x.com", "b@x.com"}, "Uploaded to Enhancio")
-
-    wb2 = openpyxl.load_workbook(path)
-    ws2 = wb2["Accumulated"]
-    assert ws2.cell(row=2, column=2).value == "Uploaded to Enhancio"
-    assert ws2.cell(row=3, column=2).value == "Uploaded to Enhancio"
-    assert ws2.cell(row=4, column=2).value == "Untouched"
-
-
-def test_set_status_for_emails_preserves_external_link_parts_byte_for_byte(tmp_path):
-    # Regression test for a real production incident: Box Tracker's "Send
-    # leads for approval" (which stamps the Accumulated Report's Status
-    # column via this function) corrupted the file -- Excel offered to
-    # "recover as much as we can" and reported repaired external-formula-
-    # reference records on next open. Unlike append_leads, this function
-    # had no external-link-parts preservation at all.
-    path = str(tmp_path / "accumulated.xlsx")
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Accumulated"
-    ws.append(["Email", "Status"])
-    ws.append(["a@x.com", ""])
-    wb.save(path)
-
-    fake_external_link = b"<not real xml, just needs to round-trip untouched>"
-    with zipfile.ZipFile(path, "a", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("xl/externalLinks/externalLink1.xml", fake_external_link)
-
-    set_status_for_emails(path, "Accumulated", "Status", "Email", {"a@x.com"}, "Uploaded to Enhancio")
-
-    with zipfile.ZipFile(path, "r") as zf:
-        assert zf.read("xl/externalLinks/externalLink1.xml") == fake_external_link
-
-
 def test_set_status_by_row_index_preserves_external_link_parts_byte_for_byte(tmp_path):
-    # Same real incident as above -- Box Tracker's checkbox-driven status
-    # updates (manual marking, Lead Template clearing, reconciliation) all
-    # go through this function instead, with the identical gap.
+    # Regression test for a real production incident: Box Tracker's
+    # checkbox-driven status updates (manual marking, Lead Template
+    # clearing, reconciliation) go through this function, and it used to
+    # corrupt the file -- Excel offered to "recover as much as we can" and
+    # reported repaired external-formula-reference records on next open,
+    # since it had no external-link-parts preservation at all.
     path = str(tmp_path / "accumulated.xlsx")
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -1422,17 +1380,6 @@ def test_read_sheet_headers_reads_the_first_row_for_csv(tmp_path):
     path.write_text("Email_Address,First_Name\na@x.com,A\n", encoding="utf-8")
 
     assert read_sheet_headers(str(path), "(CSV file)") == ["Email_Address", "First_Name"]
-
-
-def test_set_status_for_emails_matches_by_email_for_csv(tmp_path):
-    path = tmp_path / "accumulated.csv"
-    path.write_text("Email,Status\na@x.com,\nb@x.com,\nc@x.com,Untouched\n", encoding="utf-8")
-
-    set_status_for_emails(str(path), "Accumulated", "Status", "Email", {"a@x.com", "b@x.com"},
-                           "Uploaded to Enhancio")
-
-    result = pd.read_csv(path, dtype=str, keep_default_na=False)
-    assert list(result["Status"]) == ["Uploaded to Enhancio", "Uploaded to Enhancio", "Untouched"]
 
 
 def test_set_status_by_row_index_for_csv(tmp_path):

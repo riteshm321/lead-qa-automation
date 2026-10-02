@@ -79,8 +79,7 @@ def test_blank_email_rows_are_kept_as_separate_entries():
     assert len(load_failed_leads("integrate", "C", memory=memory)) == 2
 
 
-def test_meta_is_kept_and_date_values_are_json_safe():
-    _, entry = make_failed_entry({"Email": "a@example.com", "D": datetime.date(2026, 1, 2)}, "a@example.com", "X",
-                              meta={"from_accumulated": True})
+def test_date_values_are_json_safe():
+    _, entry = make_failed_entry({"Email": "a@example.com", "D": datetime.date(2026, 1, 2)}, "a@example.com", "X")
     assert entry["row"]["D"] == "2026-01-02"
-    assert entry["meta"] == {"from_accumulated": True}
+    assert entry == {"row": {"Email": "a@example.com", "D": "2026-01-02"}, "reason": "X"}

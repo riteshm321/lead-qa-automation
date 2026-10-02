@@ -182,8 +182,8 @@ def read_sheet_as_dataframe(path: str, sheet_name: str) -> pd.DataFrame:
 def _read_csv_rows(path: str) -> tuple[list[str], str, list[list[str]]]:
     """Reads a CSV file's header row, delimiter, and data rows -- see
     _decode_csv_bytes for the encoding/delimiter handling. Shared by every
-    CSV round-trip in this module (append_leads, set_status_for_emails,
-    set_status_by_row_index) so they all parse identically.
+    CSV round-trip in this module (append_leads, set_status_by_row_index)
+    so they all parse identically.
     """
     with open(path, "rb") as f:
         text, delimiter = _decode_csv_bytes(f.read())
@@ -198,55 +198,14 @@ def _write_csv_rows(path: str, delimiter: str, rows: list[list[str]]) -> None:
         csv.writer(f, delimiter=delimiter).writerows(rows)
 
 
-def set_status_for_emails(
-    path: str, tab_name: str, status_column: str, email_column: str, emails: set[str], label: str,
-) -> None:
-    """Writes `label` into `status_column` for every row in `tab_name`
-    (header on row 1) whose `email_column` cell's text matches one of
-    `emails` -- matching by email rather than positional row index, for a
-    caller that only has a filtered/re-read DataFrame slice, not the
-    original full-sheet row positions. Shared by every workflow that
-    marks Accumulated Report leads as having moved to some next stage
-    (Box Tracker's approval/clearance/reconciliation labels, Enhancio's
-    own upload label) without rewriting the whole row.
-    """
-    if path.lower().endswith(".csv"):
-        headers, delimiter, data_rows = _read_csv_rows(path)
-        status_idx, email_idx = headers.index(status_column), headers.index(email_column)
-        for row in data_rows:
-            if row[email_idx] in emails:
-                row[status_idx] = label
-        _write_csv_rows(path, delimiter, [headers] + data_rows)
-        return
-
-    original_external_links = read_external_link_parts(path)
-    original_ext_list = read_worksheet_ext_list(path, tab_name)
-    wb = openpyxl.load_workbook(path)
-    try:
-        ws = wb[tab_name]
-        headers = [cell.value for cell in ws[1]]
-        status_col = headers.index(status_column) + 1
-        email_col_idx = headers.index(email_column) + 1
-        for row in ws.iter_rows(min_row=2):
-            if str(row[email_col_idx - 1].value or "") in emails:
-                ws.cell(row=row[0].row, column=status_col, value=label)
-        wb.save(path)
-    finally:
-        wb.close()
-    if original_external_links:
-        restore_external_link_parts(path, original_external_links)
-    if original_ext_list:
-        restore_worksheet_ext_list(path, tab_name, original_ext_list)
-
-
 def set_status_by_row_index(path: str, tab_name: str, status_column: str, index_to_label: dict[int, str]) -> None:
     """Writes label into status_column for specific rows, addressed by
     their 0-based pandas index from a plain read of this same sheet
-    (header on row 1, so worksheet row = index + 2). Use this instead of
-    set_status_for_emails whenever the caller already has definite row
-    identity -- matching by email breaks down the moment two rows share
-    the same email, or (a real, confirmed case) both have a blank one:
-    every blank-email row would match every other blank-email row.
+    (header on row 1, so worksheet row = index + 2). Rows are addressed by
+    position rather than matched by email on purpose -- matching by email
+    breaks down the moment two rows share the same email, or (a real,
+    confirmed case) both have a blank one: every blank-email row would
+    match every other blank-email row.
     """
     if path.lower().endswith(".csv"):
         headers, delimiter, data_rows = _read_csv_rows(path)

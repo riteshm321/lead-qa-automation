@@ -190,10 +190,10 @@ def _load_raw_pending_leads(client_name: str) -> dict[str, dict]:
 
 
 def _json_safe_value(value):
-    # A row pulled from a re-read Excel sheet (see the Enhancio page's
-    # "pull from Accumulated Report" mode) can carry a real pd.Timestamp/
-    # datetime -- json.dump has no idea how to serialize those, and this
-    # store's whole point is being safely written/re-read as JSON.
+    # A row read from an uploaded .xlsx leadfile can carry a real
+    # pd.Timestamp/datetime (or NaN for a blank cell) -- json.dump has no
+    # idea how to serialize those, and this store's whole point is being
+    # safely written/re-read as JSON.
     if isinstance(value, pd.Timestamp):
         return value.isoformat()
     if isinstance(value, (datetime.date, datetime.datetime)):

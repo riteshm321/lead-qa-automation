@@ -27,8 +27,7 @@ from core.failed_leads import (
     render_failed_leads_section, update_failed_leads,
 )
 from core.excel_io import (
-    read_leadfile, append_leads, read_sheet_as_dataframe, set_status_for_emails, dataframe_to_excel_bytes,
-    normalize_header_text, find_passthrough_lead_column,
+    read_leadfile, append_leads, dataframe_to_excel_bytes, normalize_header_text, find_passthrough_lead_column,
 )
 from core import jira_client
 from core.jira_client import JiraError
@@ -80,14 +79,6 @@ def _profile_file_mtime(name: str, clients_dir: str) -> float:
         return 0.0
 
 
-@st.cache_data(show_spinner=False)
-def _cached_sheet_df(path: str, sheet_name: str, mtime: float) -> pd.DataFrame:
-    # Same fix as pages/2_Run_Check.py's _cached_sheet_df -- the
-    # Accumulated Report was being re-read from disk uncached whenever
-    # the date-range pull mode is active.
-    return read_sheet_as_dataframe(path, sheet_name)
-
-
 _clients_dir_now = get_clients_dir()
 _profile_names = [
     name for name in _cached_profile_names(_clients_dir_now, _clients_dir_mtime(_clients_dir_now))
@@ -113,8 +104,12 @@ if _enhancio_previous_client is not None and _enhancio_previous_client != client
 profile = _cached_load_profile(client_name, _clients_dir_now, _profile_file_mtime(client_name, _clients_dir_now))
 _enhancio = profile.enhancio
 _allocation_by_cid = {a.cid: a.allocation_uid for a in _enhancio.allocations}
-_ACCUMULATED_DATE_COLUMN = "Date"
-_ACCUMULATED_STATUS_COLUMN = "Status"
+# Enhancio's own mapping (set on Client Setup's Enhancio section) takes
+# priority; falls back to the client's QA field_mapping so an
+# already-configured client keeps working unchanged. This is what lets a
+# client with no QA at all (e.g. uploaded straight to Enhancio) use this page
+# without ever visiting Run Check first.
+_leadfile_mapping = resolve_field_mapping(_enhancio.leadfile_field_mapping, profile.field_mapping)
 # What this client still needs before steps 1-2 can run -- readable at a
 # glance instead of discovered from an error after clicking Upload.
 render_status_strip([
@@ -153,7 +148,7 @@ def _load_already_uploaded_by_allocation(df: pd.DataFrame, cid_column: str) -> d
 
 def _plan_sends(
         source_df: pd.DataFrame, leadfile_mapping, test_mode: bool, reupload: bool,
-        already_uploaded_by_allocation: dict[str, set[str]], from_accumulated: bool,
+        already_uploaded_by_allocation: dict[str, set[str]],
 ) -> tuple[dict[str, pd.DataFrame], list[dict], list]:
     """Exactly which leads would be sent to which allocation, applying
     test mode and per-allocation dedup -- the single source of truth
@@ -202,7 +197,7 @@ def _plan_sends(
                                  "Result": "Failed — No Enhancio allocation mapped for this CID"})
                 failed_entries.append(make_failed_entry(
                     lead.to_dict(), lead.get(leadfile_mapping.email, ""),
-                    "No Enhancio allocation mapped for this CID", meta={"from_accumulated": from_accumulated}))
+                    "No Enhancio allocation mapped for this CID"))
             continue
         df_by_allocation[allocation_uid].append(group)
 
@@ -226,7 +221,7 @@ def _plan_sends(
 
 
 def _upload_leads(
-        source_df: pd.DataFrame, leadfile_mapping, test_mode: bool, reupload: bool, from_accumulated: bool,
+        source_df: pd.DataFrame, leadfile_mapping, test_mode: bool, reupload: bool,
 ) -> list[dict]:
     """Sends every lead _plan_sends picks, one batch per allocation, and
     records every outcome: a lead Enhancio genuinely accepted goes to the
@@ -246,9 +241,8 @@ def _upload_leads(
 
     _send_by_allocation, _skip_results, _failed_entries = _plan_sends(
         source_df, leadfile_mapping, test_mode, reupload,
-        _load_already_uploaded_by_allocation(source_df, cid_column), from_accumulated)
+        _load_already_uploaded_by_allocation(source_df, cid_column))
     results.extend(_skip_results)
-    _failure_meta = {"from_accumulated": from_accumulated}
     # Leads skipped as already accepted are at Enhancio per this tool's
     # own record -- nothing left to retry for them.
     _succeeded_emails: set[str] = {
@@ -329,7 +323,7 @@ def _upload_leads(
                         "CID": lead.get(cid_column, ""), "Email": lead.get(leadfile_mapping.email, ""),
                         "Result": f"Failed — {exc}"})
                     _failed_entries.append(make_failed_entry(
-                        lead.to_dict(), lead.get(leadfile_mapping.email, ""), str(exc), meta=_failure_meta))
+                        lead.to_dict(), lead.get(leadfile_mapping.email, ""), str(exc)))
                 continue
 
         # A batch can accept some leads and reject others (e.g.
@@ -387,7 +381,7 @@ def _upload_leads(
                     + (": " + "; ".join(_distinct_batch_errors) if _distinct_batch_errors else "")
                 )
                 results.append({"CID": cid, "Email": email, "Result": f"Failed — {_reason}"})
-                _failed_entries.append(make_failed_entry(lead.to_dict(), email, _reason, meta=_failure_meta))
+                _failed_entries.append(make_failed_entry(lead.to_dict(), email, _reason))
 
         # Persist THIS allocation's results immediately, not batched to
         # the end of the whole multi-allocation loop -- previously a
@@ -408,17 +402,6 @@ def _upload_leads(
     if _send_progress is not None:
         _send_progress.empty()
 
-    if from_accumulated:
-        _all_newly_uploaded_emails = {
-            email for emails in _newly_uploaded_emails_by_allocation.values() for email in emails
-        }
-        if _all_newly_uploaded_emails:
-            set_status_for_emails(
-                profile.accumulated_report_path, profile.accumulated_tab_name,
-                _ACCUMULATED_STATUS_COLUMN, leadfile_mapping.email, _all_newly_uploaded_emails,
-                f"Uploaded to Enhancio - {datetime.date.today():%d-%b}",
-            )
-
     update_failed_leads("enhancio", client_name, _failed_entries, _succeeded_emails,
                         memory=failed_leads_memory("enhancio"))
     return results
@@ -438,67 +421,14 @@ with st.container(border=True):
              "allocation, so this touches each real allocation exactly once, not once per CID.",
     )
 
-    _lead_source = st.radio(
-        "Lead source", ["Upload a file", "Pull from Accumulated Report by date range"],
-        key="enhancio_lead_source", horizontal=True,
-        help="\"Pull from Accumulated Report\" is for leads a client has already approved out-of-band "
-             "(e.g. over email) — you tell it which day(s) to send, it does the rest.",
-    )
-    _from_accumulated = _lead_source == "Pull from Accumulated Report by date range"
-
     leads_df = None
-    if _from_accumulated:
-        # Every DataFrame here comes from re-reading the Accumulated Report,
-        # never a raw uploaded leadfile -- accumulated_field_mapping describes
-        # what the 5 known roles are actually called INSIDE that report (which
-        # can differ from field_mapping, the raw leadfile's own convention;
-        # see the identical fix in pages/5_Box_Tracker.py for why this
-        # distinction matters).
-        _leadfile_mapping = resolve_field_mapping(profile.accumulated_field_mapping, profile.field_mapping)
-        if not profile.accumulated_report_path:
-            render_problem("This client has no Accumulated Report configured on Client Setup — set one first.",
-                           "It's under **Client Setup → Basics → Reference Files**.")
-            st.stop()
-        _today = datetime.date.today()
-        _range_col1, _range_col2 = st.columns(2)
-        _range_start = _range_col1.date_input(
-            "From date", value=_today - datetime.timedelta(days=1), key="enhancio_range_start")
-        _range_end = _range_col2.date_input("To date", value=_today, key="enhancio_range_end")
-        if _range_start > _range_end:
-            render_problem("\"From date\" must not be after \"To date\".",
-                           "Pick a **From date** on or before the **To date**.")
-            st.stop()
+    _upload_file = st.file_uploader("Verified leadfile", type=["xlsx", "csv"], key="enhancio_upload_file")
+    if _upload_file:
         try:
-            _accumulated_df = _cached_sheet_df(
-                profile.accumulated_report_path, profile.accumulated_tab_name,
-                os.path.getmtime(profile.accumulated_report_path))
+            leads_df = read_leadfile(_upload_file)
         except Exception as exc:
             render_error(exc)
             st.stop()
-        if _ACCUMULATED_DATE_COLUMN not in _accumulated_df.columns:
-            render_problem(f"The Accumulated Report has no \"{_ACCUMULATED_DATE_COLUMN}\" column to filter by.",
-                           "Use **Upload a file** instead, or add a Date column to the Accumulated tab.")
-            st.stop()
-        _row_dates = pd.to_datetime(_accumulated_df[_ACCUMULATED_DATE_COLUMN], errors="coerce").dt.date
-        leads_df = _accumulated_df[_row_dates.between(_range_start, _range_end)]
-        if leads_df.empty:
-            render_empty_state(f"No leads in the Accumulated Report between {_range_start} and {_range_end}.",
-                               "Widen the date range above.", icon="event_busy")
-            st.stop()
-    else:
-        # Enhancio's own mapping (set on Client Setup's Enhancio section) takes
-        # priority; falls back to the client's QA field_mapping so an
-        # already-configured client keeps working unchanged. This is what lets
-        # a client with no QA at all (e.g. uploaded straight to Enhancio) use
-        # this page without ever visiting Run Check first.
-        _leadfile_mapping = resolve_field_mapping(_enhancio.leadfile_field_mapping, profile.field_mapping)
-        _upload_file = st.file_uploader("Verified leadfile", type=["xlsx", "csv"], key="enhancio_upload_file")
-        if _upload_file:
-            try:
-                leads_df = read_leadfile(_upload_file)
-            except Exception as exc:
-                render_error(exc)
-                st.stop()
 
     if leads_df is not None:
         if not _leadfile_mapping:
@@ -525,7 +455,7 @@ with st.container(border=True):
         leads_df = leads_df.copy()
         _micro_audience_mask = leads_df[cid_column].astype(str).map(has_micro_audience_override)
         if _micro_audience_mask.any():
-            # A leadfile/Accumulated Report column that's blank for every
+            # A leadfile column that's blank for every
             # covered row infers a strict numeric/string dtype that a plain
             # Python string can't be assigned into -- widen to plain object
             # first, same reasoning as core.box_tracker.add_lead_template_columns.
@@ -616,8 +546,7 @@ with st.container(border=True):
 
 
         _preview_send_by_allocation, _preview_skip_results, _ = _plan_sends(
-            leads_df, _leadfile_mapping, _test_mode, _reupload_duplicates, _already_uploaded_by_allocation,
-            _from_accumulated)
+            leads_df, _leadfile_mapping, _test_mode, _reupload_duplicates, _already_uploaded_by_allocation)
         with st.expander(
             f"Preview leads to send ({sum(len(df) for df in _preview_send_by_allocation.values())} lead(s) "
             f"across {len(_preview_send_by_allocation)} allocation(s))",
@@ -646,36 +575,23 @@ with st.container(border=True):
 
         if st.button("Upload to Enhancio", type="primary"):
             st.session_state["enhancio_upload_results"] = pd.DataFrame(_upload_leads(
-                leads_df, _leadfile_mapping, _test_mode, _reupload_duplicates, _from_accumulated))
+                leads_df, _leadfile_mapping, _test_mode, _reupload_duplicates))
 
     if pop_retry_request("enhancio"):
         # Test mode is deliberately not applied -- a retry sends every
         # stored failed lead. Dedup still is, so a lead accepted since (e.g.
-        # by a teammate) is skipped rather than resent. Leads pulled from
-        # the Accumulated Report use that report's own column names (and get
-        # their Status updated on success), so each source is retried with
-        # its own mapping.
-        _failed_entries_now = load_failed_leads("enhancio", client_name, failed_leads_memory("enhancio"))
-        _retry_results: list[dict] = []
-        for _retry_from_accumulated in (False, True):
-            _retry_df = failed_leads_source_df({
-                _k: _e for _k, _e in _failed_entries_now.items()
-                if bool(_e.get("meta", {}).get("from_accumulated")) == _retry_from_accumulated
-            })
-            if _retry_df.empty:
-                continue
-            _retry_mapping = resolve_field_mapping(
-                profile.accumulated_field_mapping if _retry_from_accumulated else _enhancio.leadfile_field_mapping,
-                profile.field_mapping)
-            if not _retry_mapping or not _retry_mapping.cid or not _retry_mapping.email \
-                    or not {_retry_mapping.cid, _retry_mapping.email} <= set(_retry_df.columns):
-                render_problem("Some failed leads can't be retried: this client's Enhancio CID/Email columns aren't "
+        # by a teammate) is skipped rather than resent.
+        _retry_df = failed_leads_source_df(
+            load_failed_leads("enhancio", client_name, failed_leads_memory("enhancio")))
+        if not _retry_df.empty:
+            if not _leadfile_mapping or not _leadfile_mapping.cid or not _leadfile_mapping.email \
+                    or not {_leadfile_mapping.cid, _leadfile_mapping.email} <= set(_retry_df.columns):
+                render_problem("The failed leads can't be retried: this client's Enhancio CID/Email columns aren't "
                                "in them.", "Download them, fix the file, and upload it instead.")
-                continue
-            _retry_results += _upload_leads(_retry_df, _retry_mapping, test_mode=False, reupload=False,
-                                            from_accumulated=_retry_from_accumulated)
-        if _retry_results:
-            st.session_state["enhancio_upload_results"] = pd.DataFrame(_retry_results)
+            else:
+                _retry_results = _upload_leads(_retry_df, _leadfile_mapping, test_mode=False, reupload=False)
+                if _retry_results:
+                    st.session_state["enhancio_upload_results"] = pd.DataFrame(_retry_results)
 
     if st.session_state.get("enhancio_upload_results") is not None:
         _results_df = st.session_state["enhancio_upload_results"]
