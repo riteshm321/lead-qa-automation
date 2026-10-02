@@ -148,12 +148,17 @@ with st.container(border=True):
             leads_df, _leadfile_mapping.email, load_uploaded_emails(client_name))
         _reupload_duplicates = False
         if not _dup_preview_df.empty:
-            render_problem(f"{len(_dup_preview_df)} lead(s) in this file were already uploaded to Convertr before.",
-                           level="warning")
+            render_problem(
+                f"{len(_dup_preview_df)} lead(s) in this file were already uploaded to (accepted by) Convertr "
+                "before and will be skipped. Leads that failed before are never counted here — they're sent "
+                "again automatically.",
+                level="warning")
             _reupload_duplicates = st.checkbox(
-                "Upload these already-uploaded leads again anyway", value=False,
+                "Also resend the leads Convertr already accepted", value=False,
                 key="convertr_reupload_duplicates",
-                help="Leave unchecked to skip them as usual (recommended, avoids duplicate submissions to Convertr).",
+                help="Leave unchecked to retry only what failed before (recommended — failed leads are never "
+                     "remembered as uploaded, so they go out again on their own). Tick this only to deliberately "
+                     "resend leads Convertr already accepted; that creates duplicate submissions.",
             )
 
         def _plan_sends(source_df: pd.DataFrame) -> tuple[dict[str, pd.DataFrame], list[dict]]:

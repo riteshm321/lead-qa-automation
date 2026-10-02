@@ -80,6 +80,21 @@ def rejection_reason_from_status_entry(entry: dict) -> str:
     return "Rejected by Enhancio"
 
 
+# Statuses Enhancio can attach to a lead it echoes back in submittedLeads
+# without actually taking it in -- such an entry must count as a failure,
+# never as "already uploaded", or a re-upload would skip it forever.
+_NOT_ACCEPTED_SUBMISSION_STATUSES = {"rejected", "failed", "failure", "invalid", "error", "duplicate"}
+
+
+def is_accepted_submission(entry: dict) -> bool:
+    """True only for a submittedLeads entry Enhancio genuinely took in: it
+    carries a real lead id and its status isn't a failure status. This is
+    the only kind of entry that may be recorded as already uploaded."""
+    if not isinstance(entry, dict) or not entry.get("leadId"):
+        return False
+    return str(entry.get("status") or "").strip().lower() not in _NOT_ACCEPTED_SUBMISSION_STATUSES
+
+
 def _normalize_email(email) -> str:
     return str(email or "").strip().lower()
 

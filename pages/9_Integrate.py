@@ -129,8 +129,20 @@ with st.container(border=True):
         _already_uploaded = load_uploaded_emails(client_name)
         _send_df, _dup_df = filter_already_uploaded(leads_df, email_column, _already_uploaded)
         if not _dup_df.empty:
-            render_problem(f"{len(_dup_df)} lead(s) in this file were already uploaded to Integrate before — skipped.",
-                           level="warning")
+            render_problem(
+                f"{len(_dup_df)} lead(s) in this file were already uploaded to (accepted by) Integrate before and "
+                "will be skipped. Leads that failed before are never counted here — they're sent again "
+                "automatically.",
+                level="warning")
+            if st.checkbox(
+                "Also resend the leads Integrate already accepted", value=False,
+                key="integrate_reupload_duplicates",
+                help="Leave unchecked to retry only what failed before (recommended — failed leads are never "
+                     "remembered as uploaded, so they go out again on their own). Tick this only to deliberately "
+                     "resend leads Integrate already accepted; that creates duplicate submissions.",
+            ):
+                _send_df = pd.concat([_send_df, _dup_df])
+                _dup_df = _dup_df.iloc[0:0]
         if _test_mode and len(_send_df) > 1:
             st.caption(f"Test mode: only the first lead of {len(_send_df)} will actually be sent.")
             _send_df = _send_df.iloc[:1]

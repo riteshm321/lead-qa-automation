@@ -19,7 +19,7 @@ from core.errors import render_error, render_problem
 from core.enhancio_sync import (
     rejection_reason_from_status_entry, load_pending_leads, save_pending_leads, remove_pending_leads,
     load_uploaded_emails, save_uploaded_emails, remove_uploaded_emails, clear_uploaded_emails,
-    filter_already_uploaded, select_rows_for_test_mode, format_enhancio_field_value,
+    filter_already_uploaded, select_rows_for_test_mode, format_enhancio_field_value, is_accepted_submission,
 )
 from core.excel_io import (
     read_leadfile, append_leads, read_sheet_as_dataframe, set_status_for_emails, dataframe_to_excel_bytes,
@@ -298,12 +298,17 @@ with st.container(border=True):
             _dup_preview_count += len(_dup_group)
         _reupload_duplicates = False
         if _dup_preview_count:
-            render_problem(f"{_dup_preview_count} lead(s) in this file were already uploaded to their allocation before.",
-                           level="warning")
+            render_problem(
+                f"{_dup_preview_count} lead(s) in this file were already uploaded to (accepted by) their allocation "
+                "before and will be skipped. Leads that failed before are never counted here — they're sent "
+                "again automatically.",
+                level="warning")
             _reupload_duplicates = st.checkbox(
-                "Upload these already-uploaded leads again anyway", value=False,
+                "Also resend the leads Enhancio already accepted", value=False,
                 key="enhancio_reupload_duplicates",
-                help="Leave unchecked to skip them as usual (recommended, avoids duplicate submissions to Enhancio).",
+                help="Leave unchecked to retry only what failed before (recommended — failed leads are never "
+                     "remembered as uploaded, so they go out again on their own). Tick this only to deliberately "
+                     "resend leads Enhancio already accepted; that creates duplicate submissions.",
             )
 
         with st.expander("Reset already-uploaded memory for an allocation"):
@@ -502,9 +507,21 @@ with st.container(border=True):
                 # back one outcome per lead sent, in order, so successes are
                 # matched to leadfile rows by email rather than assumed to line
                 # up positionally with what was sent.
+                # Only an entry Enhancio genuinely took in (a real lead id, no
+                # failure status) counts -- an echoed-back entry with e.g.
+                # status "Rejected" and no lead id used to be recorded as
+                # already uploaded, so a re-upload of the corrected file
+                # skipped it and only the "upload again anyway" checkbox
+                # (which also resends every accepted lead) could send it.
                 _submitted_by_email = {
                     str(entry.get("email", "")).strip().lower(): entry
-                    for entry in _import_result["submitted"] if entry.get("email")
+                    for entry in _import_result["submitted"]
+                    if entry.get("email") and is_accepted_submission(entry)
+                }
+                _not_accepted_status_by_email = {
+                    str(entry.get("email", "")).strip().lower(): str(entry.get("status") or "").strip()
+                    for entry in _import_result["submitted"]
+                    if isinstance(entry, dict) and entry.get("email") and not is_accepted_submission(entry)
                 }
                 _distinct_batch_errors = sorted({
                     str(err.get("message", err)) if isinstance(err, dict) else str(err)
@@ -532,9 +549,12 @@ with st.container(border=True):
                         _newly_uploaded_emails_by_allocation[allocation_uid].add(str(email))
                         results.append({"CID": cid, "Email": email, "Result": f"Uploaded — Lead ID {lead_id} ({status})"})
                     else:
+                        _echoed_status = _not_accepted_status_by_email.get(str(email).strip().lower())
                         results.append({
                             "CID": cid, "Email": email,
-                            "Result": "Failed — Not accepted by Enhancio (see batch error reasons above)",
+                            "Result": "Failed — Not accepted by Enhancio"
+                                      + (f" (status: {_echoed_status})" if _echoed_status else "")
+                                      + (": " + "; ".join(_distinct_batch_errors) if _distinct_batch_errors else ""),
                         })
 
                 # Persist THIS allocation's results immediately, not batched to
