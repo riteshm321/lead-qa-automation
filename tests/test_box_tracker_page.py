@@ -9,7 +9,6 @@ from streamlit.testing.v1 import AppTest
 from core.app_settings import get_clients_dir
 from core.box_tracker import current_week_label
 from core.models import ClientProfile, FieldMapping, BoxTrackerConfig, ComplexAccountConfig
-from core.models import LeadTemplateMappingConfig, LeadTemplateColumnRule
 from core.profile_store import save_profile
 
 _PAGE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pages", "5_Box_Tracker.py")
@@ -55,23 +54,6 @@ def _make_mirror(path: str) -> None:
         ["Publisher Name", "source_site", "Market", "Company", "UUCID", "Project Code",
          "Uploaded Date", "Campaign Name", "Segment", "Job Title", "Contact Type", "State",
          "Campaign Type", "Asset Title"])
-    wb.save(path)
-
-
-def _make_lead_template(path: str, existing_rows: list[list] | None = None) -> None:
-    # Mirrors the real IBM APAC Lead Template's actual header shape --
-    # note there's no CID column at all; AID/NC_*/campaign_code are the
-    # same for every row in the file, carried by whatever's already there
-    # (even a template/example row with no real lead, per the CXO file).
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "LEAD_TEMPLATE"
-    ws.append([
-        "AID", "NC_EMAIL_DETAIL", "NC_TELE_DETAIL", "user_transaction_date", "campaign_code",
-        "asset_title", "country", "micro_audience", "Industry", "First", "Last", "Email", "Company",
-    ])
-    for row in (existing_rows or []):
-        ws.append(row)
     wb.save(path)
 
 
@@ -202,10 +184,7 @@ def test_pick_and_send_takes_all_leads_and_skips_pacing_for_skipped_campaign(tmp
     at.button(key="pick_and_send_button").click().run()
 
     assert not at.exception
-    # No shortfall warning for an uncapped campaign -- the only warning now
-    # present is step 2's unrelated, always-correct "wipes existing rows"
-    # notice, shown because these same 7 leads are immediately eligible
-    # for clearing on this same rerun.
+    # No shortfall warning for an uncapped campaign.
     assert not any("shortfall" in w.value.lower() or "short by" in w.value.lower() for w in at.warning)
 
     wb = openpyxl.load_workbook(mirror_path)
@@ -216,227 +195,23 @@ def test_pick_and_send_takes_all_leads_and_skips_pacing_for_skipped_campaign(tmp
     assert pacing_ws.cell(row=4, column=7).value == 0
 
 
-def test_write_cleared_leads_button_is_disabled_until_wipe_is_confirmed(tmp_path, monkeypatch):
-    # Regression test for a real, confirmed P1 bug: "Write cleared leads to
-    # Lead Template" wiped the target file's existing rows (clear_existing=
-    # True) on a single click, with the only warning tucked inside a
-    # collapsed "How this works" expander. The button must now stay
-    # disabled until the user explicitly ticks a confirmation checkbox.
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    template_path = str(tmp_path / "bob_template.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Sent for Approval - 07-Sep"},
-    ])
-    _make_mirror(mirror_path)
-    _make_lead_template(template_path)
-    _save_profile(acc_path, mirror_path, cid_lead_template_path={"118741": template_path})
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-    next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
-
-    write_button = next(b for b in at.button if b.key == "write_lead_template_button")
-    assert write_button.disabled is True
-
-    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
-    write_button = next(b for b in at.button if b.key == "write_lead_template_button")
-    assert write_button.disabled is False
-
-
-def test_write_cleared_leads_to_lead_template_fills_all_columns_and_wipes_existing(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    template_path = str(tmp_path / "bob_template.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Sent for Approval - 07-Sep", "Asset Title": "Omdia Universe", "Country": "IN",
-         "Asset": "Normal Asset", "Second Asset": "Touch 2 Asset"},
-    ])
-    _make_mirror(mirror_path)
-    # An existing lead from a previous cycle -- carries the AID/NC_*/
-    # campaign_code every new row must reuse, and must itself be wiped.
-    _make_lead_template(template_path, existing_rows=[
-        ["L-22SD7", "UC", "UC", "2026-08-20 06:55:41", "PVLAP", "Old Asset", "IN", "Platform_SWE", "All",
-         "Old", "Lead", "old.lead@x.com", "Old Co"],
-    ])
-    _save_profile(acc_path, mirror_path, cid_lead_template_path={"118741": template_path})
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-
-    clear_checkbox = next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com")
-    clear_checkbox.set_value(True).run()
-
-    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
-    write_button = next(b for b in at.button if b.key == "write_lead_template_button")
-    write_button.click().run()
-
-    assert not at.exception
-
-    template_df = pd.read_excel(template_path, sheet_name="LEAD_TEMPLATE")
-    assert len(template_df) == 1  # the old lead was wiped, not appended alongside
-    row = template_df.iloc[0]
-    assert row["Email"] == "lead1@x.com"
-    assert row["micro_audience"] == "Platform_SWE"  # CID 118741 = Bob
-    assert row["Industry"] == "All"
-    assert row["AID"] == "L-22SD7"  # carried over from the old row before it was wiped
-    assert row["NC_EMAIL_DETAIL"] == "UC"
-    assert row["NC_TELE_DETAIL"] == "UC"
-    assert row["campaign_code"] == "PVLAP"
-    assert row["asset_title"] == "Touch 2 Asset"  # CID 118741 = Bob = 2T -> Second Asset, not Asset Title
-    assert row["country"] == "IN"
-    assert str(row["user_transaction_date"]).count(":") == 2  # HH:MM:SS present
-
-    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
-    status = accumulated_df.loc[accumulated_df["Email"] == "lead1@x.com", "Status"].iloc[0]
-    assert status.startswith("Cleared for Upload")
-
-
-def test_write_cleared_leads_applies_configured_date_format_to_lead_template_column(tmp_path, monkeypatch):
-    # Proves lead_template_mapping actually reaches this page's append_leads
-    # call: a configured date_format rule for "user_transaction_date" must
-    # reformat the written cell into a real date value in the rule's format,
-    # not leave it as the plain "YYYY-MM-DD HH:MM:SS" text
-    # add_lead_template_columns carries over by default (see the previous
-    # test's identical fixture and its own user_transaction_date assertion).
-    # Write to a real temp workbook and reopen it with openpyxl directly --
-    # no mocking -- to check the actual cell value/type and number format.
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    template_path = str(tmp_path / "bob_template.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Sent for Approval - 07-Sep", "Asset Title": "Omdia Universe", "Country": "IN",
-         "Asset": "Normal Asset", "Second Asset": "Touch 2 Asset"},
-    ])
-    _make_mirror(mirror_path)
-    # An existing lead from a previous cycle -- carries AID/NC_*/
-    # campaign_code forward (irrelevant here). The Accumulated Report
-    # fixture has no Timestamp column, so add_lead_template_columns falls
-    # back to datetime.datetime.now() (formatted "YYYY-MM-DD HH:MM:SS") as
-    # user_transaction_date's raw value -- exactly the string the
-    # date_format rule must parse and reformat.
-    _make_lead_template(template_path, existing_rows=[
-        ["L-22SD7", "UC", "UC", "2026-08-20 06:55:41", "PVLAP", "Old Asset", "IN", "Platform_SWE", "All",
-         "Old", "Lead", "old.lead@x.com", "Old Co"],
-    ])
-    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
-    profile = ClientProfile(
-        name="IBM APAC Interactive Avenues Pvt Ltd", accumulated_report_path=acc_path, field_mapping=fm,
-        complex_account=ComplexAccountConfig(enabled=True),
-        box_tracker=BoxTrackerConfig(
-            enabled=True, mirror_workbook_path=mirror_path,
-            cid_campaign_map={"118741": "Bob"},
-            cid_lead_template_path={"118741": template_path},
-        ),
-        lead_template_mapping=LeadTemplateMappingConfig(rules=[
-            LeadTemplateColumnRule(template_column="user_transaction_date", date_format="MM/DD/YYYY"),
-        ]),
-    )
-    save_profile(profile, get_clients_dir())
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-
-    clear_checkbox = next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com")
-    clear_checkbox.set_value(True).run()
-
-    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
-    write_button = next(b for b in at.button if b.key == "write_lead_template_button")
-    write_button.click().run()
-
-    assert not at.exception
-
-    wb = openpyxl.load_workbook(template_path)
-    ws = wb["LEAD_TEMPLATE"]
-    headers = [cell.value for cell in ws[1]]
-    col_idx = headers.index("user_transaction_date") + 1
-    cell = ws.cell(row=2, column=col_idx)
-    wb.close()
-
-    # A real datetime with the rule's number format -- not the plain
-    # "YYYY-MM-DD HH:MM:SS" text add_lead_template_columns's own fallback
-    # would otherwise leave untouched (proven by this same assertion
-    # failing before the lead_template_mapping wiring: the raw fallback
-    # string, e.g. "2026-09-25 22:19:20", is not a datetime instance).
-    assert isinstance(cell.value, datetime.datetime)
-    assert cell.value.date() == datetime.date.today()
-    assert cell.number_format == "mm\\/dd\\/yyyy"
-
-
-def test_write_cleared_leads_uses_accumulated_field_mapping_not_raw_leadfile_mapping(tmp_path, monkeypatch):
-    # Regression test for a real bug found in IBM APAC's own data: Company
-    # (and, by the same mechanism, any of the other 4 roles) silently wrote
-    # blank whenever field_mapping (the RAW LEADFILE's own column names,
-    # e.g. "company" lowercase) differed from accumulated_field_mapping
-    # (what that role is actually called INSIDE the Accumulated Report,
-    # e.g. "Company") -- every DataFrame this page touches comes from the
-    # Accumulated Report, never a raw leadfile, so only the latter mapping
-    # is ever correct here.
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    template_path = str(tmp_path / "bob_template.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "Acme Corp", "CID": "118741",
-         "Status": "Sent for Approval - 07-Sep", "Asset Title": "Omdia Universe", "Country": "IN"},
-    ])
-    _make_mirror(mirror_path)
-    _make_lead_template(template_path)
-
-    fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="company", cid="CID")
-    acc_fm = FieldMapping(email="Email", first_name="First", last_name="Last", company="Company", cid="CID")
-    profile = ClientProfile(
-        name="IBM APAC Interactive Avenues Pvt Ltd", accumulated_report_path=acc_path,
-        field_mapping=fm, accumulated_field_mapping=acc_fm,
-        complex_account=ComplexAccountConfig(enabled=True),
-        box_tracker=BoxTrackerConfig(
-            enabled=True, mirror_workbook_path=mirror_path,
-            cid_campaign_map={"118741": "Bob"}, cid_lead_template_path={"118741": template_path},
-        ),
-    )
-    save_profile(profile, get_clients_dir())
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-
-    clear_checkbox = next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com")
-    clear_checkbox.set_value(True).run()
-    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
-    write_button = next(b for b in at.button if b.key == "write_lead_template_button")
-    write_button.click().run()
-
-    assert not at.exception
-    template_df = pd.read_excel(template_path, sheet_name="LEAD_TEMPLATE")
-    assert template_df.iloc[0]["Company"] == "Acme Corp"
-
-
-def test_manual_marking_hides_blank_leads_from_step_2_until_marked(tmp_path, monkeypatch):
+def test_manual_marking_marks_a_blank_status_lead_as_uploaded_to_approval_sheet(tmp_path, monkeypatch):
     # A lead the user approved by hand (added straight to the real
-    # Approval Sheet themselves, skipping step 1) starts with a blank
-    # Status. It must stay hidden from step 2 until explicitly marked via
-    # the "I already added these myself" flow, so the guided flow's
-    # per-CID Pacing target isn't quietly bypassed by untouched leads.
+    # Approval Sheet themselves, skipping the automated picking) starts
+    # with a blank Status and is marked via the "I already added these
+    # myself" flow.
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
     mirror_path = str(tmp_path / "mirror.xlsx")
-    template_path = str(tmp_path / "bob_template.xlsx")
     _make_accumulated(acc_path, [
         {"Email": "manual@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741", "Status": ""},
     ])
     _make_mirror(mirror_path)
-    _make_lead_template(template_path)
-    _save_profile(acc_path, mirror_path, cid_lead_template_path={"118741": template_path})
+    _save_profile(acc_path, mirror_path)
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.run()
 
-    assert not any(cb.label == "Clear manual@x.com" for cb in at.checkbox)
     assert any(cb.label == "Mark manual@x.com" for cb in at.checkbox)
 
     next(cb for cb in at.checkbox if cb.label == "Mark manual@x.com").set_value(True).run()
@@ -446,8 +221,6 @@ def test_manual_marking_hides_blank_leads_from_step_2_until_marked(tmp_path, mon
     accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
     status = accumulated_df.loc[accumulated_df["Email"] == "manual@x.com", "Status"].iloc[0]
     assert status.startswith("Uploaded to Approval Sheet")
-
-    assert any(cb.label == "Clear manual@x.com" for cb in at.checkbox)
 
 
 def test_manual_marking_handles_two_leads_with_a_blank_email_without_crashing(tmp_path, monkeypatch):
@@ -485,271 +258,12 @@ def test_manual_marking_handles_two_leads_with_a_blank_email_without_crashing(tm
     assert statuses.str.startswith("Uploaded to Approval Sheet").sum() == 1
 
 
-def test_write_cleared_leads_uses_fixed_micro_audience_for_in_lob_cid(tmp_path, monkeypatch):
-    # 119750 (IN LOB) is a fixed "LOB" value, same pattern as every other
-    # known CID -- not read from a leadfile column at all (confirmed
-    # against a real rejected batch: no such "LOB" column exists in
-    # practice, which used to silently blank micro_audience for this CID).
+def test_box_tracker_is_an_icon_titled_card_with_a_shared_empty_state(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
     mirror_path = str(tmp_path / "mirror.xlsx")
-    template_path = str(tmp_path / "wxo_template.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "119750",
-         "Status": "Sent for Approval - 07-Sep"},
-    ])
-    _make_mirror(mirror_path)
-    _make_lead_template(template_path, existing_rows=[
-        ["L-22SD8", "UC", "UC", "2026-08-11 07:25:59", "PAIAP", "Old Asset", "IN", "AI Leaders", "All",
-         "Old", "Lead", "old.lead@x.com", "Old Co"],
-    ])
-    _save_profile(acc_path, mirror_path, cid_lead_template_path={"119750": template_path})
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-    next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
-    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
-    at.button(key="write_lead_template_button").click().run()
-
-    assert not at.exception
-    template_df = pd.read_excel(template_path, sheet_name="LEAD_TEMPLATE")
-    assert template_df.loc[0, "micro_audience"] == "LOB"
-    assert template_df.loc[0, "campaign_code"] == "PAIAP"  # carried over from the template's own row
-
-
-def test_write_cleared_leads_combines_multiple_cids_sharing_one_template(tmp_path, monkeypatch):
-    # IN WXO (118743) and IN LOB (119750) route to the same Lead Template
-    # file. Writing both in one pass must not let the second CID's
-    # clear_existing wipe out the first CID's just-written rows.
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    template_path = str(tmp_path / "wxo_template.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118743",
-         "Status": "Sent for Approval - 07-Sep"},
-        {"Email": "lead2@x.com", "First": "F", "Last": "L", "Company": "Y", "CID": "119750",
-         "Status": "Sent for Approval - 07-Sep"},
-    ])
-    _make_mirror(mirror_path)
-    _make_lead_template(template_path, existing_rows=[
-        ["L-22SD8", "UC", "UC", "2026-08-11 07:25:59", "PAIAP", "Old Asset", "IN", "AI Leaders", "All",
-         "Old", "Lead", "old.lead@x.com", "Old Co"],
-    ])
-    _save_profile(acc_path, mirror_path, cid_lead_template_path={
-        "118743": template_path, "119750": template_path,
-    })
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-    next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
-    next(cb for cb in at.checkbox if cb.label == "Clear lead2@x.com").set_value(True).run()
-    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
-    at.button(key="write_lead_template_button").click().run()
-
-    assert not at.exception
-    template_df = pd.read_excel(template_path, sheet_name="LEAD_TEMPLATE")
-    assert len(template_df) == 2  # both new leads present, old row wiped exactly once
-    emails = set(template_df["Email"])
-    assert emails == {"lead1@x.com", "lead2@x.com"}
-    micro_audience_by_email = dict(zip(template_df["Email"], template_df["micro_audience"]))
-    assert micro_audience_by_email["lead1@x.com"] == "AI Leaders"  # fixed value for 118743
-    assert micro_audience_by_email["lead2@x.com"] == "LOB"  # fixed value for 119750
-
-
-def test_write_cleared_leads_keeps_earlier_templates_status_when_a_later_one_fails(tmp_path, monkeypatch):
-    # Regression test for a real, confirmed P1 bug: the Accumulated Status
-    # update used to run ONCE after the whole multi-template loop finished.
-    # If a LATER template's write failed, the whole handler aborted before
-    # reaching that single status update -- discarding it even for EARLIER
-    # templates whose Lead Template file had already been successfully
-    # (and destructively, clear_existing=True) rewritten. Those leads then
-    # looked untouched and stayed eligible to be "cleared" again, which
-    # would wipe and re-write the same already-correct file on the next
-    # attempt. Status must now be marked per-template, immediately after
-    # each one's own write succeeds.
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    template_a_path = str(tmp_path / "template_a.xlsx")
-    template_b_path = str(tmp_path / "template_b.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118743",
-         "Status": "Sent for Approval - 07-Sep"},
-        {"Email": "lead2@x.com", "First": "F", "Last": "L", "Company": "Y", "CID": "119750",
-         "Status": "Sent for Approval - 07-Sep"},
-    ])
-    _make_mirror(mirror_path)
-    _make_lead_template(template_a_path)
-    _make_lead_template(template_b_path)
-    _save_profile(acc_path, mirror_path, cid_lead_template_path={
-        "118743": template_a_path, "119750": template_b_path,
-    })
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-    next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
-    next(cb for cb in at.checkbox if cb.label == "Clear lead2@x.com").set_value(True).run()
-
-    from core.excel_io import append_leads as _real_append_leads
-
-    def _fail_on_template_b(path, *args, **kwargs):
-        if path == template_b_path:
-            raise RuntimeError("Lead Template file locked")
-        return _real_append_leads(path, *args, **kwargs)
-
-    with patch("core.excel_io.append_leads", side_effect=_fail_on_template_b):
-        at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
-        at.button(key="write_lead_template_button").click().run()
-
-    assert not at.exception  # caught and shown via render_error, not an unhandled crash
-
-    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
-    status_by_email = dict(zip(accumulated_df["Email"], accumulated_df["Status"].astype(str)))
-    # Template A's write succeeded -- its lead must be marked cleared even
-    # though template B's write (later in the loop) failed.
-    assert status_by_email["lead1@x.com"].startswith("Cleared for Upload")
-    # Template B's write failed -- its lead must stay eligible for retry,
-    # not silently lost with a stale "already handled" look.
-    assert status_by_email["lead2@x.com"].startswith("Sent for Approval")
-
-
-def test_write_cleared_leads_warns_when_no_template_path_configured(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Sent for Approval - 07-Sep"},
-    ])
-    _make_mirror(mirror_path)
-    _save_profile(acc_path, mirror_path)  # no cid_lead_template_path configured
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-    next(cb for cb in at.checkbox if cb.label == "Clear lead1@x.com").set_value(True).run()
-    at.checkbox(key="write_lead_template_confirm_wipe").set_value(True).run()
-    at.button(key="write_lead_template_button").click().run()
-
-    assert not at.exception
-    assert any("118741" in w.value for w in at.warning)
-    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
-    status = accumulated_df.loc[accumulated_df["Email"] == "lead1@x.com", "Status"].iloc[0]
-    assert status.startswith("Sent for Approval")  # left untouched
-
-
-def test_upload_reconciliation_moves_rejected_to_refund_and_logs_accepted(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Cleared for Upload - 07-Sep", "Country": "IN", "Project Code": "PVLAP",
-         "2nd Asset OV Code": "OV-123"},
-        {"Email": "lead2@x.com", "First": "F", "Last": "L", "Company": "Y", "CID": "118741",
-         "Status": "Cleared for Upload - 07-Sep"},
-    ])
-    _make_mirror(mirror_path)
-    _save_profile(acc_path, mirror_path)
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-
-    reject_checkbox = next(cb for cb in at.checkbox if cb.label == "Reject lead2@x.com")
-    reject_checkbox.set_value(True).run()
-    reason_input = next(t for t in at.text_input if t.key == "reject_reason_" + reject_checkbox.key.removeprefix("reject_"))
-    reason_input.set_value("Portal duplicate").run()
-
-    reconcile_button = next(b for b in at.button if b.key == "reconcile_upload_button")
-    reconcile_button.click().run()
-
-    assert not at.exception
-
-    refund_df = pd.read_excel(acc_path, sheet_name="Refund")
-    assert "lead2@x.com" in refund_df["Email"].values
-    assert refund_df.loc[refund_df["Email"] == "lead2@x.com", "Refund Reason"].iloc[0] == "Portal duplicate"
-
-    response_wb = openpyxl.load_workbook(mirror_path)
-    response_ws = response_wb["Response Details"]
-    company_col_values = [c.value for c in response_ws["D"]]  # Company is column D
-    assert "X" in company_col_values  # lead1 (accepted) logged
-    assert "Y" not in company_col_values  # lead2 (rejected) not logged
-
-    headers = [c.value for c in response_ws[2]]
-    row = dict(zip(headers, [c.value for c in response_ws[3]]))  # header row 2, first data row 3
-    assert row["Publisher Name"] == "Madison Logic"
-    assert row["source_site"] == "madisonlogic.com"
-    assert row["Market"] == "IN"
-    assert row["Project Code"] == "PVLAP"
-    assert row["Campaign Name"] == "Bob"
-    assert row["UUCID"] == "OV-123"
-    assert row["Campaign Type"] == "2T"
-
-    accumulated_df = pd.read_excel(acc_path, sheet_name="Accumulated")
-    status_by_email = dict(zip(accumulated_df["Email"], accumulated_df["Status"]))
-    assert status_by_email["lead1@x.com"].startswith("Accepted - Uploaded")
-    assert status_by_email["lead2@x.com"].startswith("Rejected - Refunded")
-
-
-def test_upload_reconciliation_warns_about_response_details_columns_it_cant_fill(tmp_path, monkeypatch):
-    # Regression test: append_mirror_rows had no unmatched-column feedback
-    # at all -- a real mirror workbook column beyond the ~15 keys this
-    # page writes went silently blank forever. Now it must be surfaced.
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Cleared for Upload - 07-Sep"},
-    ])
-    _make_mirror(mirror_path)
-    # Add a real column this page's Response Details write never populates.
-    wb = openpyxl.load_workbook(mirror_path)
-    ws = wb["Response Details"]
-    ws.cell(row=2, column=ws.max_column + 1, value="Extra Client Tracking Column")
-    wb.save(mirror_path)
-    _save_profile(acc_path, mirror_path)
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-    at.button(key="reconcile_upload_button").click().run()
-
-    assert not at.exception
-    assert any("Extra Client Tracking Column" in w.value for w in at.warning)
-
-
-def test_upload_reconciliation_requires_a_reason_for_rejected_leads(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Cleared for Upload - 07-Sep"},
-    ])
-    _make_mirror(mirror_path)
-    _save_profile(acc_path, mirror_path)
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-
-    reject_checkbox = next(cb for cb in at.checkbox if cb.label == "Reject lead1@x.com")
-    reject_checkbox.set_value(True).run()
-
-    reconcile_button = next(b for b in at.button if b.key == "reconcile_upload_button")
-    reconcile_button.click().run()
-
-    assert not at.exception
-    assert any("lead1@x.com" in e.value for e in at.error)
-    refund_df = pd.read_excel(acc_path, sheet_name="Refund")
-    assert refund_df.empty
-
-
-def test_box_tracker_steps_are_icon_titled_cards_with_shared_empty_states(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    # One already-finished lead: not blank, not sent, not cleared -- so all
-    # three step lists are empty and each shows its empty state.
+    # One already-finished lead: not blank-Status, so the manual-marking
+    # list is empty and shows its empty state.
     _make_accumulated(acc_path, [
         {"Email": "done@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
          "Status": "Accepted - Uploaded 01-Sep"},
@@ -761,61 +275,10 @@ def test_box_tracker_steps_are_icon_titled_cards_with_shared_empty_states(tmp_pa
     at.run()
     assert not at.exception
     assert at.title[0].value == ":material/inventory_2: Box Tracker"
-    assert [s.value for s in at.subheader] == [
-        ":material/outgoing_mail: 1. Send leads for approval",
-        ":material/edit_document: 2. Write cleared leads to the Lead Template",
-        ":material/fact_check: 3. Reconcile portal upload status",
-    ]
+    assert [s.value for s in at.subheader] == [":material/outgoing_mail: Send leads for approval"]
     # st.expander(..., icon=...) is exposed by AppTest as at.status, not at.expander.
     expanders = [(e.label, e.icon) for e in at.status]
-    assert expanders.count(("How this works", ":material/info:")) == 3
+    assert expanders.count(("How this works", ":material/info:")) == 1
     assert ("Or: I already added these leads to the real Approval Sheet myself", ":material/back_hand:") in expanders
     captions = [c.value for c in at.caption]
     assert any(c.startswith(":material/task_alt: No blank-Status leads available to mark.") for c in captions)
-    assert any(c.startswith(':material/inbox: No leads currently marked "Sent for Approval" or') for c in captions)
-    assert any(c.startswith(':material/inbox: No leads currently marked "Cleared for Upload".') for c in captions)
-
-
-def test_missing_rejection_reason_error_uses_the_shared_problem_helper(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Cleared for Upload - 07-Sep"},
-    ])
-    _make_mirror(mirror_path)
-    _save_profile(acc_path, mirror_path)
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-    next(cb for cb in at.checkbox if cb.label == "Reject lead1@x.com").set_value(True).run()
-    at.button(key="reconcile_upload_button").click().run()
-    assert not at.exception
-    err = next(e for e in at.error if "lead1@x.com" in e.value)
-    assert err.icon == ":material/error:"
-    assert "**Suggested fix:**" in err.value
-
-
-def test_unfilled_column_warning_uses_the_shared_helper_not_an_emoji_prefix(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    acc_path = str(tmp_path / "accumulated.xlsx")
-    mirror_path = str(tmp_path / "mirror.xlsx")
-    _make_accumulated(acc_path, [
-        {"Email": "lead1@x.com", "First": "F", "Last": "L", "Company": "X", "CID": "118741",
-         "Status": "Cleared for Upload - 07-Sep"},
-    ])
-    _make_mirror(mirror_path)
-    wb = openpyxl.load_workbook(mirror_path)
-    ws = wb["Response Details"]
-    ws.cell(row=2, column=ws.max_column + 1, value="Extra Client Tracking Column")
-    wb.save(mirror_path)
-    _save_profile(acc_path, mirror_path)
-
-    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
-    at.run()
-    at.button(key="reconcile_upload_button").click().run()
-    assert not at.exception
-    warn = next(w for w in at.warning if "Extra Client Tracking Column" in w.value)
-    assert warn.icon == ":material/warning:"
-    assert not warn.value.startswith("⚠️")

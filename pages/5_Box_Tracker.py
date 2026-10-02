@@ -2,21 +2,19 @@
 import datetime
 import os
 
-import openpyxl
 import pandas as pd
 import streamlit as st
 
 from core.app_settings import get_clients_dir
 from core.box_tracker import (
     read_pacing_diffs, pick_leads_for_approval, sent_for_approval_label,
-    cleared_for_upload_label, uploaded_accepted_label, uploaded_rejected_label,
-    append_mirror_rows, set_pacing_delivered, add_lead_template_columns, read_lead_template_constants,
-    project_code_for_cid, parse_amal_id, strip_country_suffix, campaign_type_for_cid,
+    append_mirror_rows, set_pacing_delivered,
+    project_code_for_cid, parse_amal_id, strip_country_suffix,
     uploaded_to_approval_sheet_label,
 )
 from core.branding import configure_page
 from core.errors import render_error, render_problem
-from core.excel_io import read_sheet_as_dataframe, append_leads, find_header_row, set_status_by_row_index
+from core.excel_io import read_sheet_as_dataframe, set_status_by_row_index
 from core.models import resolve_field_mapping
 from core.profile_store import list_profile_names, load_profile
 from core.ui_components import render_empty_state
@@ -48,7 +46,7 @@ def _cached_sheet_df(path: str, sheet_name: str, mtime: float) -> pd.DataFrame:
     # workbook that many times over. Same fix/reasoning as
     # pages/2_Run_Check.py's _cached_sheet_df. Keyed on the file's own
     # mtime (recomputed fresh at each call site, never itself cached) so
-    # a write earlier in the SAME rerun -- e.g. step 1's
+    # a write earlier in the SAME rerun -- e.g. the
     # set_status_by_row_index before this same page's later reads --
     # still correctly invalidates the cache for whatever reads it first.
     return read_sheet_as_dataframe(path, sheet_name)
@@ -74,18 +72,8 @@ _IBM_APAC_CLIENT_NAME = "IBM APAC Interactive Avenues Pvt Ltd"
 
 _STATUS_COLUMN = "Status"
 _APPROVAL_SHEET_TAB = "Approval Sheet"
-_RESPONSE_DETAILS_TAB = "Response Details"
-# The real Box file's Response Details tab has a blank row 1 (leftover
-# title spacing) with the actual column headers in row 2.
-_RESPONSE_DETAILS_HEADER_ROW = 2
-# Fixed for every row -- Madison Logic is always the publisher for this
-# client's uploads.
-_RESPONSE_DETAILS_PUBLISHER_NAME = "Madison Logic"
-_RESPONSE_DETAILS_SOURCE_SITE = "madisonlogic.com"
 _PACING_TAB = "Pacing"
-_SENT_STATUS_PREFIX = "Sent for Approval"
 _MANUAL_STATUS_PREFIX = "Uploaded to Approval Sheet"
-_CLEARED_STATUS_PREFIX = "Cleared for Upload"
 
 _clients_dir_now = get_clients_dir()
 if _IBM_APAC_CLIENT_NAME not in _cached_profile_names(_clients_dir_now, _clients_dir_mtime(_clients_dir_now)):
@@ -117,12 +105,12 @@ st.caption(
     f"**{_IBM_APAC_CLIENT_NAME}**'s Box-hosted lead-approval tracker has no API access, so every write "
     "here goes straight to Box Desktop's local sync copy of the real file at "
     f"`{profile.box_tracker.mirror_workbook_path}` — Box syncs it from there on its own, no manual "
-    "copy-paste step. Work through the 3 steps below in order."
+    "copy-paste step."
 )
 
 
 with st.container(border=True):
-    st.subheader(":material/outgoing_mail: 1. Send leads for approval")
+    st.subheader(":material/outgoing_mail: Send leads for approval")
     st.caption(
         "**Use this when:** you want the tool to pick leads for you, based on this week's Pacing "
         "numbers, and write them into the mirror's Approval Sheet automatically."
@@ -234,7 +222,7 @@ with st.container(border=True):
     with st.expander("Or: I already added these leads to the real Approval Sheet myself", icon=":material/back_hand:"):
         st.caption(
             "**Use this when:** you approved leads directly in the real Box file, skipping the "
-            "automated picking above. Select them here so step 2 below can find and pick them up."
+            "automated picking above. Select them here to record that they were sent."
         )
         try:
             _accumulated_for_manual = _cached_sheet_df(
@@ -275,275 +263,5 @@ with st.container(border=True):
                     )
                     st.success(
                         f"Marked {len(marked_indices)} lead(s) as \"{_MANUAL_STATUS_PREFIX}\" — "
-                        "they'll show up in step 2 below."
+                        "they're no longer offered here."
                     )
-
-with st.container(border=True):
-    st.subheader(":material/edit_document: 2. Write cleared leads to the Lead Template")
-    st.caption(
-        "**Use this when:** the client has approved some or all leads from step 1 (either the "
-        "automated or the manual path), and you're ready to prep them for portal upload."
-    )
-    with st.expander("How this works", icon=":material/info:"):
-        st.write(
-            "The tool fills in micro_audience/Industry/AID/campaign_code/etc. and writes cleared leads "
-            "into that CID's Lead Template file (routed by CID — see Client Setup). **Any existing leads "
-            "already in that file are wiped first** — new leads always start fresh at row 2. You then "
-            "upload them to the client portal by hand."
-        )
-
-    try:
-        _accumulated_for_clearing = _cached_sheet_df(
-            profile.accumulated_report_path, profile.accumulated_tab_name,
-            os.path.getmtime(profile.accumulated_report_path))
-        _clearing_status = _accumulated_for_clearing[_STATUS_COLUMN].fillna("").astype(str)
-        _clearance_mask = (
-            _clearing_status.str.startswith(_SENT_STATUS_PREFIX)
-            | _clearing_status.str.startswith(_MANUAL_STATUS_PREFIX)
-        )
-        _awaiting_clearance_df = _accumulated_for_clearing[_clearance_mask]
-    except Exception as exc:
-        _awaiting_clearance_df = pd.DataFrame()
-        render_error(exc)
-
-    if _awaiting_clearance_df.empty:
-        render_empty_state(f"No leads currently marked \"{_SENT_STATUS_PREFIX}\" or \"{_MANUAL_STATUS_PREFIX}\".",
-                           "Send leads in step 1, or mark ones you added yourself, first.")
-    else:
-        render_problem(
-            "**Any existing leads already in the target Lead Template file are wiped first** — new "
-            "leads always start fresh at row 2. Previously this was only mentioned inside the collapsed "
-            "\"How this works\" panel above, easy to miss before a destructive write.",
-            level="warning",
-        )
-        _clear_email_col = _acc_fm.email
-        # Keyed by row index -- see the identical comment on manual_flags
-        # above; email alone can't be trusted as a unique widget/dict key.
-        clear_flags: dict[int, bool] = {}
-        for idx, lead in _awaiting_clearance_df.iterrows():
-            _raw_clear_email = lead.get(_clear_email_col, "")
-            email = str(_raw_clear_email).strip() if pd.notna(_raw_clear_email) else ""
-            label_text = email if email else f"(no email — row {idx + 2})"
-            clear_flags[idx] = st.checkbox(f"Clear {label_text}", key=f"clear_{idx}")
-
-        _confirm_wipe = st.checkbox(
-            "I understand this wipes any existing rows in the target Lead Template file(s)",
-            key="write_lead_template_confirm_wipe",
-        )
-        if st.button("Write cleared leads to Lead Template", key="write_lead_template_button",
-                     disabled=not _confirm_wipe):
-            try:
-                with st.spinner('Writing cleared leads to the Lead Template...'):
-                    cleared_indices = {idx for idx, flag in clear_flags.items() if flag}
-                    if not cleared_indices:
-                        render_problem("No leads checked — nothing to write.",
-                                       "Tick at least one **Clear ...** box above first.", level="warning")
-                        st.stop()
-
-                    cleared_df = _awaiting_clearance_df.loc[sorted(cleared_indices)]
-
-                    # Group by the resolved TEMPLATE FILE, not by CID -- several
-                    # CIDs can route to the same Lead Template (e.g. IN LOB and
-                    # IN WXO share one file, see Client Setup). Grouping by CID
-                    # would write one CID's rows with clear_existing=True and then
-                    # wipe them out again writing the next CID into the same file.
-                    cleared_df = cleared_df.copy()
-                    cleared_df["_template_path"] = cleared_df[_acc_fm.cid].astype(str).map(
-                        profile.box_tracker.cid_lead_template_path.get)
-
-                    missing_template_cids: set[str] = set(
-                        cleared_df.loc[cleared_df["_template_path"].isna(), _acc_fm.cid].astype(str)
-                    )
-
-                    written_cids: list[str] = []
-                    written_indices: set[int] = set()
-                    unmatched_headers: set[str] = set()
-                    routed_df = cleared_df[cleared_df["_template_path"].notna()]
-                    for template_path, group in routed_df.groupby("_template_path"):
-                        group = group.drop(columns="_template_path")
-                        template_wb = openpyxl.load_workbook(template_path, read_only=True)
-                        sheet_name = template_wb.active.title
-                        template_wb.close()
-
-                        # Must read AID/NC_*/campaign_code BEFORE clear_existing wipes
-                        # the file's only source of those values (see
-                        # read_lead_template_constants) -- they're the same for
-                        # every row in this one file, never derived from the leadfile.
-                        template_constants = read_lead_template_constants(template_path, sheet_name)
-                        enriched_group = add_lead_template_columns(
-                            group, _acc_fm.cid, template_constants=template_constants)
-
-                        expected = [v for v in [
-                            _acc_fm.email, _acc_fm.first_name,
-                            _acc_fm.last_name, _acc_fm.company,
-                            _acc_fm.cid,
-                        ] if v]
-                        header_row = find_header_row(template_path, sheet_name, expected)
-                        unmatched_headers.update(append_leads(
-                            template_path, sheet_name, enriched_group, _acc_fm,
-                            datetime.date.today(), header_row=header_row, clear_existing=True,
-                            lead_template_mapping=profile.lead_template_mapping,
-                        ))
-                        written_cids.extend(sorted(group[_acc_fm.cid].astype(str).unique()))
-                        written_indices.update(group.index)
-
-                        # Mark Status for THIS template's leads immediately
-                        # after its own write succeeds, not batched to the end
-                        # of the whole multi-template loop. Previously a LATER
-                        # template's failure (wrong tab, locked file, disk
-                        # error) discarded the Status update for EARLIER
-                        # templates whose Lead Template file had already been
-                        # successfully -- and destructively, clear_existing=True
-                        # -- rewritten: those leads looked untouched and stayed
-                        # eligible to be "cleared" again, which would wipe and
-                        # re-write the same file on the next attempt. Confirmed
-                        # real by the audit.
-                        set_status_by_row_index(
-                            profile.accumulated_report_path, profile.accumulated_tab_name, _STATUS_COLUMN,
-                            {idx: cleared_for_upload_label(datetime.date.today()) for idx in group.index},
-                        )
-
-                    if written_indices:
-                        st.success(
-                            f"Wrote {len(written_indices)} lead(s) to their Lead Template(s) (CIDs: {', '.join(written_cids)}).")
-                    if unmatched_headers:
-                        render_problem(
-                            "These Lead Template columns had no matching Accumulated Report column and were left "
-                            f"blank: {', '.join(sorted(unmatched_headers))}. If that data does exist under a different "
-                            "column name, rename it (or the Lead Template's header) to something closer and re-run.",
-                            level="warning",
-                        )
-                    if missing_template_cids:
-                        render_problem(
-                            f"No Lead Template path configured for CID(s): {', '.join(sorted(missing_template_cids))} "
-                            "— those leads were left with their current Status and not written anywhere. "
-                            "Add their template path in Client Setup and try again.",
-                            level="warning",
-                        )
-            except Exception as exc:
-                render_error(exc)
-
-with st.container(border=True):
-    st.subheader(":material/fact_check: 3. Reconcile portal upload status")
-    st.caption(
-        "**Use this when:** you've already pasted step 2's leads into the client portal by hand, "
-        "and know which (if any) the portal rejected."
-    )
-    with st.expander("How this works", icon=":material/info:"):
-        st.write(
-            "Check any leads the portal rejected, with a reason — they'll be moved to the Refund tab. "
-            "Everything left unchecked is treated as accepted, logged to Response Details, and counted "
-            "toward this week's Pacing Delivered total."
-        )
-
-    try:
-        _accumulated_df = _cached_sheet_df(
-            profile.accumulated_report_path, profile.accumulated_tab_name,
-            os.path.getmtime(profile.accumulated_report_path))
-        _sent_df = _accumulated_df[
-            _accumulated_df[_STATUS_COLUMN].astype(str).str.startswith(_CLEARED_STATUS_PREFIX)
-        ]
-    except Exception as exc:
-        _sent_df = pd.DataFrame()
-        render_error(exc)
-
-    if _sent_df.empty:
-        render_empty_state(f"No leads currently marked \"{_CLEARED_STATUS_PREFIX}\".",
-                           "Write cleared leads to the Lead Template in step 2 first.")
-    else:
-        _email_col = _acc_fm.email
-        # Keyed by row index -- see the identical comment on manual_flags in
-        # step 1; email alone can't be trusted as a unique widget/dict key.
-        reject_flags: dict[int, bool] = {}
-        reject_reasons: dict[int, str] = {}
-        for idx, lead in _sent_df.iterrows():
-            _raw_reject_email = lead.get(_email_col, "")
-            email = str(_raw_reject_email).strip() if pd.notna(_raw_reject_email) else ""
-            label_text = email if email else f"(no email — row {idx + 2})"
-            col_check, col_reason = st.columns([1, 3])
-            reject_flags[idx] = col_check.checkbox(
-                f"Reject {label_text}", key=f"reject_{idx}", label_visibility="collapsed")
-            reject_reasons[idx] = col_reason.text_input(
-                "Reason", key=f"reject_reason_{idx}", label_visibility="collapsed",
-                placeholder=f"Reason for rejecting {label_text} (required if rejected)")
-
-        if st.button("Reconcile upload status", key="reconcile_upload_button"):
-            try:
-                with st.spinner('Reconciling upload status...'):
-                    rejected_indices = {idx for idx, flag in reject_flags.items() if flag}
-                    missing_reasons = [idx for idx in rejected_indices if not reject_reasons.get(idx, "").strip()]
-                    if missing_reasons:
-                        _missing_labels = [
-                            str(_sent_df.loc[idx, _email_col] or "") or f"row {idx + 2}" for idx in missing_reasons]
-                        render_problem(f"Missing rejection reason for: {', '.join(_missing_labels)}",
-                                       "Type a reason next to every lead you ticked as rejected, then reconcile again.")
-                        st.stop()
-
-                    accepted_df = _sent_df[~_sent_df.index.isin(rejected_indices)]
-                    rejected_df = _sent_df[_sent_df.index.isin(rejected_indices)]
-                    today = datetime.date.today()
-
-                    if not rejected_df.empty:
-                        reasons = {idx: reject_reasons[idx] for idx in rejected_df.index}
-                        append_leads(
-                            profile.accumulated_report_path, profile.refund_tab_name,
-                            rejected_df, _acc_fm, today, reasons=reasons,
-                        )
-                        set_status_by_row_index(
-                            profile.accumulated_report_path, profile.accumulated_tab_name, _STATUS_COLUMN,
-                            {idx: uploaded_rejected_label(today) for idx in rejected_df.index},
-                        )
-
-                    if not accepted_df.empty:
-                        cid_to_campaign = profile.box_tracker.cid_campaign_map
-                        response_rows = []
-                        for _, lead in accepted_df.iterrows():
-                            cid = str(lead.get(_acc_fm.cid, ""))
-                            campaign = strip_country_suffix(cid_to_campaign.get(cid, ""))
-                            response_rows.append({
-                                "Publisher Name": _RESPONSE_DETAILS_PUBLISHER_NAME,
-                                "source_site": _RESPONSE_DETAILS_SOURCE_SITE,
-                                "Market": lead.get("Country", ""),
-                                "Company": lead.get(_acc_fm.company, ""),
-                                "UUCID": lead.get("2nd Asset OV Code", ""),
-                                "Project Code": project_code_for_cid(cid, lead.get("Project Code", "")),
-                                "Campaign Name": campaign,
-                                "Segment": lead.get("Segment", ""),
-                                "Job Title": lead.get("Job Title", ""),
-                                "Contact Type": lead.get("Contact Type", ""),
-                                "State": lead.get("State", ""),
-                                "Campaign Type": campaign_type_for_cid(cid),
-                                "Asset Title": lead.get("Asset Title", ""),
-                                "Asset Link": lead.get("Asset Link", ""),
-                                "Uploaded Date": today.strftime("%d-%b"),
-                            })
-                        _response_unmatched = append_mirror_rows(
-                            profile.box_tracker.mirror_workbook_path, _RESPONSE_DETAILS_TAB, response_rows,
-                            header_row=_RESPONSE_DETAILS_HEADER_ROW,
-                        )
-                        set_status_by_row_index(
-                            profile.accumulated_report_path, profile.accumulated_tab_name, _STATUS_COLUMN,
-                            {idx: uploaded_accepted_label(today) for idx in accepted_df.index},
-                        )
-
-                        accepted_counts = accepted_df[_acc_fm.cid].astype(str).value_counts()
-                        for cid, count in accepted_counts.items():
-                            campaign = cid_to_campaign.get(cid)
-                            if campaign and campaign not in _pacing_skipped:
-                                set_pacing_delivered(profile.box_tracker.mirror_workbook_path, campaign, int(count))
-                    else:
-                        _response_unmatched = []
-
-                    st.success(
-                        f"Reconciled: {len(accepted_df)} accepted (logged to {_RESPONSE_DETAILS_TAB}, Pacing updated), "
-                        f"{len(rejected_df)} rejected (moved to Refund)."
-                    )
-                    if _response_unmatched:
-                        render_problem(
-                            f"The {_RESPONSE_DETAILS_TAB} tab has column(s) this tool doesn't fill in and left "
-                            f"blank: {', '.join(sorted(_response_unmatched))}. If that's unexpected, the mirror "
-                            "workbook's real header text may not match what this page writes.",
-                            level="warning",
-                        )
-            except Exception as exc:
-                render_error(exc)
