@@ -12,7 +12,7 @@ from core.activity_tracker import record_process_completed
 from core.app_settings import get_aliases_path, get_clients_dir, get_jira_settings, get_google_sheets_key_path
 from core.branding import configure_page
 from core.checks.leadcap import validate_purchased_report_cids
-from core.client_picker import render_client_picker
+from core.client_picker import preselect_client, render_client_picker
 from core.collation import collate_uploaded_files
 from core.errors import render_error
 from core.excel_io import (
@@ -78,12 +78,24 @@ def _cached_sheet_df(path: str, sheet_name: str, mtime: float) -> pd.DataFrame:
     return read_sheet_as_dataframe(path, sheet_name)
 
 
-col_client, col_clear = st.columns([5, 1], vertical_alignment="bottom")
+col_client, col_edit, col_clear = st.columns([5, 2, 1], vertical_alignment="bottom")
 with col_client:
     client_name = render_client_picker(get_clients_dir(), key_prefix="run_check")
     if client_name is None:
         st.warning("No client profiles found. Create one on the Client Setup page first.")
         st.stop()
+with col_edit:
+    if st.button("Edit in Client Setup", icon=":material/edit:", use_container_width=True,
+                 help="Open this client's configuration in Client Setup (Edit existing client mode)."):
+        # Client Setup's picker/mode widgets aren't rendered in this run, so
+        # their keys can be written here. Dropping _loaded_sources_for forces
+        # Client Setup's profile-switch reset to re-seed every field from
+        # THIS client's saved profile even if Client Setup last showed the
+        # same client, so no stale widget value survives the jump.
+        preselect_client("client_setup", client_name, get_clients_dir())
+        st.session_state["client_setup_mode"] = "Edit existing client"
+        st.session_state.pop("_loaded_sources_for", None)
+        st.switch_page("pages/1_Client_Setup.py")
 with col_clear:
     if st.button("Clear", icon=":material/refresh:", use_container_width=True,
                  help="Clear the uploaded files and any displayed results, and start a fresh run."):

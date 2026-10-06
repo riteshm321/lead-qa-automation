@@ -83,6 +83,32 @@ def render_client_picker(clients_dir: str, key_prefix: str, label: str = "Client
     return _client_selectbox(client_col, label, profiles_in_group(name_to_group, selected_group), client_key)
 
 
+def preselect_client_state(key_prefix: str, client_name: str, name_to_group: dict[str, str]) -> dict[str, str]:
+    """session_state values that make render_client_picker(..., key_prefix)
+    render with `client_name` selected on its next run: the Group filter
+    (only when groups exist) set to the client's own group -- or "All
+    groups" for an ungrouped client -- so the client is guaranteed to be in
+    the filtered Client options, plus the Client selectbox itself. Returns
+    {} for a name that isn't a known profile.
+    """
+    if client_name not in name_to_group:
+        return {}
+    state = {}
+    if group_filter_options(name_to_group):
+        state[f"{key_prefix}_group_filter"] = name_to_group[client_name] or ALL_GROUPS_LABEL
+    state[f"{key_prefix}_client_profile"] = client_name
+    return state
+
+
+def preselect_client(key_prefix: str, client_name: str, clients_dir: str) -> None:
+    """Preselect `client_name` in another page's client picker (e.g. Run
+    Check -> Client Setup). Must be called for a picker NOT rendered in the
+    current run -- Streamlit forbids writing a widget's key after that
+    widget was instantiated in the same run.
+    """
+    st.session_state.update(preselect_client_state(key_prefix, client_name, list_profile_groups(clients_dir)))
+
+
 def _select_first_client_of_group(name_to_group: dict[str, str], filter_key: str, client_key: str) -> None:
     # Group on_change callback: runs before the rerun's script body, so the
     # Client selectbox is rendered with the new group's first client as an

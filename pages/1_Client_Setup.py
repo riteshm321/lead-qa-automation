@@ -627,7 +627,9 @@ def _render_paired_field_mapping(key_prefix: str, target_name: str, existing: di
     return mapping
 
 
-mode = st.radio("Mode", ["Create new client", "Edit existing client"])
+# Keyed so Run Check's "Edit in Client Setup" button can preselect it
+# (st.session_state["client_setup_mode"]) before st.switch_page() here.
+mode = st.radio("Mode", ["Create new client", "Edit existing client"], key="client_setup_mode")
 
 @st.cache_data(show_spinner=False)
 def _cached_load_profile(name: str, clients_dir: str, mtime: float):
