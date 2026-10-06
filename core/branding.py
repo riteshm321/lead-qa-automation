@@ -172,8 +172,24 @@ def _render_quit_app_button() -> None:
         st.rerun()
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+_TIME_SAVED_TTL_SECONDS = 30
+_time_saved_cache: dict = {}
+
+
 def _cached_time_saved_summary(shared_root: str) -> dict:
+    # Plain in-process TTL cache rather than st.cache_data: st.cache_data
+    # pickles its return value, and in the packaged exe that pickling
+    # failed (UnserializableReturnValueError) and took down every page.
+    now = time.monotonic()
+    hit = _time_saved_cache.get(shared_root)
+    if hit and now - hit[0] < _TIME_SAVED_TTL_SECONDS:
+        return hit[1]
+    summary = _compute_time_saved_summary_uncached()
+    _time_saved_cache[shared_root] = (now, summary)
+    return summary
+
+
+def _compute_time_saved_summary_uncached() -> dict:
     # Reads every user's activity file from the shared OneDrive folder --
     # configure_page() runs at the top of every page, and Streamlit reruns
     # the whole script on every single widget interaction (not just page
