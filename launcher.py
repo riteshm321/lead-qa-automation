@@ -1,12 +1,77 @@
+import faulthandler
 import os
 import sys
 import threading
+import time
 import urllib.request
 import webbrowser
 
-from streamlit.web import cli as stcli
+_PROTOBUF_IMPL_ENV = "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"
 
-from core.resources import resource_path as _resource_path
+
+def _use_pure_python_protobuf(environ=os.environ) -> None:
+    # Root cause of the "app closes by itself while idle" bug: the packaged
+    # exe repeatedly died with a native access violation (0xc0000005) inside
+    # protobuf's upb C extension (google/_upb/_message.pyd, same fault
+    # offset every time -- see the Windows Application event log, "Faulting
+    # module name: _message.pyd"). protobuf 5.29's C extension predates
+    # Python 3.14 and crashes there, typically while objects are being
+    # garbage-collected / sessions torn down in the background, i.e. with
+    # nobody clicking anything. A native crash kills the process outright
+    # (no Python traceback, nothing in app.log), which is why the console
+    # window just vanishes. Streamlit is the only protobuf user here and its
+    # messages are small (dataframes travel as opaque Arrow bytes), so the
+    # pure-Python backend costs nothing noticeable and removes the crash.
+    #
+    # This MUST run before anything imports google.protobuf -- the backend
+    # is chosen once, at first import -- hence its place above the
+    # streamlit import below. setdefault() so the variable can still be
+    # overridden from outside for diagnosis.
+    environ.setdefault(_PROTOBUF_IMPL_ENV, "python")
+
+
+_use_pure_python_protobuf()
+
+from streamlit.web import cli as stcli  # noqa: E402  (must follow the protobuf backend choice above)
+
+from core.resources import resource_path as _resource_path  # noqa: E402
+
+# Kept open for the life of the process: faulthandler writes to it from a
+# signal/exception handler and needs a live file descriptor.
+_crash_log_file = None
+
+
+def _enable_crash_log(log_dir: str = "logs") -> str | None:
+    """Dump a Python traceback of every thread to logs/crash.log if the
+    process dies from a native fault (access violation, etc.).
+
+    Native crashes bypass Python's exception handling entirely -- before
+    this, they left no trace anywhere except the Windows event log, and the
+    console window (the only place a traceback could have been printed)
+    closes the instant the process dies. Best-effort: never blocks startup.
+    """
+    global _crash_log_file
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, "crash.log")
+        f = open(path, "a", encoding="utf-8")
+        f.write(f"\n--- process {os.getpid()} started {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+        f.flush()
+        faulthandler.enable(file=f, all_threads=True)
+        _crash_log_file = f
+        return path
+    except Exception:
+        return None
+
+
+def _log(level: str, msg: str, *args) -> None:
+    # Imported lazily: core.app_logging opens logs/app.log relative to the
+    # current directory, which is only correct after _chdir_to_app_folder().
+    try:
+        from core.app_logging import get_logger
+        getattr(get_logger(), level)(msg, *args)
+    except Exception:
+        pass
 
 
 def _app_data_dir() -> str:
@@ -102,6 +167,10 @@ def main() -> int:
             webbrowser.open(url)
             return 0
 
+        _enable_crash_log()
+        from google.protobuf.internal import api_implementation
+        _log("info", "App starting (pid %s, protobuf backend: %s)", os.getpid(), api_implementation.Type())
+
         threading.Thread(target=_open_browser_when_ready, args=(url,), daemon=True).start()
 
         sys.argv = [
@@ -110,7 +179,20 @@ def main() -> int:
             "--server.headless", "true",
             "--global.developmentMode=false",
         ]
-        return stcli.main()
+        try:
+            code = stcli.main()
+        except SystemExit as exc:
+            # stcli.main() is a click command and normally ends via
+            # SystemExit. Getting here at all means the server shut down
+            # gracefully -- the only triggers for that are a console
+            # control event (Ctrl+C / Ctrl+Break in this window, Windows
+            # shutdown/logoff) or a startup failure such as the port being
+            # taken. (The sidebar's Quit App logs its own line and exits
+            # via os._exit, and native crashes go to logs/crash.log.)
+            _log("warning", "Streamlit server stopped (exit code %s): console Ctrl+C/Ctrl+Break, system shutdown, or a startup failure", exc.code)
+            raise
+        _log("warning", "Streamlit server stopped (exit code %s)", code)
+        return code
     except Exception:
         # Anything else that stops the app from starting at all (a
         # permission error creating the per-user data folder, a corrupted

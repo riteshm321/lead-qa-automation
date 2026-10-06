@@ -96,3 +96,76 @@ def test_main_reports_failure_instead_of_crashing_on_startup_error():
         result = launcher.main()
 
     assert result == 1
+
+
+def test_use_pure_python_protobuf_sets_backend_when_unset():
+    # Root cause of the "app closes by itself while idle" bug: protobuf's
+    # upb C extension (_message.pyd) crashed the packaged exe natively on
+    # Python 3.14. The launcher must select the pure-Python backend.
+    env = {}
+    launcher._use_pure_python_protobuf(env)
+    assert env["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] == "python"
+
+
+def test_use_pure_python_protobuf_respects_an_explicit_override():
+    env = {"PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION": "upb"}
+    launcher._use_pure_python_protobuf(env)
+    assert env["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] == "upb"
+
+
+def test_importing_launcher_selects_pure_python_protobuf_before_streamlit_loads():
+    # The backend is fixed at protobuf's first import, so this only works
+    # if launcher sets it before importing streamlit -- check in a fresh
+    # interpreter, since this test process already imported protobuf.
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k != "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"}
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import launcher; from google.protobuf.internal import api_implementation as a; print(a.Type())"],
+        cwd=repo_root, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == "python"
+
+
+def test_enable_crash_log_points_faulthandler_at_logs_crash_log(tmp_path):
+    with patch("launcher.faulthandler.enable") as mock_enable:
+        path = launcher._enable_crash_log(str(tmp_path / "logs"))
+
+    try:
+        assert path == str(tmp_path / "logs" / "crash.log")
+        mock_enable.assert_called_once()
+        assert mock_enable.call_args.kwargs["file"].name == path
+        assert mock_enable.call_args.kwargs["all_threads"] is True
+        assert "started" in (tmp_path / "logs" / "crash.log").read_text(encoding="utf-8")
+    finally:
+        launcher._crash_log_file.close()
+        launcher._crash_log_file = None
+
+
+def test_enable_crash_log_never_blocks_startup():
+    with patch("launcher.os.makedirs", side_effect=PermissionError("denied")):
+        assert launcher._enable_crash_log("whatever") is None
+
+
+def test_main_logs_why_the_server_stopped(caplog):
+    import logging
+
+    import pytest
+
+    with patch("launcher._chdir_to_app_folder"), \
+         patch("launcher._enable_crash_log"), \
+         patch("launcher._port_already_serving", return_value=False), \
+         patch("launcher.stcli.main", side_effect=SystemExit(0)), \
+         patch("launcher.threading.Thread"), \
+         caplog.at_level(logging.INFO, logger="lead_qa_automation"):
+        with pytest.raises(SystemExit):
+            launcher.main()
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("App starting" in m for m in messages)
+    assert any("Streamlit server stopped (exit code 0)" in m for m in messages)

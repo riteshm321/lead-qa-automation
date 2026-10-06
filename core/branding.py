@@ -6,6 +6,7 @@ import streamlit as st
 
 from core import auth_gate
 from core.activity_tracker import compute_time_saved_summary, format_minutes
+from core.app_logging import get_logger
 from core.app_settings import get_shared_root_dir
 from core.resources import resource_path
 
@@ -127,6 +128,12 @@ def _quit_app() -> None:
     # a plain sys.exit() inside a Streamlit script rerun is caught by
     # Streamlit's own script-runner machinery and would just end that one
     # rerun, not stop the server process or close the console window.
+    # Logged first so a deliberate quit is distinguishable in logs/app.log
+    # from a crash or a console Ctrl+C (see launcher.py).
+    try:
+        get_logger().warning("App quit via the sidebar Quit App button (pid %s)", os.getpid())
+    except Exception:
+        pass
     os._exit(0)
 
 

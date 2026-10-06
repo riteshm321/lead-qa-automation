@@ -156,3 +156,18 @@ def test_polish_css_makes_selects_feel_like_dropdowns():
     assert "caret-color: transparent" in _POLISH_CSS
     assert "cursor: pointer" in _POLISH_CSS
     assert "user-select: none" in _POLISH_CSS
+
+
+def test_quit_app_logs_the_reason_before_exiting(caplog):
+    # Every process exit must leave a line in logs/app.log saying why, so a
+    # deliberate Quit is distinguishable from a crash or a console Ctrl+C.
+    import logging
+    from unittest.mock import patch
+
+    import core.branding as branding
+
+    with patch("core.branding.os._exit") as mock_exit,          caplog.at_level(logging.WARNING, logger="lead_qa_automation"):
+        branding._quit_app()
+
+    mock_exit.assert_called_once_with(0)
+    assert any("Quit App button" in r.getMessage() for r in caplog.records)
