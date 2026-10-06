@@ -15,7 +15,7 @@ def browse_for_file(file_types: list[tuple[str, str]] | None = None) -> str | No
         )
     finally:
         # Without this in a finally, an exception from the dialog itself
-        # (e.g. a Tcl error) would leak this hidden Tk root permanently —
+        # (e.g. a Tcl error) would leak this hidden Tk root permanently -
         # this function runs fresh on every "Browse..." click.
         root.destroy()
     return path or None

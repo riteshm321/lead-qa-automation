@@ -323,7 +323,7 @@ def test_append_leads_highlight_fill_colors_only_the_new_rows(tmp_path):
 def test_append_leads_writes_a_real_date_value_with_date_number_format(tmp_path):
     # Regression test: a passthrough column holding a real date/datetime
     # object (e.g. Complex Account's reformatted Capture Date) previously
-    # displayed as a raw serial number in a "General"-formatted cell —
+    # displayed as a raw serial number in a "General"-formatted cell -
     # Excel needs an explicit date format to show and filter it as a date.
     path = str(tmp_path / "lead_report.xlsx")
     wb = openpyxl.Workbook()
@@ -645,7 +645,7 @@ def test_append_leads_highlight_fill_clears_previous_run_highlight(tmp_path):
     append_leads(path, "Report", new_leads_df, _field_mapping(), run_date="2026-08-08", highlight_fill="C6E0B4")
 
     ws = openpyxl.load_workbook(path)["Report"]
-    # Row 2 was highlighted by the first call — the second call must clear it.
+    # Row 2 was highlighted by the first call - the second call must clear it.
     assert ws.cell(row=2, column=1).fill.fill_type is None
     # Row 3 (this run's new lead) is now the one highlighted.
     assert ws.cell(row=3, column=1).fill.fgColor.rgb == "00C6E0B4"
@@ -742,7 +742,7 @@ def test_append_leads_to_template_with_reordered_and_extra_columns_appends_below
     # Simulates a real Lead Template: its own column order (different from the
     # leadfile's), extra leadfile columns beyond the 5 mapped fields (title,
     # industry), an existing lead already present, and that existing row's
-    # formatting — all four of the client's stated requirements at once.
+    # formatting - all four of the client's stated requirements at once.
     path = str(tmp_path / "template.xlsx")
     wb = openpyxl.Workbook()
     wb.active.title = "Lookup"
@@ -811,7 +811,7 @@ def test_append_leads_uses_explicit_target_field_mapping_when_header_text_differ
 
 
 def test_append_leads_without_target_mapping_falls_back_to_guess_based_matching(tmp_path):
-    # No explicit mapping configured — must behave exactly as before (synonym
+    # No explicit mapping configured - must behave exactly as before (synonym
     # guessing / literal header match) so existing clients are unaffected.
     path = str(tmp_path / "template.xlsx")
     wb = openpyxl.Workbook()
@@ -856,7 +856,7 @@ def test_find_header_row_ignores_annotation_rows_denser_than_threshold(tmp_path)
     # instruction rows above the real header each have a handful of scattered
     # notes (more than the old fixed 3-cell threshold), so "first row past a
     # threshold" picked one of them. Header text here deliberately matches no
-    # generic synonym, so tier-1 marker matching can't short-circuit this —
+    # generic synonym, so tier-1 marker matching can't short-circuit this -
     # only the density-based structural fallback can find the real row.
     path = str(tmp_path / "template.xlsx")
     wb = openpyxl.Workbook()
@@ -902,7 +902,7 @@ def test_find_header_row_uses_expected_headers_when_given(tmp_path):
 
 def test_find_header_row_falls_back_to_structural_heuristic_when_no_marker_matches(tmp_path):
     # No saved mapping yet AND non-standard header text (e.g. "Email Add.")
-    # that matches no generic synonym — must still find the real header row
+    # that matches no generic synonym - must still find the real header row
     # by noticing it has far more non-empty cells than the title row above it.
     path = str(tmp_path / "template.xlsx")
     wb = openpyxl.Workbook()
@@ -919,7 +919,7 @@ def test_find_header_row_falls_back_to_structural_heuristic_when_no_marker_match
 def test_find_header_row_structural_fallback_handles_blank_first_column(tmp_path):
     # Regression test: when the header row's own first column (A) is blank
     # and data starts at column B, openpyxl's read-only mode represents
-    # column A as an EmptyCell (no .row attribute) — the structural fallback
+    # column A as an EmptyCell (no .row attribute) - the structural fallback
     # must not rely on that cell's .row.
     path = str(tmp_path / "template.xlsx")
     wb = openpyxl.Workbook()
@@ -1133,7 +1133,7 @@ def test_read_sheet_headers_on_genuinely_empty_sheet_returns_empty_list_not_inde
     # Regression test: a workbook's default/unused sheet (e.g. "Sheet" left
     # over from creating a new workbook, or any truly blank tab) has never
     # had a single cell written. openpyxl's ws[row] indexing raises
-    # IndexError in that case even though max_row reports 1 — this must not
+    # IndexError in that case even though max_row reports 1 - this must not
     # crash Client Setup when it defaults the sheet dropdown to such a sheet.
     path = str(tmp_path / "workbook_with_blank_sheet.xlsx")
     wb = openpyxl.Workbook()

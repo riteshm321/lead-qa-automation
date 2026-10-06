@@ -14,7 +14,7 @@ from core.profile_store import save_profile, load_profile, list_profile_names
 def _sample_profile() -> ClientProfile:
     return ClientProfile(
         name="Basware",
-        accumulated_report_path="sample_data/Basware APAC – Accumulated Report.xlsx",
+        accumulated_report_path="sample_data/Basware APAC - Accumulated Report.xlsx",
         field_mapping=FieldMapping(email="emailaddress", first_name="firstname",
                                     last_name="lastname", company="company", cid="CID"),
         leadcap=LeadcapConfig(enabled=True, segmented=True, check_company_name=True, segments=[
@@ -60,7 +60,7 @@ def test_list_profile_names(tmp_path):
 def test_list_profile_names_ignores_non_profile_json_in_same_folder(tmp_path):
     # Regression test: a shared clients_dir (per the "Client storage
     # location" setting) can end up with non-profile .json files sitting
-    # right next to real profiles — this reproduces the exact crash where
+    # right next to real profiles - this reproduces the exact crash where
     # company_aliases.json (a plain list) landed in the clients folder and
     # list_profile_names/load_profile treated it as a client.
     clients_dir = str(tmp_path / "clients")

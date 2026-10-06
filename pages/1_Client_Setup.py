@@ -55,13 +55,13 @@ st.caption("Shared team data location and Jira account credentials moved to the 
 
 def _path_input_with_browse(label: str, session_key: str, current_value: str, show_label: bool = True) -> str:
     # Label rendered above (not inline in the text_input) so both columns
-    # start at the exact same vertical offset — keeps the Browse button
+    # start at the exact same vertical offset - keeps the Browse button
     # aligned with the input box regardless of label text/theme font metrics.
     if show_label:
         st.markdown(f"**{label}**")
     col1, col2 = st.columns([5, 1])
     # The button's click handling (and any session_state write) must run
-    # before the text_input with the same key is instantiated below —
+    # before the text_input with the same key is instantiated below -
     # Streamlit forbids modifying a widget's session_state value after that
     # widget has already been created in the same script run. Writing the
     # `with col2:` block first achieves that while col1 (input) still
@@ -322,7 +322,7 @@ def _render_custom_question_detect() -> None:
                 existing.add(_cq_rule_identity(state))
                 added += 1
         if added:
-            st.success(f":material/check_circle: Added {added} detected question(s) below — review them, "
+            st.success(f":material/check_circle: Added {added} detected question(s) below - review them, "
                        "then save.")
         else:
             render_empty_state("No new question-style columns found in that file.",
@@ -347,7 +347,7 @@ def _render_custom_question_rules() -> list[CustomQuestionRule]:
             if row["format"] == "header":
                 row["column"] = st.text_input(
                     "Question column header", value=row["column"], key=f"cq_column_{row_id}",
-                    help="The leadfile column whose header is the question. Matched loosely — case, spacing, "
+                    help="The leadfile column whose header is the question. Matched loosely - case, spacing, "
                          "punctuation and \"1.\"/\"Q1:\" numbering don't matter.")
                 row["question_text"] = row["column"]
             elif row["format"] == "combined":
@@ -371,7 +371,7 @@ def _render_custom_question_rules() -> list[CustomQuestionRule]:
             if row["mode"] == "full":
                 row["allowed_text"] = st.text_area(
                     "Allowed answers (one per line)", value=row["allowed_text"], key=f"cq_allowed_{row_id}",
-                    help="One answer option per line — answers may contain commas or other separators. Leave "
+                    help="One answer option per line - answers may contain commas or other separators. Leave "
                          "empty to only count answers (split on the separator).")
                 _rc, _cc, _sc = st.columns(3)
                 with _rc:
@@ -511,7 +511,7 @@ def _safe_read_template_headers(
     # Lead Templates sometimes have title/instruction rows above the real
     # header row, so headers aren't assumed to start at row 1. Returns the
     # exception (rather than swallowing it) so the caller can show the real
-    # reason — e.g. the file being an undownloaded OneDrive placeholder —
+    # reason - e.g. the file being an undownloaded OneDrive placeholder -
     # instead of a misleading "enter a valid path" message.
     if not path or not sheet_name:
         return [], None
@@ -522,15 +522,15 @@ def _safe_read_template_headers(
         return [], exc
 
 
-_NO_MAPPING_OPTION = "(none — this file has no such column)"
+_NO_MAPPING_OPTION = "(none - this file has no such column)"
 
 
 def _render_target_field_mapping(label: str, key_prefix: str, headers: list[str]) -> FieldMapping | None:
     if not headers:
         return None
-    st.caption(f"Map which {label} column corresponds to each field — needed if the header text "
+    st.caption(f"Map which {label} column corresponds to each field - needed if the header text "
                f"doesn't match the leadfile's own column names. Leave a field as \"{_NO_MAPPING_OPTION}\" "
-               f"if this file doesn't have that column at all (e.g. no CID column) — it won't be populated.")
+               f"if this file doesn't have that column at all (e.g. no CID column) - it won't be populated.")
 
     options = [_NO_MAPPING_OPTION] + headers
 
@@ -561,7 +561,7 @@ def _render_leadfile_column_mapping(key_prefix: str, existing: FieldMapping | No
     # field blank means "fall back to this client's QA field_mapping",
     # handled by the caller page, not here.
     st.caption(
-        "Which of the UPLOADED leadfile's own columns hold each field — lets this tool work standalone, "
+        "Which of the UPLOADED leadfile's own columns hold each field - lets this tool work standalone, "
         "without needing this client's QA field mapping (Run Check) configured at all. Leave every field "
         "blank to keep using the QA field mapping instead, if one exists."
     )
@@ -588,7 +588,7 @@ def _render_paired_field_mapping(key_prefix: str, target_name: str, existing: di
     # line in both boxes -- never twice on one line, which is what
     # actually kept going wrong here.
     st.caption(
-        f"Leadfile columns to send to {target_name}, one per line — don't include CID here, the "
+        f"Leadfile columns to send to {target_name}, one per line - don't include CID here, the "
         "uploaded row itself is kept and reused when writing Accumulated/Refund later, not anything "
         f"{target_name} echoes back:"
     )
@@ -597,7 +597,7 @@ def _render_paired_field_mapping(key_prefix: str, target_name: str, existing: di
         key=f"{key_prefix}_field_map_cols_input", label_visibility="collapsed", height=100)
 
     st.caption(
-        f"The matching {target_name} field name for each column above — same order, one per line. Type "
+        f"The matching {target_name} field name for each column above - same order, one per line. Type "
         "the column name again on its own line when it's identical on both sides (the common case for a "
         "survey/consent question worded the same way on both ends):"
     )
@@ -611,7 +611,7 @@ def _render_paired_field_mapping(key_prefix: str, target_name: str, existing: di
     if len(_cols) != len(_targets):
         render_problem(
             f"Leadfile columns ({len(_cols)} line(s)) and {target_name} field names ({len(_targets)} "
-            "line(s)) don't have the same number of lines — line N in one box has to be line N's match "
+            "line(s)) don't have the same number of lines - line N in one box has to be line N's match "
             "in the other. Keeping the previously saved mapping until these line up.",
             "Add or delete lines in one of the two boxes until both have the same count.",
         )
@@ -619,7 +619,7 @@ def _render_paired_field_mapping(key_prefix: str, target_name: str, existing: di
 
     mapping = dict(zip(_cols, _targets))
     if mapping:
-        st.caption("Preview — this is exactly what will be sent:")
+        st.caption("Preview - this is exactly what will be sent:")
         st.dataframe(
             {"Leadfile column": list(mapping.keys()), f"{target_name} field": list(mapping.values())},
             hide_index=True, use_container_width=True,
@@ -673,7 +673,7 @@ if selected_name:
         # another machine when this read hit it, or a transient OneDrive
         # lock -- both real possibilities for a file under the shared
         # OneDrive clients folder, previously an unhandled crash here.
-        render_problem(f"Could not load the profile for '{selected_name}' — it may be in an older format, or the "
+        render_problem(f"Could not load the profile for '{selected_name}' - it may be in an older format, or the "
                        "file may have been mid-write on another machine (try again in a moment). If it keeps "
                        f"happening, delete and re-create it in Client Setup. (Technical detail: {exc})",
                        "Try again in a moment. If it keeps happening, delete and re-create it in Client Setup.")
@@ -818,7 +818,7 @@ with tab_basics:
 
         accumulated_headers, accumulated_headers_error = _safe_read_template_headers(accumulated_path, accumulated_tab_name)
 
-        # Reset the mapping dropdowns whenever the actual file/tab changes —
+        # Reset the mapping dropdowns whenever the actual file/tab changes -
         # a keyed selectbox ignores a fresh `index=` on later reruns and just
         # keeps showing whatever's already in session_state, so switching files
         # without this explicit reset would leave stale selections on screen.
@@ -854,9 +854,9 @@ with tab_basics:
             jira_ticket_key = st.text_input(
                 "Jira ticket key or link (optional)", value=profile.jira_ticket_key if profile else "",
                 placeholder="e.g. PROJ-1234 or https://yourteam.atlassian.net/browse/PROJ-1234",
-                help="Paste either the ticket key or the full link — either works. Enables a \"Post summary "
+                help="Paste either the ticket key or the full link - either works. Enables a \"Post summary "
                      "to Jira\" button on Run Check after Finalize. Leave blank to skip. The same ticket "
-                     "usually covers a whole campaign — come back here and update it if that ever changes.",
+                     "usually covers a whole campaign - come back here and update it if that ever changes.",
             )
         with col_jira_reporter:
             jira_reporter_name = st.text_input(
@@ -869,7 +869,7 @@ with tab_basics:
         st.subheader("File Collation (optional)")
         st.caption(
             "Offers a \"collate multiple files into one New Leads file\" option on Run Check for this "
-            "client. Not forced on — you can still upload an already-collated file directly on any given run."
+            "client. Not forced on - you can still upload an already-collated file directly on any given run."
         )
         collation_enabled = st.checkbox(
             "Enable file collation for this client",
@@ -890,13 +890,13 @@ with tab_delivery:
             "Lead Template path", "lead_template_path_input",
             profile.lead_template_path if profile else "")
         st.caption("The default/shared Lead Template file. Leave this blank if every CID group below has "
-                   "its own separate file — a shared default isn't required.")
+                   "its own separate file - a shared default isn't required.")
         lead_template_link = st.text_input(
             "Lead Template SharePoint link (optional)",
             value=profile.lead_template_link if profile else "",
             placeholder="e.g. https://madlog.sharepoint.com/:x:/s/.../...",
             help="Used as the \"Lead Report\" link when posting a summary to Jira, instead of a local "
-                 "file path. This is the default for every tab below — a tab with its own file (and its "
+                 "file path. This is the default for every tab below - a tab with its own file (and its "
                  "own SharePoint link) can override it individually.",
         )
 
@@ -908,7 +908,7 @@ with tab_delivery:
             "Clear existing leads before adding new ones",
             value=profile.lead_template_clear_existing if profile else False,
             help="On: removes all existing data rows (keeping the header and its formatting, which is "
-                 "reused for the new rows) before pasting this run's leads — for a Lead Report that's "
+                 "reused for the new rows) before pasting this run's leads - for a Lead Report that's "
                  "re-sent fresh each time rather than accumulated. Off (default): new leads are appended "
                  "below whatever's already there, like the Accumulated Report.",
         )
@@ -916,21 +916,21 @@ with tab_delivery:
         if lead_template_multi_tab:
             st.info(
                 "Add one tab below for each group of CIDs. By default a tab writes into the shared Lead "
-                "Template file above, on the sheet you pick for it — set **\"File for this tab\"** only "
+                "Template file above, on the sheet you pick for it - set **\"File for this tab\"** only "
                 "when that CID group's leads go into a completely **different workbook** (its own "
                 "SharePoint file), not just a different sheet in the same file. A lead whose CID matches "
-                "no tab is skipped for the Lead Template step (with a warning) — it still goes to the "
+                "no tab is skipped for the Lead Template step (with a warning) - it still goes to the "
                 "Accumulated Report normally."
             )
             lead_template_tabs_result = _render_lead_template_tabs(lead_template_path)
             if not lead_template_tabs_result:
-                render_problem("Multi-tab is enabled but no tabs are configured — "
+                render_problem("Multi-tab is enabled but no tabs are configured - "
                                "no leads will be pasted into the Lead Template.",
                                "Click **Add Tab** above, or untick **Route different CIDs to different "
                                "tabs and/or separate files**.", level="warning")
             _header_source_sheet = lead_template_tabs_result[0].sheet_name if lead_template_tabs_result else ""
             # A tab can point at a completely different workbook than the shared
-            # path above — the column-mapping preview must read from whichever
+            # path above - the column-mapping preview must read from whichever
             # file the first tab will actually write to, not always the shared
             # default (which can legitimately be left blank).
             _header_source_path = (
@@ -976,7 +976,7 @@ with tab_delivery:
         template_headers, template_headers_error = _safe_read_template_headers(
             _header_source_path, _header_source_sheet, _tmpl_expected_for_detection)
 
-        # Same reset requirement as the Accumulated Report mapping above —
+        # Same reset requirement as the Accumulated Report mapping above -
         # a keyed selectbox won't pick up a new default on its own when the
         # underlying file/sheet changes.
         if st.session_state.get("_tmpl_mapping_for") != _tmpl_file_identity:
@@ -994,11 +994,11 @@ with tab_delivery:
             if template_headers_error:
                 render_error(template_headers_error)
             elif not template_headers:
-                st.caption("Enter a valid Lead Template path and sheet above to map its columns — for "
+                st.caption("Enter a valid Lead Template path and sheet above to map its columns - for "
                            "multiple tabs/files, this reads from the first tab's own file if it has one, "
                            "otherwise the shared Lead Template path.")
             else:
-                st.caption("Header row auto-detected — rows above it (titles, instructions) are left untouched.")
+                st.caption("Header row auto-detected - rows above it (titles, instructions) are left untouched.")
 
         st.divider()
         st.markdown("**Lead Template Column Mapping (optional)**")
@@ -1046,7 +1046,7 @@ with tab_delivery:
         ]
 
         _ltm_sample_file = st.file_uploader(
-            "Sample leadfile (optional — lets this preview show real auto-match results and pick a source "
+            "Sample leadfile (optional - lets this preview show real auto-match results and pick a source "
             "column from a dropdown instead of typing it)",
             type=["xlsx", "csv"], key="ltm_sample_file")
         _ltm_sample_df = None
@@ -1057,7 +1057,7 @@ with tab_delivery:
                 _ltm_sample_headers = list(_ltm_sample_df.columns)
             except Exception as exc:
                 render_error(exc)
-        # This client's real field mappings — used so the preview's
+        # This client's real field mappings - used so the preview's
         # auto-match resolves exactly the way append_leads/the mandatory
         # check would (target role -> synonym -> fuzzy), not a
         # fuzzy-match-only reimplementation that can silently disagree.
@@ -1081,8 +1081,8 @@ with tab_delivery:
                     _auto_match = resolve_one_header_source(
                         _ltm_col, _ltm_sample_df, _ltm_preview_fm, _ltm_preview_target_fm)
                     st.write(
-                        f"**{_ltm_col}** — auto-matches: *{_auto_match}*" if _auto_match
-                        else f"**{_ltm_col}** — :material/warning: no auto-match found")
+                        f"**{_ltm_col}** - auto-matches: *{_auto_match}*" if _auto_match
+                        else f"**{_ltm_col}** - :material/warning: no auto-match found")
                 else:
                     st.write(f"**{_ltm_col}**")
 
@@ -1175,7 +1175,7 @@ with tab_delivery:
         if gs_enabled:
             st.caption(
                 "CID → Sheet mapping, one per line, format `CID,Sheet URL` or `CID,Sheet URL,worksheet name` "
-                "(worksheet name defaults to \"Sheet1\") — paste the exact URL from your browser's address bar:"
+                "(worksheet name defaults to \"Sheet1\") - paste the exact URL from your browser's address bar:"
             )
             _existing_gs_tabs_text = "\n".join(
                 f"{t.cid},https://docs.google.com/spreadsheets/d/{t.sheet_id}/edit"
@@ -1202,7 +1202,7 @@ with tab_delivery:
                 value=profile.google_sheets.clear_existing if profile else False,
                 key="gs_clear_existing",
                 help="On: wipes every data row in each Sheet (keeping the header row) before adding this "
-                     "run's leads — for a Sheet that's re-sent fresh each time rather than accumulated. "
+                     "run's leads - for a Sheet that's re-sent fresh each time rather than accumulated. "
                      "Off (default): new leads are appended below whatever's already there.",
             )
 
@@ -1339,7 +1339,7 @@ with tab_exclusion:
             exclusion_sources_result = _render_sources_section(
                 "exclusion_sources", "Exclusion", check_domain=True, check_company=exclusion_check_company, check_email=False)
             if not exclusion_sources_result:
-                render_problem("Exclusion is enabled but no sources are configured — this check will do nothing.",
+                render_problem("Exclusion is enabled but no sources are configured - this check will do nothing.",
                                 "Click **Add Exclusion Source** above, or untick **Enable Exclusion check**.",
                                 level="warning")
         else:
@@ -1355,7 +1355,7 @@ with tab_tal:
             tal_sources_result = _render_sources_section(
                 "tal_sources", "TAL", check_domain=True, check_company=tal_check_company, check_email=False)
             if not tal_sources_result:
-                render_problem("TAL is enabled but no sources are configured — this check will do nothing.",
+                render_problem("TAL is enabled but no sources are configured - this check will do nothing.",
                                 "Click **Add TAL Source** above, or untick **Enable TAL check**.",
                                 level="warning")
         else:
@@ -1377,7 +1377,7 @@ with tab_suppression:
                 "suppression_sources", "Suppression", check_domain=suppression_check_domain,
                 check_company=suppression_check_company, check_email=suppression_check_email)
             if not suppression_sources_result:
-                render_problem("Suppression is enabled but no sources are configured — this check will do nothing.",
+                render_problem("Suppression is enabled but no sources are configured - this check will do nothing.",
                                 "Click **Add Suppression Source** above, or untick **Enable Suppression check**.",
                                 level="warning")
         else:
@@ -1393,7 +1393,7 @@ with tab_dedupe:
             dedupe_sources_result = _render_sources_section(
                 "dedupe_sources", "Dedupe List", check_domain=False, check_company=False, check_email=True)
             if not dedupe_sources_result:
-                render_problem("Dedupe list is enabled but no sources are configured — this check will do nothing.",
+                render_problem("Dedupe list is enabled but no sources are configured - this check will do nothing.",
                                 "Click **Add Dedupe List Source** above, or untick **Enable Dedupe list check**.",
                                 level="warning")
         else:
@@ -1444,10 +1444,10 @@ with tab_custom_questions:
                     "Required consent statements (one per line)",
                     value="\n".join(profile.custom_questions.consent_keys) if profile else "",
                     key="cq_consent_keys",
-                    help="The first few words of each statement are enough — matched loosely against the "
+                    help="The first few words of each statement are enough - matched loosely against the "
                          "start of each pair's text.").splitlines() if line.strip()]
             if not cq_rules_result and not cq_combined_cell_column:
-                render_problem("Custom Questions is enabled but no questions are configured — this check will "
+                render_problem("Custom Questions is enabled but no questions are configured - this check will "
                                "do nothing.",
                                "Click **Add Question** or **Detect from leadfile** above, set a combined cell "
                                "column, or untick **Enable Custom Questions check**.", level="warning")
@@ -1459,7 +1459,7 @@ with tab_lead_notes:
     with st.container(border=True):
         st.subheader("Lead Notes")
         st.caption(
-            "Checks a lead's narrative notes paragraph against the lead's own columns — email, phone, name, "
+            "Checks a lead's narrative notes paragraph against the lead's own columns - email, phone, name, "
             "company, job title, or any other value such as budget or timeframe. A different email/phone in "
             "the notes, or a required field the notes don't mention, gets that field's action."
         )
@@ -1476,7 +1476,7 @@ with tab_lead_notes:
             st.divider()
             ln_fields_result = _render_lead_notes_fields(profile.field_mapping if profile else None)
             if not ln_notes_column or not ln_fields_result:
-                render_problem("Lead Notes is enabled but isn't fully set up — this check will do nothing until "
+                render_problem("Lead Notes is enabled but isn't fully set up - this check will do nothing until "
                                "it has a notes column and at least one field.",
                                "Fill in **Notes column** and add a field, or untick **Enable Lead Notes "
                                "check**.", level="warning")
@@ -1488,11 +1488,11 @@ with tab_complex:
     with st.container(border=True):
         st.subheader("Complex Account")
         st.caption(
-            "For accounts that need extra, highly specific enrichment rules beyond the standard checks — "
+            "For accounts that need extra, highly specific enrichment rules beyond the standard checks - "
             "TAL account-ID/company mapping, per-CID Installed Technologies and Predictive Buying Stage "
             "lookups, Capture Date/Email Opt-in/phone cleanup, and asset metadata auto-correction. These "
             "rules are hardcoded (not configurable per field) since they're currently built for one client's "
-            "exact file layout — see core/complex_account.py."
+            "exact file layout - see core/complex_account.py."
         )
         complex_account_enabled = st.checkbox(
             "This is a complex account", value=profile.complex_account.enabled if profile else False)
@@ -1502,7 +1502,7 @@ with tab_complex:
             complex_account_tal_path = _path_input_with_browse(
                 "TAL file path", "complex_account_tal_path_input",
                 profile.complex_account.tal_path if profile else "")
-            st.caption("Account ID / company-name reference — matched by domain, with Country as a tie-breaker "
+            st.caption("Account ID / company-name reference - matched by domain, with Country as a tie-breaker "
                        "when a domain maps to more than one account.")
             complex_account_specifications_path = _path_input_with_browse(
                 "Specifications file path (\"...BANT NTQ & EHS\")", "complex_account_specs_path_input",
@@ -1510,7 +1510,7 @@ with tab_complex:
             st.caption("Asset Name → URN / Asset URL 1 & 2 / Dell URL reference, used to auto-correct those "
                        "columns for each lead's Asset Title.")
             st.caption("The Installed Technologies and Predictive Buying Stage files are uploaded fresh on "
-                       "the Run Check page each time, like the Purchased Lead Report — not configured here.")
+                       "the Run Check page each time, like the Purchased Lead Report - not configured here.")
         else:
             render_empty_state("Complex Account rules are off.",
                                 "Tick **This is a complex account** above to configure it.", icon="toggle_off")
@@ -1520,7 +1520,7 @@ with tab_delivery:
         st.subheader("Box Tracker (optional)")
         st.caption(
             "For clients whose lead-approval process runs through a Box-hosted tracker workbook this app "
-            "can't write to directly (no Box API access) — the tool instead maintains a local mirror "
+            "can't write to directly (no Box API access) - the tool instead maintains a local mirror "
             "workbook with the same tab/column shape, which gets copy-pasted into the real Box file by "
             "hand. See docs/superpowers/plans/2026-09-07-ibm-apac-box-tracker-automation.md."
         )
@@ -1550,7 +1550,7 @@ with tab_delivery:
                 box_tracker_cid_map[_cid.strip()] = _name.strip()
 
             st.caption(
-                "CID → Lead Template file path, one per line, format `CID,file path` — each live "
+                "CID → Lead Template file path, one per line, format `CID,file path` - each live "
                 "segment has its own template file, routed to by the lead's own CID:"
             )
             _existing_template_map_text = "\n".join(
@@ -1568,7 +1568,7 @@ with tab_delivery:
                 box_tracker_lead_template_map[_cid.strip()] = _path.strip()
 
             st.caption(
-                "Campaign names to skip Pacing updates for (one per line) — for a segment that's just "
+                "Campaign names to skip Pacing updates for (one per line) - for a segment that's just "
                 "gone live with no established Pacing history yet, picks ALL available blank-Status "
                 "leads instead of the Diff-based cap, and never writes to Pacing's Delivered cell:"
             )
@@ -1585,7 +1585,7 @@ with tab_delivery:
     with st.container(border=True):
         st.subheader("Convertr Upload (optional)")
         st.caption(
-            "Uploads a client-verified leadfile straight to Convertr via the Publisher API — every "
+            "Uploads a client-verified leadfile straight to Convertr via the Publisher API - every "
             "Publisher account has access to this by default, no Campaign Admin access required. Each "
             "CID routes to its own Convertr campaign."
         )
@@ -1607,7 +1607,7 @@ with tab_delivery:
                 value=profile.convertr.publisher_id if profile else "").strip()
 
             st.caption(
-                "CID → Convertr Campaign ID (SID) mapping, one per line, format `CID,CampaignID` — "
+                "CID → Convertr Campaign ID (SID) mapping, one per line, format `CID,CampaignID` - "
                 "optionally add a third value for the Form ID once you know it (Tracking → API "
                 "Credentials, or Test connection below): `CID,CampaignID,FormID`:"
             )
@@ -1635,8 +1635,8 @@ with tab_delivery:
                 "convertr", profile.convertr.leadfile_field_mapping if profile else None)
 
             st.caption(
-                "Account login — used both to upload leads and to read back accepted/rejected outcomes "
-                "(every Publisher user has API access with these same credentials) — stored locally on "
+                "Account login - used both to upload leads and to read back accepted/rejected outcomes "
+                "(every Publisher user has API access with these same credentials) - stored locally on "
                 "this machine only, never in the shared client profile:"
             )
             _existing_creds = get_convertr_account_credentials(client_name) if client_name else {
@@ -1650,7 +1650,7 @@ with tab_delivery:
 
             _unique_campaign_ids = sorted({c.campaign_id for c in convertr_campaigns if c.campaign_id})
             for _campaign_id in _unique_campaign_ids:
-                if st.button(f"Test connection — campaign {_campaign_id}", key=f"convertr_test_{_campaign_id}"):
+                if st.button(f"Test connection - campaign {_campaign_id}", key=f"convertr_test_{_campaign_id}"):
                     if not convertr_enterprise or not convertr_account_username or not convertr_account_password:
                         render_problem("Enter the enterprise subdomain and account login first.",
                                        "Fill in the enterprise subdomain, Convertr username and Convertr password above.",
@@ -1672,7 +1672,7 @@ with tab_delivery:
                                     f.removeprefix("form[").removesuffix("]") for f in _form.get("fields", []))
                                 st.success(
                                     f":material/check_circle: Form \"{_form.get('formName')}\" (Form ID "
-                                    f"{_form.get('formId')}) — fields: {_field_keys}"
+                                    f"{_form.get('formId')}) - fields: {_field_keys}"
                                 )
                         except ConvertrError as exc:
                             render_problem(f"Couldn't connect to Convertr: {exc}",
@@ -1686,7 +1686,7 @@ with tab_delivery:
         st.subheader("Enhancio Upload (optional)")
         st.caption(
             "Uploads a client-verified leadfile straight to Enhancio's Lead Import API. Unlike Convertr, "
-            "auth is ONE shared org-wide Client ID (set once on the **Settings** page) — every client just "
+            "auth is ONE shared org-wide Client ID (set once on the **Settings** page) - every client just "
             "needs its own CID → Enhancio allocation mapping. Each CID routes to its own allocation."
         )
         enhancio_enabled = st.checkbox(
@@ -1697,7 +1697,7 @@ with tab_delivery:
         enhancio_leadfile_mapping: FieldMapping | None = None
         if enhancio_enabled:
             st.caption(
-                "CID → Enhancio allocation mapping, one per line, format `CID,allocationUid` — use "
+                "CID → Enhancio allocation mapping, one per line, format `CID,allocationUid` - use "
                 "\"Fetch allocations from Enhancio\" below to find the right allocationUid instead of "
                 "hunting for it in the Enhancio portal:"
             )
@@ -1723,9 +1723,9 @@ with tab_delivery:
 
             st.caption(
                 "Fixed field values per allocation, one per line, format `allocationUid,Field "
-                "Label,Fixed Value` — for a field that's the SAME for every lead sent to that "
+                "Label,Fixed Value` - for a field that's the SAME for every lead sent to that "
                 "allocation (e.g. Company Size, Lead Source), not read from the leadfile. Confirmed "
-                "once here — every future upload to that allocation applies it automatically, no "
+                "once here - every future upload to that allocation applies it automatically, no "
                 "need to set it again:"
             )
             _existing_fixed_values_text = "\n".join(
@@ -1763,7 +1763,7 @@ with tab_delivery:
                                            level="warning")
                         for _allocation in _allocations:
                             st.success(
-                                f":material/check_circle: \"{_allocation.get('campaignName')}\" — allocationUid "
+                                f":material/check_circle: \"{_allocation.get('campaignName')}\" - allocationUid "
                                 f"{_allocation.get('uniqueId')} ({_allocation.get('allocationStatus')})"
                             )
                     except EnhancioError as exc:
@@ -1772,7 +1772,7 @@ with tab_delivery:
 
                 _unique_allocation_uids = sorted({a.allocation_uid for a in enhancio_allocations if a.allocation_uid})
                 for _allocation_uid in _unique_allocation_uids:
-                    if st.button(f"Test connection — allocation {_allocation_uid}",
+                    if st.button(f"Test connection - allocation {_allocation_uid}",
                                  key=f"enhancio_test_{_allocation_uid}"):
                         try:
                             with st.spinner(f"Calling Enhancio for allocation {_allocation_uid}..."):
@@ -1797,7 +1797,7 @@ with tab_delivery:
                                     "These mandatory fields have NO mapping entry pointing to them at all "
                                     "-- Enhancio will reject every lead sent to this allocation until each has "
                                     "one: " + "; ".join(f'\"{f}\"' for f in _unmapped_mandatory),
-                                    "Add a line for each to the Enhancio field mapping above — leadfile column on "
+                                    "Add a line for each to the Enhancio field mapping above - leadfile column on "
                                     "the left, this exact field label on the right.",
                                 )
                             for _field in _fields:
@@ -1808,7 +1808,7 @@ with tab_delivery:
                                     None)
                                 _line = f":material/check_circle: \"{_label}\" ({_required})"
                                 if _mapped_from is not None:
-                                    _line += f" — mapped from leadfile column \"{_mapped_from}\""
+                                    _line += f" - mapped from leadfile column \"{_mapped_from}\""
                                 st.success(_line)
                                 # A field constrained to a fixed picklist
                                 # (Enhancio rejects anything outside it as
@@ -1830,7 +1830,7 @@ with tab_delivery:
         st.subheader("Integrate Upload (optional)")
         st.caption(
             "Uploads a client-verified leadfile straight to Integrate.com's Lead API. One shared "
-            "org-wide API Key/Secret (set once on the **Settings** page) — this client just needs its "
+            "org-wide API Key/Secret (set once on the **Settings** page) - this client just needs its "
             "own Source ID (SID), from that Source's URL on home.integrate.com."
         )
         integrate_enabled = st.checkbox(
@@ -1843,10 +1843,10 @@ with tab_delivery:
         integrate_leadfile_mapping: FieldMapping | None = None
         if integrate_enabled:
             integrate_sid = st.text_input(
-                "Integrate Source ID (SID) — the GUID in home.integrate.com/sources/{SID}",
+                "Integrate Source ID (SID) - the GUID in home.integrate.com/sources/{SID}",
                 value=profile.integrate.sid if profile else "", key="integrate_sid_input").strip()
             integrate_callback_url = st.text_input(
-                "Callback URL (optional — leave blank unless Integrate told you to set one)",
+                "Callback URL (optional - leave blank unless Integrate told you to set one)",
                 value=profile.integrate.callback_url if profile else "", key="integrate_callback_url_input").strip()
 
             integrate_field_mapping = _render_paired_field_mapping(
@@ -1867,7 +1867,7 @@ with tab_delivery:
                 )
 
             st.caption(
-                "Fixed field values, one per line, format `Attribute,Fixed Value` — for an Integrate "
+                "Fixed field values, one per line, format `Attribute,Fixed Value` - for an Integrate "
                 "attribute that's the SAME for every lead this client sends (e.g. country), not read "
                 "from the leadfile:"
             )
@@ -1937,11 +1937,11 @@ if st.button("Save Client Profile", icon=":material/save:", type="primary"):
         render_problem("Client name is required.", "Enter one in **Basics → Client name**.")
     elif _client_name_invalid_chars or ".." in client_name:
         # The name becomes a bare filename ("<name>.json") under clients_dir
-        # with no further sanitizing — a "/" or "\" silently creates a
+        # with no further sanitizing - a "/" or "\" silently creates a
         # nested, orphaned profile that list_profile_names()'s flat scan can
         # never show again, and ".." can escape clients_dir entirely onto
         # an arbitrary path on disk.
-        render_problem("Client name can't contain a slash, a backslash, or \"..\" — these would break "
+        render_problem("Client name can't contain a slash, a backslash, or \"..\" - these would break "
                        "how the profile is saved to disk.", "Remove those characters from **Basics → Client name**.")
     elif leadcap_enabled and leadcap_segmented and leadcap_blank_cap_segments:
         render_problem("Leadcap segments are missing a cap: " + ", ".join(leadcap_blank_cap_segments) +

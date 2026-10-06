@@ -50,7 +50,7 @@ def submit_lead(
         response = requests.post(url, headers=headers, json=payload, params=params, timeout=30)
     except requests.exceptions.RequestException as exc:
         raise IntegrateError(
-            f"Network error calling Integrate (the lead may still have been created — check before "
+            f"Network error calling Integrate (the lead may still have been created - check before "
             f"retrying): {exc}"
         )
 

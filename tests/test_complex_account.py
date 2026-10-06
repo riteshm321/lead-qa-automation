@@ -111,8 +111,8 @@ def test_load_domain_value_map_matches_real_pbs_column_layout():
 
 
 def test_load_domain_value_map_aggregates_multiple_rows_for_same_domain():
-    # A domain can appear on more than one row — one Installed Technology
-    # per row — and all of them should be combined, not just the last one.
+    # A domain can appear on more than one row - one Installed Technology
+    # per row - and all of them should be combined, not just the last one.
     csv_text = (
         "Client: Dell APAC\n"
         '"Program: Dell APAC (ID: 139849)"\n'
@@ -121,7 +121,7 @@ def test_load_domain_value_map_aggregates_multiple_rows_for_same_domain():
         "Cipla,cipla.com,OS,Oracle Linux,2026-08-01\n"
         "Cipla,cipla.com,Networking,Cisco,2026-08-01\n"
         "Cipla,cipla.com,Storage,Pure Storage,2026-08-01\n"
-        "Cipla,cipla.com,OS,Oracle Linux,2026-08-01\n"  # exact duplicate — must not repeat
+        "Cipla,cipla.com,OS,Oracle Linux,2026-08-01\n"  # exact duplicate - must not repeat
     )
     mapping = load_domain_value_map(
         _upload("it.csv", csv_text), "Domain", "Installed Technologies", aggregate=True)
@@ -286,7 +286,7 @@ def test_check_asset_url_mismatches_flags_wrong_urn_and_dell_url():
     messages = [str(d) for d in review[0]]
     assert any("Asset URN doesn't match" in m for m in messages)
     assert any("Dell Asset URL doesn't match" in m for m in messages)
-    assert not any("Form URL" in m for m in messages)  # matched the india_link — not flagged
+    assert not any("Form URL" in m for m in messages)  # matched the india_link - not flagged
 
     urn_detail = next(d for d in review[0] if "Asset URN" in d.message)
     assert urn_detail.lead_value == "WRONG_URN"
@@ -387,7 +387,7 @@ def test_check_complex_account_conditions_flags_bad_date_and_optin_without_mutat
     assert 0 in review
     assert any("Capture Date" in str(r) for r in review[0])
     assert any("Email Opt-in" in str(r) for r in review[0])
-    # Purely a check — the source DataFrame must be untouched.
+    # Purely a check - the source DataFrame must be untouched.
     assert df.loc[0, "Capture Date"] == "not a date"
     assert df.loc[0, "Email Opt-in"] == "Maybe"
 
@@ -412,7 +412,7 @@ def test_apply_complex_account_rules_end_to_end():
     assert row["Additional Data Point (poll questions, dynamic data, etc)  1"] == "Top Trending Topics: AI, Cloud"
     assert row["Additional Data Point (poll questions, dynamic data, etc)  2"] == "Installed Technologies: AWS, Azure"
     assert row["Additional Data Point (poll questions, dynamic data, etc)  3"] == "Predictive Buying Stage: Awareness"
-    # A real date object, not text — so Excel stores/filters it as a date.
+    # A real date object, not text - so Excel stores/filters it as a date.
     assert row["Capture Date"] == datetime.date(2026, 8, 17)
     assert row["Email Opt-in"] == "Yes"
     assert row["Business Phone"] == "91 9819719038"
@@ -781,7 +781,7 @@ def test_apply_complex_account_rules_flags_bad_capture_date_and_optin_for_review
 
 def test_apply_complex_account_rules_leaves_blank_top_topics_cell_blank():
     # Regression test: a genuinely blank cell in an Excel-sourced DataFrame
-    # reads as float NaN, not None or "" — the prefix logic must not treat
+    # reads as float NaN, not None or "" - the prefix logic must not treat
     # that as "has content" and produce "Top Trending Topics: nan".
     df = _base_leads_df()
     df.loc[0, "Additional Data Point (poll questions, dynamic data, etc)  1"] = float("nan")

@@ -12,7 +12,7 @@ def test_client_profile_defaults():
                        company="company", cid="CID")
     profile = ClientProfile(
         name="Basware",
-        accumulated_report_path="sample_data/Basware APAC – Accumulated Report.xlsx",
+        accumulated_report_path="sample_data/Basware APAC - Accumulated Report.xlsx",
         field_mapping=fm,
     )
     assert profile.duplicate == DuplicateConfig()

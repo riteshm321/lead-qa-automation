@@ -554,8 +554,8 @@ def test_convertr_upload_summary_uses_icon_metric_cards(tmp_path, monkeypatch):
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.session_state["convertr_upload_results"] = pd.DataFrame([
-        {"CID": "44709", "Email": "a@x.com", "Result": "Uploaded — Lead ID 1"},
-        {"CID": "44709", "Email": "b@x.com", "Result": "Failed — Convertr returned 400: bad email"},
+        {"CID": "44709", "Email": "a@x.com", "Result": "Uploaded - Lead ID 1"},
+        {"CID": "44709", "Email": "b@x.com", "Result": "Failed - Convertr returned 400: bad email"},
         {"CID": "44709", "Email": "c@x.com", "Result": "Skipped (already uploaded previously)"},
     ])
     at.run()

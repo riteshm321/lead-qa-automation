@@ -50,7 +50,7 @@ def test_main_starts_server_and_browser_thread_when_port_is_free():
 def test_sync_bundled_theme_config_copies_config_to_app_data(tmp_path):
     # Regression test: Streamlit discovers .streamlit/config.toml relative
     # to the current working directory, which _chdir_to_app_folder points
-    # at the per-user app-data folder — without copying our bundled theme
+    # at the per-user app-data folder - without copying our bundled theme
     # config there, the packaged exe silently fell back to Streamlit's own
     # default theme instead of the app's branded one.
     bundled_dir = tmp_path / "bundled" / ".streamlit"
@@ -70,7 +70,7 @@ def test_sync_bundled_theme_config_copies_config_to_app_data(tmp_path):
 
 def test_sync_bundled_theme_config_overwrites_a_stale_copy(tmp_path):
     # Unlike aliases (user-editable, copied only if missing), the theme
-    # config is app-owned — a stale copy from an older build must be
+    # config is app-owned - a stale copy from an older build must be
     # replaced, not preserved, so branding updates actually take effect.
     bundled_dir = tmp_path / "bundled" / ".streamlit"
     bundled_dir.mkdir(parents=True)

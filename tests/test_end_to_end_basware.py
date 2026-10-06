@@ -12,8 +12,8 @@ SAMPLE_DIR = "sample_data"
 
 @pytest.fixture
 def accumulated_copy(tmp_path):
-    source = f"{SAMPLE_DIR}/Basware APAC – Accumulated Report.xlsx"
-    dest = tmp_path / "Basware APAC – Accumulated Report.xlsx"
+    source = f"{SAMPLE_DIR}/Basware APAC - Accumulated Report.xlsx"
+    dest = tmp_path / "Basware APAC - Accumulated Report.xlsx"
     shutil.copy2(source, dest)
     return str(dest)
 
@@ -42,7 +42,7 @@ def test_master_output_leads_are_flagged_as_duplicates_against_accumulated(accum
         alias_groups=[],
     )
 
-    # Master_Output.xlsx leads are already in Accumulated (per user's note) — expect most/all flagged.
+    # Master_Output.xlsx leads are already in Accumulated (per user's note) - expect most/all flagged.
     assert len(result.refund_reasons) > 0
     assert all("Duplicate" in reason or "Exclusion" in reason for reason in result.refund_reasons.values())
 

@@ -38,9 +38,9 @@ def test_process_log_lists_every_process_with_client_date_and_time(tmp_path, mon
     assert set(log_df["Client"]) == {"Acme", "Beta Corp"}
     assert "Yes" in list(log_df["Complex Account"])
     # Every row has a real date and time split out of the stored timestamp,
-    # not the literal "—" placeholder used only when a timestamp is missing.
-    assert all(d != "—" for d in log_df["Date"])
-    assert all(t != "—" for t in log_df["Time"])
+    # not the literal "-" placeholder used only when a timestamp is missing.
+    assert all(d != "-" for d in log_df["Date"])
+    assert all(t != "-" for t in log_df["Time"])
 
 
 def test_filter_by_user_narrows_the_log_and_the_totals(tmp_path, monkeypatch):

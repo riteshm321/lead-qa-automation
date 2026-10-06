@@ -39,9 +39,9 @@ for _username, _record in _activity.items():
         _manual = _entry.get("manual_minutes", 0.0)
         _rows.append({
             "User": _username,
-            "Client": _entry.get("client", "—"),
-            "Date": _date or "—",
-            "Time": _time or "—",
+            "Client": _entry.get("client", "-"),
+            "Date": _date or "-",
+            "Time": _time or "-",
             "Automated": format_minutes(_automated),
             "Manual": format_minutes(_manual),
             "Saved": format_minutes(_manual - _automated),
@@ -70,8 +70,8 @@ with st.container(border=True):
         _stats = get_user_stats(_record)
         _count = _record.get("process_count", 0)
         st.markdown(
-            f"**{_username}** — {_count} process(es), {format_minutes(_stats['total_saved_minutes'])} saved "
-            f"(last: {_record.get('last_updated', '—')})"
+            f"**{_username}** - {_count} process(es), {format_minutes(_stats['total_saved_minutes'])} saved "
+            f"(last: {_record.get('last_updated', '-')})"
         )
         st.caption(
             f"Avg {format_minutes(_stats['avg_automated_minutes'])}/process · "

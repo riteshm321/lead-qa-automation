@@ -100,7 +100,7 @@ def _bootstrap_bundled_aliases(app_data: str) -> None:
 def _sync_bundled_theme_config(app_data: str) -> None:
     # Streamlit discovers .streamlit/config.toml relative to the CURRENT
     # WORKING DIRECTORY, which the chdir below points at this per-user data
-    # folder instead of the bundled resources — without this, the packaged
+    # folder instead of the bundled resources - without this, the packaged
     # exe silently falls back to Streamlit's own default theme instead of
     # ours. Unlike aliases (user-editable data, copied once), this is
     # app-owned configuration, so it's always overwritten to pick up
@@ -141,7 +141,7 @@ def _open_browser_when_ready(url: str) -> None:
 
 def _port_already_serving(url: str) -> bool:
     # A quick, synchronous check for "is this app (or anything) already
-    # listening here" — done BEFORE starting our own server, so a
+    # listening here" - done BEFORE starting our own server, so a
     # double-launch can cleanly reuse the already-running instance's
     # window instead of racing Streamlit's own bind attempt.
     try:
@@ -159,7 +159,7 @@ def main() -> int:
         url = f"http://localhost:{port}"
 
         if _port_already_serving(url):
-            # Almost certainly our own previous instance, still running —
+            # Almost certainly our own previous instance, still running -
             # binding our own server to this port would fail with an
             # unhandled OSError that kills the whole process (daemon
             # threads included) before it ever gets a chance to open a
@@ -196,7 +196,7 @@ def main() -> int:
     except Exception:
         # Anything else that stops the app from starting at all (a
         # permission error creating the per-user data folder, a corrupted
-        # install, etc.) — print a clear banner ahead of the traceback
+        # install, etc.) - print a clear banner ahead of the traceback
         # (this exe runs with a console window) instead of a bare stack
         # trace with no context, then report failure so a caller/wrapper
         # script can detect it.

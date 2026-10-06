@@ -10,20 +10,20 @@ _DEFAULT_TIMEOUT_SECONDS = 60
 
 def recalculate_workbook(path: str, timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS) -> str:
     """Force every formula in `path` to recalculate, returning the path to a
-    temporary, recalculated copy — the original file is never opened for
+    temporary, recalculated copy - the original file is never opened for
     writing and is never modified.
 
-    openpyxl (used everywhere else in this app) never evaluates formulas —
+    openpyxl (used everywhere else in this app) never evaluates formulas -
     it only ever reads whatever value Excel itself last cached. A workbook
     this app wrote new rows into (via openpyxl, not Excel) keeps showing
-    Excel's *previous* cached formula results — stale, or None/blank if the
-    formula was newly added and never opened in real Excel at all — even
+    Excel's *previous* cached formula results - stale, or None/blank if the
+    formula was newly added and never opened in real Excel at all - even
     though the underlying data just changed. This drives Excel itself,
     headlessly, to produce a fresh, correct cache.
 
     Best-effort: returns the original `path` unchanged if pywin32/Excel
     isn't available, or if recalculation fails or exceeds the timeout for
-    any reason (a hung/crashed Excel automation, a corrupt file, etc.) —
+    any reason (a hung/crashed Excel automation, a corrupt file, etc.) -
     callers get back a valid path either way and should treat a returned
     original path as "possibly stale," not as an error to surface.
     """
@@ -56,7 +56,7 @@ def recalculate_workbook(path: str, timeout_seconds: int = _DEFAULT_TIMEOUT_SECO
         try:
             # DispatchEx (never GetObject/Dispatch's "reuse a running
             # instance" behavior) guarantees a fresh, isolated Excel
-            # instance — never one the user might already have open with
+            # instance - never one the user might already have open with
             # unsaved work of their own.
             app = win32com.client.DispatchEx("Excel.Application")
             try:
@@ -71,7 +71,7 @@ def recalculate_workbook(path: str, timeout_seconds: int = _DEFAULT_TIMEOUT_SECO
             try:
                 app.AutomationSecurity = 4  # msoAutomationSecurityForceDisable
             except Exception:
-                pass  # not settable on every Excel version/context — non-fatal
+                pass  # not settable on every Excel version/context - non-fatal
 
             wb = app.Workbooks.Open(tmp_path, UpdateLinks=0, ReadOnly=False)
             app.CalculateFullRebuild()
@@ -108,7 +108,7 @@ def recalculate_workbook(path: str, timeout_seconds: int = _DEFAULT_TIMEOUT_SECO
 
 
 def _force_kill(pid: int) -> None:
-    # Only reached when graceful Quit() didn't finish in time — kill the
+    # Only reached when graceful Quit() didn't finish in time - kill the
     # *specific* Excel process this call spawned, never a broad "all Excel
     # processes" sweep, so a user's own open Excel windows are never touched.
     try:

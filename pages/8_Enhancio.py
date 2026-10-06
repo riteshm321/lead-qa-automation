@@ -124,7 +124,7 @@ render_status_strip([
 def _get_token() -> str:
     client_id = get_enhancio_client_id()
     if not client_id:
-        render_problem("No Enhancio Client ID configured — set one on the Settings page first.",
+        render_problem("No Enhancio Client ID configured - set one on the Settings page first.",
                        "It's under **Settings → Enhancio Client ID (private to this machine)**.")
         st.stop()
     try:
@@ -173,7 +173,7 @@ def _plan_sends(
             _cid = str(lead[cid_column])
             skip_results.append({
                 "CID": _cid, "Email": lead.get(leadfile_mapping.email, ""),
-                "Result": f"Skipped (test mode — allocation {_allocation_by_cid[_cid]} "
+                "Result": f"Skipped (test mode - allocation {_allocation_by_cid[_cid]} "
                           "already tested via another CID)",
             })
         # A CID with no allocation mapping at all is excluded from both
@@ -195,7 +195,7 @@ def _plan_sends(
         if allocation_uid is None:
             for _, lead in group.iterrows():
                 skip_results.append({"CID": cid, "Email": lead.get(leadfile_mapping.email, ""),
-                                 "Result": "Failed — No Enhancio allocation mapped for this CID"})
+                                 "Result": "Failed - No Enhancio allocation mapped for this CID"})
                 failed_entries.append(make_failed_entry(
                     lead.to_dict(), lead.get(leadfile_mapping.email, ""),
                     "No Enhancio allocation mapped for this CID"))
@@ -322,7 +322,7 @@ def _upload_leads(
                 for _, lead in _send_df.iterrows():
                     results.append({
                         "CID": lead.get(cid_column, ""), "Email": lead.get(leadfile_mapping.email, ""),
-                        "Result": f"Failed — {exc}"})
+                        "Result": f"Failed - {exc}"})
                     _failed_entries.append(make_failed_entry(
                         lead.to_dict(), lead.get(leadfile_mapping.email, ""), str(exc)))
                 continue
@@ -372,7 +372,7 @@ def _upload_leads(
                 # once it writes to Accumulated/Refund later.
                 _allocation_newly_pending[str(lead_id)] = {col: lead.get(col, "") for col in source_df.columns}
                 _newly_uploaded_emails_by_allocation[allocation_uid].add(str(email))
-                results.append({"CID": cid, "Email": email, "Result": f"Uploaded — Lead ID {lead_id} ({status})"})
+                results.append({"CID": cid, "Email": email, "Result": f"Uploaded - Lead ID {lead_id} ({status})"})
                 _succeeded_emails.add(str(email))
             else:
                 _echoed_status = _not_accepted_status_by_email.get(str(email).strip().lower())
@@ -381,7 +381,7 @@ def _upload_leads(
                     + (f" (status: {_echoed_status})" if _echoed_status else "")
                     + (": " + "; ".join(_distinct_batch_errors) if _distinct_batch_errors else "")
                 )
-                results.append({"CID": cid, "Email": email, "Result": f"Failed — {_reason}"})
+                results.append({"CID": cid, "Email": email, "Result": f"Failed - {_reason}"})
                 _failed_entries.append(make_failed_entry(lead.to_dict(), email, _reason))
 
         # Persist THIS allocation's results immediately, not batched to
@@ -411,13 +411,13 @@ def _upload_leads(
 with st.container(border=True):
     st.subheader(":material/upload: 1. Upload leads to Enhancio")
     st.caption(
-        "Uploads a client-verified leadfile straight to Enhancio's Lead Import API — each CID routes to its "
+        "Uploads a client-verified leadfile straight to Enhancio's Lead Import API - each CID routes to its "
         "own allocation, per the mapping configured on Client Setup. A lead already uploaded before (by "
         "email) is skipped automatically, so re-uploading the same or an overlapping file is safe."
     )
 
     _test_mode = st.checkbox(
-        "Test mode — upload only 1 lead per Enhancio allocation",
+        "Test mode - upload only 1 lead per Enhancio allocation",
         help="Use this for a first-time check before uploading real volume. Several CIDs can share one "
              "allocation, so this touches each real allocation exactly once, not once per CID.",
     )
@@ -434,7 +434,7 @@ with st.container(border=True):
     if leads_df is not None:
         if not _leadfile_mapping:
             render_problem(
-                "This client has no leadfile column mapping for Enhancio yet — set one under Client Setup's "
+                "This client has no leadfile column mapping for Enhancio yet - set one under Client Setup's "
                 "Enhancio section (Email/First Name/Last Name/Company/CID columns)."
             )
             st.stop()
@@ -518,13 +518,13 @@ with st.container(border=True):
         if _dup_preview_count:
             render_problem(
                 f"{_dup_preview_count} lead(s) in this file were already uploaded to (accepted by) their allocation "
-                "before and will be skipped. Leads that failed before are never counted here — they're sent "
+                "before and will be skipped. Leads that failed before are never counted here - they're sent "
                 "again automatically.",
                 level="warning")
             _reupload_duplicates = st.checkbox(
                 "Also resend the leads Enhancio already accepted", value=False,
                 key="enhancio_reupload_duplicates",
-                help="Leave unchecked to retry only what failed before (recommended — failed leads are never "
+                help="Leave unchecked to retry only what failed before (recommended - failed leads are never "
                      "remembered as uploaded, so they go out again on their own). Tick this only to deliberately "
                      "resend leads Enhancio already accepted; that creates duplicate submissions.",
             )
@@ -539,7 +539,7 @@ with st.container(border=True):
             for _uid in _file_allocation_uids:
                 _count = len(_already_uploaded_by_allocation[_uid])
                 _reset_col1, _reset_col2 = st.columns([3, 1])
-                _reset_col1.write(f"**{_uid}** — {_count} email(s) remembered")
+                _reset_col1.write(f"**{_uid}** - {_count} email(s) remembered")
                 if _reset_col2.button("Reset", key=f"enhancio_reset_{_uid}", disabled=_count == 0):
                     clear_uploaded_emails(client_name, _uid)
                     queue_toast_before_rerun(f"Cleared already-uploaded memory for allocation {_uid}.")
@@ -554,15 +554,15 @@ with st.container(border=True):
             icon=":material/preview:",
         ):
             st.caption(
-                "The exact rows that will be sent if you click \"Upload to Enhancio\" below right now — "
+                "The exact rows that will be sent if you click \"Upload to Enhancio\" below right now - "
                 "already reflects Test mode and any duplicate-skipping above. Nothing here has been sent yet."
             )
             if not _preview_send_by_allocation:
-                render_empty_state("Nothing would be sent — every lead is either already uploaded or unmapped.",
+                render_empty_state("Nothing would be sent - every lead is either already uploaded or unmapped.",
                                    icon="block")
             else:
                 for _uid, _df in _preview_send_by_allocation.items():
-                    st.write(f"**Allocation {_uid}** — {len(_df)} lead(s)")
+                    st.write(f"**Allocation {_uid}** - {len(_df)} lead(s)")
                 _preview_combined = pd.concat([
                     _df.assign(**{"Enhancio Allocation": _uid}) for _uid, _df in _preview_send_by_allocation.items()
                 ])
@@ -617,7 +617,7 @@ with st.container(border=True):
     st.caption(
         "Polls Enhancio for the leads uploaded in step 1 that haven't been resolved yet (the latest upload by "
         "default), and writes accepted "
-        "ones into the Accumulated tab and rejected ones into the Refund tab (with Enhancio's own reason) — "
+        "ones into the Accumulated tab and rejected ones into the Refund tab (with Enhancio's own reason) - "
         "matched by column header, same as any other lead write, with that day's date under Date and each "
         "lead's own CID from the leadfile it was uploaded from. A lead still mid-processing is left pending "
         "and checked again on the next sync; once written, it's never fetched or written again."
@@ -635,7 +635,7 @@ with st.container(border=True):
                 status_entries = enhancio_client.get_lead_status(_token, list(pending.keys())) if pending else []
         except EnhancioError as exc:
             render_problem(f"Error fetching lead status: {exc}",
-                           "Nothing was written — click **Fetch decisions from Enhancio** again in a moment.")
+                           "Nothing was written - click **Fetch decisions from Enhancio** again in a moment.")
             st.stop()
 
         status_by_id = {str(entry.get("leadId")): entry for entry in status_entries}
@@ -671,7 +671,7 @@ with st.container(border=True):
         _accepted_rows, _rejected_rows = [], []
 
     if _accepted_rows or _rejected_rows:
-        st.info(f"{len(_accepted_rows)} newly accepted, {len(_rejected_rows)} newly rejected — not yet written.")
+        st.info(f"{len(_accepted_rows)} newly accepted, {len(_rejected_rows)} newly rejected - not yet written.")
         if _accepted_rows:
             st.dataframe(pd.DataFrame(_accepted_rows).drop(columns=["_enhancio_lead_id"]), hide_index=True)
         if _rejected_rows:
@@ -680,7 +680,7 @@ with st.container(border=True):
         if st.button("Write to Accumulated & Refund", type="primary"):
             if not _leadfile_mapping:
                 render_problem(
-                    "This client has no leadfile column mapping for Enhancio yet — set one under Client "
+                    "This client has no leadfile column mapping for Enhancio yet - set one under Client "
                     "Setup's Enhancio section (Email/First Name/Last Name/Company/CID columns)."
                 )
                 st.stop()
@@ -734,7 +734,7 @@ with st.container(border=True):
     if not profile.jira_ticket_key:
         render_empty_state("No Jira ticket configured for this client (set one up on Client Setup).", icon="confirmation_number")
     else:
-        st.caption("Nothing is sent until you click Post below — review (and edit) first.")
+        st.caption("Nothing is sent until you click Post below - review (and edit) first.")
 
         _upload_results_df = st.session_state.get("enhancio_upload_results")
         _reconcile_summary = st.session_state.get("enhancio_reconcile_summary")
@@ -788,4 +788,4 @@ with st.container(border=True):
                     st.success("Posted to Jira.")
                 except JiraError as exc:
                     render_problem(f"Failed to post to Jira: {exc}",
-                                   "Nothing else was affected — click **Post to ...** again once this is fixed.")
+                                   "Nothing else was affected - click **Post to ...** again once this is fixed.")

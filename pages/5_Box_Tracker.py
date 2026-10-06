@@ -104,7 +104,7 @@ _acc_fm = resolve_field_mapping(profile.accumulated_field_mapping, profile.field
 st.caption(
     f"**{_IBM_APAC_CLIENT_NAME}**'s Box-hosted lead-approval tracker has no API access, so every write "
     "here goes straight to Box Desktop's local sync copy of the real file at "
-    f"`{profile.box_tracker.mirror_workbook_path}` — Box syncs it from there on its own, no manual "
+    f"`{profile.box_tracker.mirror_workbook_path}` - Box syncs it from there on its own, no manual "
     "copy-paste step."
 )
 
@@ -139,7 +139,7 @@ with st.container(border=True):
                 )
 
                 if picked_df.empty:
-                    render_problem("No blank-Status leads matched any mapped CID with a known Pacing Diff — nothing to send.",
+                    render_problem("No blank-Status leads matched any mapped CID with a known Pacing Diff - nothing to send.",
                                    "Check the CID → campaign mapping under Client Setup → Delivery → Box Tracker covers "
                                    "these leads' CIDs.", level="warning")
                     st.stop()
@@ -204,7 +204,7 @@ with st.container(border=True):
                     {idx: status_label for idx in picked_df.index},
                 )
 
-                st.success(f"Sent {len(picked_df)} lead(s) for approval — see {_APPROVAL_SHEET_TAB} in the mirror workbook.")
+                st.success(f"Sent {len(picked_df)} lead(s) for approval - see {_APPROVAL_SHEET_TAB} in the mirror workbook.")
                 if _approval_unmatched:
                     render_problem(
                         f"The {_APPROVAL_SHEET_TAB} tab has column(s) this tool doesn't fill in and left blank: "
@@ -214,7 +214,7 @@ with st.container(border=True):
                     )
                 if shortfall:
                     for cid, amount in shortfall.items():
-                        render_problem(f"CID {cid} was short by {amount} lead(s) — sent all that were available.",
+                        render_problem(f"CID {cid} was short by {amount} lead(s) - sent all that were available.",
                                        level="warning")
         except Exception as exc:
             render_error(exc)
@@ -248,13 +248,13 @@ with st.container(border=True):
             for idx, lead in _blank_status_df.iterrows():
                 _raw_manual_email = lead.get(_manual_email_col, "")
                 email = str(_raw_manual_email).strip() if pd.notna(_raw_manual_email) else ""
-                label_text = email if email else f"(no email — row {idx + 2})"
+                label_text = email if email else f"(no email - row {idx + 2})"
                 manual_flags[idx] = st.checkbox(f"Mark {label_text}", key=f"manual_{idx}")
 
             if st.button("Mark as added to Approval Sheet", key="mark_manual_button"):
                 marked_indices = {idx for idx, flag in manual_flags.items() if flag}
                 if not marked_indices:
-                    render_problem("No leads checked — nothing to mark.", "Tick at least one **Mark ...** box above first.",
+                    render_problem("No leads checked - nothing to mark.", "Tick at least one **Mark ...** box above first.",
                                    level="warning")
                 else:
                     set_status_by_row_index(
@@ -262,6 +262,6 @@ with st.container(border=True):
                         {idx: uploaded_to_approval_sheet_label(datetime.date.today()) for idx in marked_indices},
                     )
                     st.success(
-                        f"Marked {len(marked_indices)} lead(s) as \"{_MANUAL_STATUS_PREFIX}\" — "
+                        f"Marked {len(marked_indices)} lead(s) as \"{_MANUAL_STATUS_PREFIX}\" - "
                         "they're no longer offered here."
                     )

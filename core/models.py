@@ -182,11 +182,11 @@ class LeadNotesConfig:
 class LeadTemplateTab:
     sheet_name: str
     cids: list[str] = field(default_factory=list)
-    # Blank means "use the client's shared Lead Template path" — set this
+    # Blank means "use the client's shared Lead Template path" - set this
     # when this CID group's leads actually go to a completely different
     # workbook rather than another tab in the same one.
     file_path: str = ""
-    # Blank means "use the client's shared Lead Template SharePoint link" —
+    # Blank means "use the client's shared Lead Template SharePoint link" -
     # set this when file_path points at a different workbook, since that
     # workbook lives at its own SharePoint location with its own share link.
     link: str = ""
@@ -250,7 +250,7 @@ class ComplexAccountConfig:
     # A "complex account" needs a batch of highly specific, largely
     # non-transferable enrichment rules (TAL account-ID mapping, per-CID
     # Installed Technologies/Predictive Buying Stage lookups, asset
-    # metadata auto-correction, etc.) on top of the normal QA pipeline —
+    # metadata auto-correction, etc.) on top of the normal QA pipeline -
     # see core/complex_account.py for the actual rule implementations.
     enabled: bool = False
     tal_path: str = ""

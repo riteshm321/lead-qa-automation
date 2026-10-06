@@ -48,7 +48,7 @@ st.title(":material/play_circle: Run Check")
 
 @st.cache_data(show_spinner="Loading TAL reference file (large file, first load can take ~15s)...")
 def _cached_tal_index(path: str, mtime: float):
-    # mtime must NOT be underscore-prefixed — Streamlit excludes any
+    # mtime must NOT be underscore-prefixed - Streamlit excludes any
     # parameter named with a leading underscore from the cache key hash,
     # which would silently defeat the whole point of passing it in (to
     # invalidate the cache when the file changes on disk mid-session).
@@ -63,7 +63,7 @@ def _cached_tal_segment_index(path: str, mtime: float):
 
 @st.cache_data(show_spinner="Loading asset specifications...")
 def _cached_asset_specs(path: str, mtime: float):
-    # See _cached_tal_index above — same reasoning for the mtime param name.
+    # See _cached_tal_index above - same reasoning for the mtime param name.
     return load_asset_specifications(path)
 
 
@@ -72,7 +72,7 @@ def _cached_sheet_df(path: str, sheet_name: str, mtime: float) -> pd.DataFrame:
     # Every reference/accumulated file (exclusion, TAL, suppression, dedupe
     # sources, plus the Accumulated Report itself) was being re-read from
     # disk with pd.read_excel on every single Run Check click, even when
-    # nothing on disk had changed since the last click — by far the biggest
+    # nothing on disk had changed since the last click - by far the biggest
     # chunk of "Running checks..." time for clients with large reference
     # files. See _cached_tal_index above for why mtime isn't underscored.
     return read_sheet_as_dataframe(path, sheet_name)
@@ -190,19 +190,19 @@ except (TypeError, ValueError, OSError) as exc:
     # another machine when this read hit it, or a transient OneDrive
     # lock -- both real possibilities for a file under the shared
     # OneDrive clients folder, previously an unhandled crash here.
-    st.error(f"Could not load the profile for '{client_name}' — it may be in an older format, or the "
+    st.error(f"Could not load the profile for '{client_name}' - it may be in an older format, or the "
              "file may have been mid-write on another machine (try again in a moment). If it keeps "
              f"happening, delete and re-create it in Client Setup. (Technical detail: {exc})")
     st.stop()
 
-# A stale result from a previous client/file is more confusing than useful —
+# A stale result from a previous client/file is more confusing than useful -
 # drop it automatically the moment the client or uploaded file changes.
 _run_identity = client_name
 if st.session_state.get("run_result_for") not in (None, _run_identity) and "run_result" in st.session_state:
     for key in ("run_result", "run_new_leads", "run_result_for"):
         st.session_state.pop(key, None)
 
-# A lightweight progress indicator, not a tracked workflow state — it just
+# A lightweight progress indicator, not a tracked workflow state - it just
 # reflects what's in session_state right now, the same way the rest of this
 # page already decides what to show. "Post to Jira" only appears for a
 # client that actually has a ticket key configured, since that step is
@@ -243,7 +243,7 @@ new_leads_file = None
 if profile.collation_enabled:
     with st.expander("Collate multiple files into one New Leads file (optional)", icon=":material/library_add:"):
         st.caption(
-            "Only use this when you have several per-CID export files to combine — if you already "
+            "Only use this when you have several per-CID export files to combine - if you already "
             "have one collated file ready, skip this and upload it directly below as normal."
         )
         _collate_files = st.file_uploader(
@@ -252,19 +252,19 @@ if profile.collation_enabled:
         if st.button("Collate files", key="collate_button", disabled=not _collate_files):
             master_df, per_file_results, skipped, column_notes = collate_uploaded_files(_collate_files)
             if master_df.empty:
-                st.error("No files could be collated — see errors below.")
+                st.error("No files could be collated - see errors below.")
             else:
                 st.session_state[_collated_key] = master_df
             for filename, cid, count in per_file_results:
-                st.caption(f":material/check: {filename} (CID {cid or '—'}): {count} lead(s)")
+                st.caption(f":material/check: {filename} (CID {cid or '-'}): {count} lead(s)")
             if skipped:
                 st.warning("Skipped: " + "; ".join(f"{f} ({e})" for f, e in skipped))
             for filename, new_cols, missing_cols in column_notes:
                 note = filename
                 if new_cols:
-                    note += f" — new: {', '.join(sorted(new_cols))}"
+                    note += f" - new: {', '.join(sorted(new_cols))}"
                 if missing_cols:
-                    note += f" — missing: {', '.join(sorted(missing_cols))}"
+                    note += f" - missing: {', '.join(sorted(missing_cols))}"
                 st.caption(f":material/warning: {note}")
 
         if _collated_key in st.session_state:
@@ -312,7 +312,7 @@ mapping_valid = (
 
 if new_leads_file and not mapping_valid:
     st.subheader("Map New Leads columns")
-    st.caption("This client's saved mapping doesn't match this file's columns (or none is saved yet) — "
+    st.caption("This client's saved mapping doesn't match this file's columns (or none is saved yet) - "
                "map them once, and it'll be remembered for future runs.")
 
     def _idx(value: str | None) -> int:
@@ -340,7 +340,7 @@ if profile.leadcap.enabled:
 
     if profile.leadcap.segmented:
         all_cids = [cid for segment in profile.leadcap.segments for cid in segment.cids]
-        st.caption(f"Upload a single Purchased Lead Report covering all CIDs ({', '.join(all_cids)}) — "
+        st.caption(f"Upload a single Purchased Lead Report covering all CIDs ({', '.join(all_cids)}) - "
                    "each segment's cap is checked against its own CIDs from this one file.")
 
     _purchased_widget = st.file_uploader(
@@ -357,7 +357,7 @@ if profile.leadcap.enabled:
                 all_cids = [cid for segment in profile.leadcap.segments for cid in segment.cids]
                 unexpected = validate_purchased_report_cids(df, all_cids, profile.leadcap.purchased_report_cid_column)
                 if unexpected:
-                    st.warning(f"Purchased Lead Report contains unexpected CIDs {unexpected} — double check this is the right file.")
+                    st.warning(f"Purchased Lead Report contains unexpected CIDs {unexpected} - double check this is the right file.")
                 for segment in profile.leadcap.segments:
                     purchased_reports[segment.name] = df
             else:
@@ -366,13 +366,13 @@ if profile.leadcap.enabled:
             render_error(exc)
 
     if not purchased_reports:
-        st.error("Leadcap is enabled for this client — upload the Purchased Lead Report before running the check.")
+        st.error("Leadcap is enabled for this client - upload the Purchased Lead Report before running the check.")
 
 complex_it_file = None
 complex_pbs_file = None
 if profile.complex_account.enabled:
     st.subheader("Complex Account: Installed Technologies & Predictive Buying Stage")
-    st.caption("Upload this run's Installed Technologies and Predictive Buying Stage files — each "
+    st.caption("Upload this run's Installed Technologies and Predictive Buying Stage files - each "
                "one file covering every CID. Leads are matched by domain only, regardless of CID.")
 
     complex_it_file = st.file_uploader(
@@ -392,7 +392,7 @@ if st.button("Run Check", disabled=not new_leads_file,
         st.error("Map the New Leads columns above before running the check.")
         st.stop()
     if profile.leadcap.enabled and not purchased_reports:
-        st.error("Leadcap is enabled for this client — upload the Purchased Lead Report before running the check.")
+        st.error("Leadcap is enabled for this client - upload the Purchased Lead Report before running the check.")
         st.stop()
     try:
         # Ordered so the progress bar's text always names what's about to
@@ -438,7 +438,7 @@ if st.button("Run Check", disabled=not new_leads_file,
             # Refund/Needs Review flow as every other check. The
             # column-filling rules (TAL mapping, Installed Technologies/
             # Predictive Buying Stage, phone/date formatting) run later,
-            # only on whichever leads end up valid — see the "Finalize
+            # only on whichever leads end up valid - see the "Finalize
             # (fill columns)" step below.
             _check_asset_specs = None
             if profile.complex_account.specifications_path:
@@ -533,12 +533,12 @@ if "run_result" in st.session_state:
         if profile.complex_account.specifications_path:
             _completed_checks.append("Complex Account: Asset URL match")
     if _completed_checks:
-        st.caption(":material/check_circle: " + "  ·  :material/check_circle: ".join(_completed_checks) + " — all completed")
+        st.caption(":material/check_circle: " + "  ·  :material/check_circle: ".join(_completed_checks) + " - all completed")
 
     approved_refund_indices: list[int] = []
     if result.refund_reasons:
         st.subheader("Refund Reasons")
-        st.caption("Auto-flagged for refund. Tick any that should actually be treated as valid — "
+        st.caption("Auto-flagged for refund. Tick any that should actually be treated as valid - "
                    "those move to the Accumulated Report and Lead Template alongside the leads "
                    "already recognized as valid. Anything left unticked stays refund-only.")
         fm = profile.field_mapping
@@ -546,7 +546,7 @@ if "run_result" in st.session_state:
 
         # Streamlit forbids writing a data_editor's own widget key via
         # session_state directly, and once a key's per-cell edits exist it
-        # ignores a fresh default passed through `data=` — so "select all"
+        # ignores a fresh default passed through `data=` - so "select all"
         # instead bumps a nonce to force a brand-new, never-before-seen
         # widget key, which Streamlit hydrates fresh from refund_table
         # (built with the sticky "all approved" default below).
@@ -605,7 +605,7 @@ if "run_result" in st.session_state:
         review_indices = list(result.review_reasons.keys())
 
         # Same sticky-widget-state workaround as the Refund Reasons editor
-        # above (see its comment) — a nonce bump forces a fresh widget key
+        # above (see its comment) - a nonce bump forces a fresh widget key
         # so "select all"/"clear" actually changes what's checked.
         st.session_state.setdefault("review_editor_nonce", 0)
         st.session_state.setdefault("review_all_selected_default", False)
@@ -700,7 +700,7 @@ if "run_result" in st.session_state:
     final_refund_indices = list(final_refund_reasons.keys())
 
     # A shared default Lead Template path isn't required when every tab
-    # routes to its own separate file — gating on lead_template_path alone
+    # routes to its own separate file - gating on lead_template_path alone
     # would wrongly skip the whole Lead Template step (and its Jira link)
     # for a client whose CID groups each go to a completely different file.
     # Decided purely by the template's own config -- there's no per-client
@@ -715,7 +715,7 @@ if "run_result" in st.session_state:
         st.caption(f"On Finalize: {len(final_valid_indices)} lead(s) → Accumulated Report"
                    + (" + Lead Template" if lead_template_configured else "")
                    + f", {len(final_refund_indices)} lead(s) → Refund tab only."
-                   + (" Complex Account: column filling runs first and shows a preview — nothing is "
+                   + (" Complex Account: column filling runs first and shows a preview - nothing is "
                       "written until you click Confirm & Write." if profile.complex_account.enabled else ""))
 
     # Convertr and Enhancio both need their leads to go through Upload +
@@ -769,12 +769,12 @@ if "run_result" in st.session_state:
         Report (and valid_leads_df to the Lead Template(s) if configured),
         and returns (unmatched_headers, lead_template_links_used). Shared by
         both the normal single-step Finalize and the Complex Account
-        fill-then-write flow — the two differ only in which DataFrame they
+        fill-then-write flow - the two differ only in which DataFrame they
         pass in as valid_leads_df (raw vs. column-filled)."""
         backup_path = backup_file(profile.accumulated_report_path)
         st.info(f"Backed up Accumulated Report to {backup_path}")
 
-        # A real date, not text — so Excel stores/filters it as a date. The
+        # A real date, not text - so Excel stores/filters it as a date. The
         # dd-mmm-yy display comes from the cell's number format (set in
         # append_leads), not from pre-formatting this into a string.
         run_date = datetime.date.today()
@@ -805,7 +805,7 @@ if "run_result" in st.session_state:
                 reasons=refund_reasons, target_field_mapping=profile.accumulated_field_mapping))
 
         # file_path -> SharePoint link for every Lead Template file this run actually
-        # wrote to — a multi-tab client can route different CIDs to entirely different
+        # wrote to - a multi-tab client can route different CIDs to entirely different
         # workbooks, each with its own link, so this can't be a single value.
         lead_template_links_used: dict[str, str] = {}
         if lead_template_configured and not valid_leads_df.empty:
@@ -813,7 +813,7 @@ if "run_result" in st.session_state:
             _tmpl_expected = [v for v in [
                 _tmpl_fm.email, _tmpl_fm.first_name, _tmpl_fm.last_name, _tmpl_fm.company, _tmpl_fm.cid,
             ] if v] if _tmpl_fm else None
-            # Highlight this run's newly added rows in the Lead Report — never
+            # Highlight this run's newly added rows in the Lead Report - never
             # for Complex Account, per design.
             _tmpl_highlight = "C6E0B4" if not profile.complex_account.enabled else None
 
@@ -841,7 +841,7 @@ if "run_result" in st.session_state:
                 if not unmatched.empty:
                     unmatched_cids = sorted(set(unmatched[profile.field_mapping.cid].astype(str).str.strip()))
                     st.warning(f"{len(unmatched)} valid lead(s) had a CID with no matching Lead Template "
-                               f"tab (CIDs: {', '.join(unmatched_cids)}) — skipped for the Lead Template "
+                               f"tab (CIDs: {', '.join(unmatched_cids)}) - skipped for the Lead Template "
                                "step, but still added to the Accumulated Report.")
                 if groups:
                     st.info(f"Valid leads also appended to their matching tab(s) across "
@@ -881,9 +881,9 @@ if "run_result" in st.session_state:
 
         # Both callers rerun right after this returns (the plain Finalize
         # path added its own rerun below to match), so the confirmation must
-        # be queued rather than shown directly here — see core/toast.py.
+        # be queued rather than shown directly here - see core/toast.py.
         queue_toast_before_rerun(
-            f"Refund tab updated — valid leads ready for {_upload_tools_label}, see below."
+            f"Refund tab updated - valid leads ready for {_upload_tools_label}, see below."
             if _upload_tools_enabled else "Accumulated Report updated."
         )
 
@@ -934,7 +934,7 @@ if "run_result" in st.session_state:
                 if _gs_unmatched_cids:
                     st.warning(
                         f"{len(_gs_unmatched_cids)} valid lead(s) had a CID with no matching Google Sheet "
-                        f"(CIDs: {', '.join(sorted(_gs_unmatched_cids))}) — skipped for Google Sheets delivery, "
+                        f"(CIDs: {', '.join(sorted(_gs_unmatched_cids))}) - skipped for Google Sheets delivery, "
                         "but still added to the Accumulated Report."
                     )
 
@@ -953,7 +953,7 @@ if "run_result" in st.session_state:
             "refund": refund_count,
             "accumulated_report_path": profile.accumulated_report_path,
             "accumulated_report_link": profile.accumulated_report_link,
-            # (file_path, link) for every Lead Template file this run wrote to —
+            # (file_path, link) for every Lead Template file this run wrote to -
             # a multi-tab client can have more than one.
             "lead_template_files": sorted(lead_template_links_used.items()),
         }
@@ -962,7 +962,7 @@ if "run_result" in st.session_state:
         # Two-step Finalize for Complex Account clients: "fill columns" runs
         # the TAL/Installed-Technologies/Predictive-Buying-Stage/phone/date/
         # asset-URL rules on just the leads that ended up valid and shows a
-        # preview — nothing is written to the Accumulated Report or Lead
+        # preview - nothing is written to the Accumulated Report or Lead
         # Template until "Confirm & Write" afterward.
         if "complex_enriched_leads" not in st.session_state and not result.review_reasons and \
                 st.button("Finalize (fill columns)"):
@@ -990,7 +990,7 @@ if "run_result" in st.session_state:
                     if complex_it_file is not None:
                         complex_it_file.seek(0)
                         # A domain can appear on more than one row, one
-                        # technology per row — combine them all rather than
+                        # technology per row - combine them all rather than
                         # only keeping whichever row happened to load last.
                         installed_tech_map = load_domain_value_map(
                             complex_it_file, "Domain", "Installed Technologies", aggregate=True)
@@ -998,14 +998,14 @@ if "run_result" in st.session_state:
                     if complex_pbs_file is not None:
                         complex_pbs_file.seek(0)
                         # "No Active Signals" means there's nothing to report
-                        # for that domain — leave the column blank instead of
+                        # for that domain - leave the column blank instead of
                         # writing the label text itself.
                         pbs_map = load_domain_value_map(
                             complex_pbs_file, "Targeted Accounts", "Predictive Buying Stage",
                             skip_values={"No Active Signals"})
 
                     # Recomputed here (not reused from the Run Check click
-                    # above) since each button click is its own script run —
+                    # above) since each button click is its own script run -
                     # cheap thanks to _cached_asset_specs.
                     _fill_asset_specs = None
                     if profile.complex_account.specifications_path:
@@ -1034,7 +1034,7 @@ if "run_result" in st.session_state:
                     _correction_lines.append(f"Row {_idx + 2}: " + "; ".join(_changes))
                 st.warning(
                     f"{len(_complex_corrections)} lead(s) had an Asset URN/Dell Asset URL/Form URL value "
-                    "that didn't match the specifications file — corrected automatically:\n\n"
+                    "that didn't match the specifications file - corrected automatically:\n\n"
                     + "\n\n".join(_correction_lines)
                 )
             st.subheader("Preview: filled columns (nothing written yet)")
@@ -1090,7 +1090,7 @@ if "run_result" in st.session_state:
 
 _just_posted_ticket = st.session_state.pop("jira_last_posted_ticket", None)
 if _just_posted_ticket:
-    # A plain session_state flag, not st.success() directly at post time —
+    # A plain session_state flag, not st.success() directly at post time -
     # the post handler below calls st.rerun() right after posting (so a
     # retry-only click never re-posts the comment), and Streamlit discards
     # anything shown just before a rerun before the user ever sees it.
@@ -1105,7 +1105,7 @@ if _pending_upload_export and _pending_upload_export["client_name"] == client_na
     st.divider()
     st.subheader(f"Valid leads ready for {_export_tools_label}")
     st.caption(
-        f"{_pending_upload_export['count']} valid lead(s) — not written to Accumulated. Download, run "
+        f"{_pending_upload_export['count']} valid lead(s) - not written to Accumulated. Download, run "
         f"through Fuzzy Match / client review as needed, then upload the final file on the "
         f"{_export_tools_label} page."
     )
@@ -1120,7 +1120,7 @@ _pending_summary = st.session_state.get("last_finalized_summary")
 if _pending_summary and _pending_summary["client_name"] == client_name:
     st.divider()
     st.subheader("Post to Jira")
-    st.caption("Nothing is sent until you click Post below — review (and edit) everything first.")
+    st.caption("Nothing is sent until you click Post below - review (and edit) everything first.")
 
     _greeting = jira_greeting(_pending_summary["reporter_name"])
     _default_opening = (
@@ -1134,16 +1134,16 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
     _available_links = [("Accumulated File", _pending_summary["accumulated_report_path"],
                           _pending_summary["accumulated_report_link"])]
     for _tmpl_path, _tmpl_link in _lead_template_files:
-        # More than one Lead Template file used this run (per-CID routing) —
+        # More than one Lead Template file used this run (per-CID routing) -
         # disambiguate labels so each checkbox/link is identifiable.
-        _label = "Lead Report" if len(_lead_template_files) == 1 else f"Lead Report — {_tmpl_path}"
+        _label = "Lead Report" if len(_lead_template_files) == 1 else f"Lead Report - {_tmpl_path}"
         _available_links.append((_label, _tmpl_path, _tmpl_link))
 
     st.caption("File links to include (a configured SharePoint link is used when set, otherwise a local "
                "file path that only opens on a machine where that exact path exists):")
     _selected_links = []
     for _label, _path, _link in _available_links:
-        if st.checkbox(f"{_label} — {_link or _path}", value=True, key=f"jira_link_{_label}"):
+        if st.checkbox(f"{_label} - {_link or _path}", value=True, key=f"jira_link_{_label}"):
             _selected_links.append((_label, _link or jira_client.path_to_link_href(_path)))
 
     _pacing_path = _pending_summary["accumulated_report_path"]
@@ -1155,7 +1155,7 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
         if _include_pacing:
             if _pacing_stale:
                 st.caption(":material/warning: Couldn't recalculate via Excel (not installed, or the attempt failed/timed "
-                           "out) — showing the file's last-saved values, which may not reflect this run's "
+                           "out) - showing the file's last-saved values, which may not reflect this run's "
                            "leads yet if any of these columns are formulas.")
             st.dataframe(_pacing_df, hide_index=True)
 
@@ -1168,7 +1168,7 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
         st.session_state["jira_attachment_name"] = _attachment_file.name
 
     # Rendered from session_state (not just inline in the click handler
-    # below) so a failed attachment stays visible across reruns — Streamlit
+    # below) so a failed attachment stays visible across reruns - Streamlit
     # discards anything shown right before a rerun, and the widgets above
     # are already drawn with the pre-click state by the time the click
     # handler below could react to it, so both the error banner and the
@@ -1205,7 +1205,7 @@ if _pending_summary and _pending_summary["client_name"] == client_name:
                     )
 
                 # Only an attachment that failed last time (or, on a fresh
-                # post, any attachment provided at all) gets (re-)uploaded —
+                # post, any attachment provided at all) gets (re-)uploaded -
                 # never repost the comment itself on a retry.
                 attachment_errors = {}
 

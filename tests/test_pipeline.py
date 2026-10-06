@@ -92,7 +92,7 @@ def test_lead_failing_duplicate_and_exclusion_lists_both_reasons():
 
 
 def test_review_item_excluded_from_valid_and_refund():
-    # Same name AND same company, but a different email domain — the one
+    # Same name AND same company, but a different email domain - the one
     # scenario the duplicate check sends to review rather than pass/fail.
     profile = _profile(duplicate=DuplicateConfig(enabled=True))
     new_leads = pd.DataFrame([{"emailaddress": "andy@other-domain.com", "firstname": "Andy", "lastname": "Jones", "company": "Google", "CID": "1"}])

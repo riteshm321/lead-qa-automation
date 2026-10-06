@@ -29,7 +29,7 @@ def test_save_and_load_app_settings_round_trip(tmp_path, monkeypatch):
 
 
 def test_get_clients_dir_uses_clients_subfolder_under_shared_root(tmp_path, monkeypatch):
-    # The user picks a root folder (e.g. a OneDrive folder they both sync) —
+    # The user picks a root folder (e.g. a OneDrive folder they both sync) -
     # the app owns a "clients" subfolder under it, mirroring the private
     # default's cwd/clients layout, rather than expecting profile JSONs
     # directly in the selected folder.
@@ -64,7 +64,7 @@ def test_get_aliases_path_reverts_to_default_when_override_blank(tmp_path, monke
 def test_old_clients_dir_key_still_works_as_shared_root(tmp_path, monkeypatch):
     # Backward compatibility: a machine that saved this setting before the
     # "clients_dir" -> "shared_root_dir" rename must not silently revert to
-    # the private default — its existing pointer should keep working, and
+    # the private default - its existing pointer should keep working, and
     # since its already-configured folder already used the "clients"/
     # "aliases" subfolder convention, no file migration is needed either.
     monkeypatch.chdir(tmp_path)
@@ -148,7 +148,7 @@ def test_enhancio_client_id_never_derives_from_shared_root(tmp_path, monkeypatch
 
 def test_jira_settings_never_derive_from_shared_root(tmp_path, monkeypatch):
     # Jira credentials must stay local even when clients_dir/aliases_path
-    # are pointed at a shared folder — this is what keeps a personal API
+    # are pointed at a shared folder - this is what keeps a personal API
     # token out of a folder the whole team syncs.
     monkeypatch.chdir(tmp_path)
     save_app_settings({"shared_root_dir": _ROOT})

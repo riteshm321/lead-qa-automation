@@ -101,7 +101,7 @@ def test_portal_message_picks_up_new_upload_results_after_first_render(tmp_path,
     assert at.text_area(key="convertr_jira_message").value == "Hi Jane,\n"
 
     at.session_state["convertr_upload_results"] = pd.DataFrame(
-        [{"CID": "1", "Email": "a@x.example", "Result": "Uploaded — Lead ID 1"}])
+        [{"CID": "1", "Email": "a@x.example", "Result": "Uploaded - Lead ID 1"}])
     at.run()
     assert at.text_area(key="convertr_jira_message").value == \
         "Hi Jane,\nUploaded 1 lead(s) to Convertr (1 succeeded)."

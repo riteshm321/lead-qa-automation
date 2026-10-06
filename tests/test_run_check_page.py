@@ -34,7 +34,7 @@ def test_cached_loaders_hash_their_mtime_argument():
     # silently EXCLUDES any parameter whose name starts with an underscore
     # from the cache key hash. _cached_tal_index/_cached_asset_specs pass
     # os.path.getmtime(path) specifically to bust the cache when the
-    # underlying file changes mid-session — naming that parameter "_mtime"
+    # underlying file changes mid-session - naming that parameter "_mtime"
     # made Streamlit ignore it entirely, so a file edited and re-saved to
     # the same path during a running session kept silently serving the
     # first-loaded (now-stale) data. Verified by parsing the actual page
@@ -61,7 +61,7 @@ def test_cached_loaders_hash_their_mtime_argument():
         underscored = [p for p in param_names if p.startswith("_")]
         assert not underscored, (
             f"@st.cache_data function '{node.name}' has underscore-prefixed param(s) "
-            f"{underscored} — Streamlit excludes these from the cache key, silently "
+            f"{underscored} - Streamlit excludes these from the cache key, silently "
             f"breaking any cache-busting argument (e.g. a file's mtime) passed there."
         )
 
@@ -661,7 +661,7 @@ def test_post_summary_to_jira_after_finalize(tmp_path, monkeypatch):
     assert not at.exception
 
     # The "Post to Jira" prompt should now be showing, pre-filled with a
-    # summary — verify it before actually posting anything.
+    # summary - verify it before actually posting anything.
     import datetime as _dt
     opening_box = next(t for t in at.text_area if t.key == "jira_comment_opening")
     assert _dt.date.today().strftime("%d-%m-%y") in opening_box.value
@@ -731,7 +731,7 @@ def test_jira_post_uploads_provided_attachment(tmp_path, monkeypatch):
     assert not at.exception
 
     # Simulate a file already selected via st.file_uploader (AppTest can't
-    # drive a real file upload — see the established limitation noted
+    # drive a real file upload - see the established limitation noted
     # elsewhere in this suite) by pre-seeding what the uploader branch
     # writes into session_state.
     at.session_state["jira_attachment_bytes"] = b"fake-file-bytes"
@@ -771,7 +771,7 @@ def test_jira_post_reports_attachment_failure_without_blocking_comment(tmp_path,
 
     # This test drives more sequential button-click+rerun cycles than any
     # other in this file (Finalize, post, retry), which occasionally brushes
-    # up against AppTest's default wait window under momentary system load —
+    # up against AppTest's default wait window under momentary system load -
     # a longer timeout here is slack for the test harness, not a change to
     # the app's own behavior.
     at = AppTest.from_file(_PAGE_PATH, default_timeout=30)
@@ -800,7 +800,7 @@ def test_jira_post_reports_attachment_failure_without_blocking_comment(tmp_path,
     assert any("Posted to PROJ-1234" in s.value for s in at.success)
     assert "last_finalized_summary" in at.session_state
 
-    # Retrying must not repost the comment — only the failed attachment.
+    # Retrying must not repost the comment - only the failed attachment.
     with patch("core.jira_client.post_comment_body") as mock_post_comment_retry, \
          patch("core.jira_client.upload_attachment") as mock_upload_retry:
         retry_button = next(b for b in at.button if b.key == "jira_post_button")
@@ -1201,7 +1201,7 @@ def test_multi_tab_routes_different_cids_to_completely_different_files(tmp_path,
 def test_jira_summary_uses_per_tab_sharepoint_links_for_multiple_lead_template_files(tmp_path, monkeypatch):
     # Regression test: per-CID Lead Template file routing means a single
     # run can write to more than one Lead Template workbook, each with its
-    # own SharePoint link — the Jira link picker must offer one "Lead
+    # own SharePoint link - the Jira link picker must offer one "Lead
     # Report" checkbox per distinct file, each pointing at that file's own
     # configured link rather than a single shared one.
     monkeypatch.chdir(tmp_path)
@@ -1267,7 +1267,7 @@ def test_jira_summary_uses_per_tab_sharepoint_links_for_multiple_lead_template_f
 def test_complex_account_two_stage_finalize_previews_then_writes(tmp_path, monkeypatch):
     # End-to-end regression test for the Complex Account two-stage Finalize:
     # "Finalize (fill columns)" must not write anything, only preview the
-    # column-filling rules on the valid leads — the Accumulated Report only
+    # column-filling rules on the valid leads - the Accumulated Report only
     # actually gets updated after "Confirm & Write".
     monkeypatch.chdir(tmp_path)
     acc_path = str(tmp_path / "accumulated.xlsx")
@@ -1305,7 +1305,7 @@ def test_complex_account_two_stage_finalize_previews_then_writes(tmp_path, monke
     fill_button.click().run()
     assert not at.exception
 
-    # Nothing written yet — the Accumulated tab must still be just the header row.
+    # Nothing written yet - the Accumulated tab must still be just the header row.
     wb_after_fill = openpyxl.load_workbook(acc_path)
     assert wb_after_fill["Accumulated"].max_row == 1
 
@@ -1319,7 +1319,7 @@ def test_complex_account_two_stage_finalize_previews_then_writes(tmp_path, monke
     row = next(wb_final["Accumulated"].iter_rows(min_row=2, max_row=2, values_only=True))
     headers = next(wb_final["Accumulated"].iter_rows(min_row=1, max_row=1, values_only=True))
     written = dict(zip(headers, row))
-    # A real date value now, not text — so Excel stores/filters it as a date.
+    # A real date value now, not text - so Excel stores/filters it as a date.
     assert written["Capture Date"] == datetime.datetime(2026, 8, 17)
     assert written["Email Opt-in"] == "Yes"
     assert written["Business Phone"] == "91 9819719038"

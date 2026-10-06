@@ -85,7 +85,7 @@ def test_path_to_link_href_produces_a_file_uri(tmp_path):
 
 def test_path_to_link_href_falls_back_to_plain_path_on_relative_path():
     # Path.resolve() shouldn't raise for a relative path (it resolves
-    # against cwd), but as_uri() requires an absolute path — cover the
+    # against cwd), but as_uri() requires an absolute path - cover the
     # defensive fallback regardless of exactly which step could fail.
     with patch("core.jira_client.Path") as mock_path_cls:
         mock_path_cls.side_effect = ValueError("boom")
@@ -131,7 +131,7 @@ def test_build_comment_body_table_uses_full_width_layout_with_bold_headers():
     # Regression test: the Pacing Overview table (7+ columns, growing by one
     # every time a new date column is added) was posted with ADF's narrow
     # "default" table layout, squeezing every column so tight that almost
-    # every cell wrapped word-by-word — unreadable compared to the source
+    # every cell wrapped word-by-word - unreadable compared to the source
     # spreadsheet. "full-width" uses the whole comment pane instead.
     doc = build_comment_body(
         opening_text="Hi",
@@ -150,7 +150,7 @@ def test_build_comment_body_table_uses_full_width_layout_with_bold_headers():
 def test_build_comment_body_table_gives_wider_columns_more_colwidth():
     # Regression test: every column got the same implicit width regardless
     # of content, so a long free-text column ("Campaign Segment") wrapped
-    # word-by-word while short numeric columns ("CID") sat mostly empty —
+    # word-by-word while short numeric columns ("CID") sat mostly empty -
     # looked misaligned/ugly compared to the source spreadsheet even after
     # switching to full-width layout. Widths must scale with actual content.
     doc = build_comment_body(
@@ -167,7 +167,7 @@ def test_build_comment_body_table_gives_wider_columns_more_colwidth():
 
 def test_build_comment_body_table_truncates_long_cell_text():
     # A long Campaign Segment name would otherwise wrap onto multiple lines
-    # and stretch that row taller than the rest — truncating keeps every
+    # and stretch that row taller than the rest - truncating keeps every
     # row the same height, at the cost of not showing the full name.
     long_name = "Aon M&A Transaction Claims Study 2026 - International Segment Name"
     doc = build_comment_body(

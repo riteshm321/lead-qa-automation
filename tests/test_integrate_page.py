@@ -284,8 +284,8 @@ def test_integrate_upload_summary_uses_icon_metric_cards(tmp_path, monkeypatch):
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.session_state["integrate_upload_results"] = pd.DataFrame([
-        {"Email": "a@x.com", "Result": "Uploaded — Lead ID lead-1"},
-        {"Email": "", "Result": "Failed — No email value for this row"},
+        {"Email": "a@x.com", "Result": "Uploaded - Lead ID lead-1"},
+        {"Email": "", "Result": "Failed - No email value for this row"},
         {"Email": "c@x.com", "Result": "Skipped (already uploaded previously)"},
     ])
     at.run()

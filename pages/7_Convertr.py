@@ -147,7 +147,7 @@ def _plan_sends(
             _cid = str(lead[cid_column])
             skip_results.append({
                 "CID": _cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                "Result": f"Skipped (test mode — campaign {cid_to_campaign_id[_cid]} "
+                "Result": f"Skipped (test mode - campaign {cid_to_campaign_id[_cid]} "
                           "already tested via another CID)",
             })
         # A CID with no campaign mapping at all is excluded from both
@@ -164,14 +164,14 @@ def _plan_sends(
         if mapping is None:
             for _, lead in group.iterrows():
                 skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                                 "Result": "Failed — No Convertr campaign mapped for this CID"})
+                                 "Result": "Failed - No Convertr campaign mapped for this CID"})
                 failed_entries.append(make_failed_entry(
                     lead.to_dict(), lead.get(_leadfile_mapping.email, ""), "No Convertr campaign mapped for this CID"))
             continue
         if not mapping.global_form_id:
             for _, lead in group.iterrows():
                 skip_results.append({"CID": cid, "Email": lead.get(_leadfile_mapping.email, ""),
-                                 "Result": f"Failed — No Form ID saved for campaign {mapping.campaign_id}"})
+                                 "Result": f"Failed - No Form ID saved for campaign {mapping.campaign_id}"})
                 failed_entries.append(make_failed_entry(
                     lead.to_dict(), lead.get(_leadfile_mapping.email, ""),
                     f"No Form ID saved for campaign {mapping.campaign_id}"))
@@ -251,10 +251,10 @@ def _upload_leads(source_df: pd.DataFrame, test_mode: bool, reupload: bool) -> N
                 # writes it to Accumulated/Refund.
                 _cid_newly_pending[lead_id] = {col: lead.get(col, "") for col in source_df.columns}
                 _cid_newly_uploaded_emails.add(str(email))
-                results.append({"CID": cid, "Email": email, "Result": f"Uploaded — Lead ID {lead_id}"})
+                results.append({"CID": cid, "Email": email, "Result": f"Uploaded - Lead ID {lead_id}"})
                 _succeeded_emails.add(str(email))
             except ConvertrError as exc:
-                results.append({"CID": cid, "Email": email, "Result": f"Failed — {exc}"})
+                results.append({"CID": cid, "Email": email, "Result": f"Failed - {exc}"})
                 _failed_entries.append(make_failed_entry(lead.to_dict(), email, str(exc)))
             _sent_so_far += 1
             if _send_progress is not None:
@@ -287,13 +287,13 @@ def _upload_leads(source_df: pd.DataFrame, test_mode: bool, reupload: bool) -> N
 with st.container(border=True):
     st.subheader(":material/upload: 1. Upload leads to Convertr")
     st.caption(
-        "Uploads a client-verified leadfile straight to Convertr — each CID routes to its own campaign, "
+        "Uploads a client-verified leadfile straight to Convertr - each CID routes to its own campaign, "
         "per the mapping configured on Client Setup. A lead already uploaded before (by email) is skipped "
         "automatically, so re-uploading the same or an overlapping file is safe."
     )
 
     _test_mode = st.checkbox(
-        "Test mode — upload only 1 lead per Convertr campaign (SID)",
+        "Test mode - upload only 1 lead per Convertr campaign (SID)",
         help="Use this for a first-time check before uploading real volume. Several CIDs can share one "
              "campaign, so this touches each real campaign exactly once, not once per CID.",
     )
@@ -308,7 +308,7 @@ with st.container(border=True):
 
         if not _leadfile_mapping:
             render_problem(
-                "This client has no leadfile column mapping for Convertr yet — set one under Client Setup's "
+                "This client has no leadfile column mapping for Convertr yet - set one under Client Setup's "
                 "Convertr section (Email/First Name/Last Name/Company/CID columns)."
             )
             st.stop()
@@ -329,13 +329,13 @@ with st.container(border=True):
         if not _dup_preview_df.empty:
             render_problem(
                 f"{len(_dup_preview_df)} lead(s) in this file were already uploaded to (accepted by) Convertr "
-                "before and will be skipped. Leads that failed before are never counted here — they're sent "
+                "before and will be skipped. Leads that failed before are never counted here - they're sent "
                 "again automatically.",
                 level="warning")
             _reupload_duplicates = st.checkbox(
                 "Also resend the leads Convertr already accepted", value=False,
                 key="convertr_reupload_duplicates",
-                help="Leave unchecked to retry only what failed before (recommended — failed leads are never "
+                help="Leave unchecked to retry only what failed before (recommended - failed leads are never "
                      "remembered as uploaded, so they go out again on their own). Tick this only to deliberately "
                      "resend leads Convertr already accepted; that creates duplicate submissions.",
             )
@@ -348,16 +348,16 @@ with st.container(border=True):
             icon=":material/preview:",
         ):
             st.caption(
-                "The exact rows that will be sent if you click \"Upload to Convertr\" below right now — "
+                "The exact rows that will be sent if you click \"Upload to Convertr\" below right now - "
                 "already reflects Test mode and any duplicate-skipping above. Nothing here has been sent yet."
             )
             if not _preview_send_by_cid:
                 st.caption(
-                    "Nothing would be sent — every lead is either already uploaded, unmapped, or missing a Form ID.")
+                    "Nothing would be sent - every lead is either already uploaded, unmapped, or missing a Form ID.")
             else:
                 for _cid, _df in _preview_send_by_cid.items():
                     _mapping = _campaign_by_cid[_cid]
-                    st.write(f"**CID {_cid}** (campaign {_mapping.campaign_id}) — {len(_df)} lead(s)")
+                    st.write(f"**CID {_cid}** (campaign {_mapping.campaign_id}) - {len(_df)} lead(s)")
                 _preview_combined = pd.concat(list(_preview_send_by_cid.values()))
                 st.download_button(
                     "Download these leads (.xlsx)",
@@ -409,7 +409,7 @@ with st.container(border=True):
     st.caption(
         "Polls Convertr for the leads uploaded in step 1 that haven't been resolved yet (the latest upload by "
         "default), and writes accepted "
-        "ones into the Accumulated tab and rejected ones into the Refund tab (with Convertr's reason) — "
+        "ones into the Accumulated tab and rejected ones into the Refund tab (with Convertr's reason) - "
         "matched by column header, same as any other lead write, with that day's date under Date and each "
         "lead's own CID from the leadfile it was uploaded from. A lead still mid-QA is left pending and "
         "checked again on the next sync; once written, it's never fetched or written again."
@@ -485,7 +485,7 @@ with st.container(border=True):
         _accepted_rows, _rejected_rows = [], []
 
     if _accepted_rows or _rejected_rows:
-        st.info(f"{len(_accepted_rows)} newly accepted, {len(_rejected_rows)} newly rejected — not yet written.")
+        st.info(f"{len(_accepted_rows)} newly accepted, {len(_rejected_rows)} newly rejected - not yet written.")
         if _accepted_rows:
             st.dataframe(pd.DataFrame(_accepted_rows).drop(columns=["_convertr_lead_id"]), hide_index=True)
         if _rejected_rows:
@@ -494,7 +494,7 @@ with st.container(border=True):
         if st.button("Write to Accumulated & Refund", type="primary"):
             if not _leadfile_mapping:
                 render_problem(
-                    "This client has no leadfile column mapping for Convertr yet — set one under Client "
+                    "This client has no leadfile column mapping for Convertr yet - set one under Client "
                     "Setup's Convertr section (Email/First Name/Last Name/Company/CID columns)."
                 )
                 st.stop()
@@ -546,7 +546,7 @@ with st.container(border=True):
     if not profile.jira_ticket_key:
         st.caption("No Jira ticket configured for this client (set one up on Client Setup).")
     else:
-        st.caption("Nothing is sent until you click Post below — review (and edit) first.")
+        st.caption("Nothing is sent until you click Post below - review (and edit) first.")
 
         _upload_results_df = st.session_state.get("convertr_upload_results")
         _reconcile_summary = st.session_state.get("convertr_reconcile_summary")
@@ -600,4 +600,4 @@ with st.container(border=True):
                     st.success("Posted to Jira.")
                 except JiraError as exc:
                     render_problem(f"Failed to post to Jira: {exc}",
-                                   "Nothing else was affected — click **Post to ...** again once this is fixed.")
+                                   "Nothing else was affected - click **Post to ...** again once this is fixed.")

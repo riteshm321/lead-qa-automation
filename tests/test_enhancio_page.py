@@ -1112,8 +1112,8 @@ def test_enhancio_upload_summary_uses_icon_metric_cards(tmp_path, monkeypatch):
 
     at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
     at.session_state["enhancio_upload_results"] = pd.DataFrame([
-        {"CID": "120022", "Email": "a@x.com", "Result": "Uploaded — Lead ID 1 (Submitted)"},
-        {"CID": "120022", "Email": "b@x.com", "Result": "Failed — Not accepted by Enhancio (see batch error reasons above)"},
+        {"CID": "120022", "Email": "a@x.com", "Result": "Uploaded - Lead ID 1 (Submitted)"},
+        {"CID": "120022", "Email": "b@x.com", "Result": "Failed - Not accepted by Enhancio (see batch error reasons above)"},
         {"CID": "120028", "Email": "c@x.com", "Result": "Skipped (already uploaded to this allocation previously)"},
     ])
     at.run()

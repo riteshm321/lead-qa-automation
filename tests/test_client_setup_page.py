@@ -34,7 +34,7 @@ def test_saving_a_jira_ticket_link_normalizes_to_the_bare_key(tmp_path, monkeypa
 
 def test_client_name_with_path_separator_is_rejected(tmp_path, monkeypatch):
     # Regression test: the client name becomes a bare "<name>.json" filename
-    # under clients_dir with no sanitizing — a "/" silently created a
+    # under clients_dir with no sanitizing - a "/" silently created a
     # nested, orphaned profile file that the client dropdown's flat
     # directory scan could never show again, and ".." could escape
     # clients_dir onto an arbitrary path on disk.
@@ -620,7 +620,7 @@ def test_accumulated_field_mapping_saves_as_none_when_every_dropdown_left_unset(
     # here are auto-guessable (a seeded UI default, not a user choice), so
     # this is the only way to reliably simulate "the user left this whole
     # optional section unmapped" regardless of what got guessed.
-    _no_mapping = "(none — this file has no such column)"
+    _no_mapping = "(none - this file has no such column)"
     for key in ("acc_map_email", "acc_map_first", "acc_map_last", "acc_map_company", "acc_map_cid"):
         at.selectbox(key=key).set_value(_no_mapping).run()
 
@@ -1029,7 +1029,7 @@ def test_enhancio_test_connection_flags_a_mandatory_field_with_no_mapping(tmp_pa
              {"fieldLabel": "Email Address", "mandatory": "Y"},
              {"fieldLabel": "First Name", "mandatory": "Y"},
          ]):
-        next(b for b in at.button if b.label == "Test connection — allocation L-22256").click().run()
+        next(b for b in at.button if b.label == "Test connection - allocation L-22256").click().run()
 
     assert not at.exception
     assert any("First Name" in e.value and "NO mapping entry" in e.value for e in at.error)
@@ -1059,7 +1059,7 @@ def test_enhancio_test_connection_shows_a_picklist_fields_allowed_values(tmp_pat
              {"fieldLabel": "Email Address", "mandatory": "Y"},
              {"fieldLabel": "Industry", "mandatory": "Y", "fieldValues": ["All"]},
          ]):
-        next(b for b in at.button if b.label == "Test connection — allocation L-22256").click().run()
+        next(b for b in at.button if b.label == "Test connection - allocation L-22256").click().run()
 
     assert not at.exception
     assert any("Allowed values: All" in c.value for c in at.caption)

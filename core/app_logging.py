@@ -13,7 +13,7 @@ _configured = False
 
 def get_logger() -> logging.Logger:
     """The app's single shared logger, writing to a small rotating file
-    under logs/ (relative to the app's working directory — the per-user
+    under logs/ (relative to the app's working directory - the per-user
     data folder in the packaged exe, the repo root in dev). Configured
     once per process: importing this module repeatedly (e.g. every
     Streamlit script rerun re-imports core.errors, which imports this
@@ -35,7 +35,7 @@ def get_logger() -> logging.Logger:
             _logger.setLevel(logging.INFO)
         except OSError:
             # A file-logging setup failure (e.g. a locked-down folder) must
-            # never take the app down with it — logging is a diagnostic
+            # never take the app down with it - logging is a diagnostic
             # nice-to-have, not a functional dependency. Falls through with
             # no handler attached, so calls become harmless no-ops.
             pass

@@ -139,7 +139,7 @@ def test_detect_cids_from_pacing_overview_handles_offset_layout(tmp_path):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Pacing Overview"
-    # Real sheets often have their used range start at B2, not A1 — header row 3.
+    # Real sheets often have their used range start at B2, not A1 - header row 3.
     ws["B2"] = "Pacing Overview"
     ws["B3"] = "SR No"
     ws["C3"] = "CID"
@@ -244,7 +244,7 @@ def test_append_leads_finds_last_row_past_bulk_formatted_empty_rows(tmp_path):
 
 def test_append_leads_matches_headers_regardless_of_separators(tmp_path):
     # Leadfile column "jobfunction" (no separator at all) must populate a
-    # target header of "Job Function" (space-separated) — real leadfiles
+    # target header of "Job Function" (space-separated) - real leadfiles
     # frequently drop separators entirely between words.
     path = str(tmp_path / "accumulated.xlsx")
     wb = openpyxl.Workbook()
@@ -267,7 +267,7 @@ def test_append_leads_matches_headers_regardless_of_separators(tmp_path):
 
 def test_append_leads_matches_headers_with_extra_suffix_via_containment(tmp_path):
     # "MarketSegmentReferential" (leadfile) must populate "Market Segment"
-    # (target) — export tools often append noise like "Referential".
+    # (target) - export tools often append noise like "Referential".
     path = str(tmp_path / "accumulated.xlsx")
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -292,7 +292,7 @@ def test_append_leads_matches_headers_with_extra_suffix_via_containment(tmp_path
 
 def test_append_leads_matches_headers_via_known_synonym_group(tmp_path):
     # Regression test: leadfile "companysize" and Lead Template "Employee
-    # Size" are genuinely different words for the same field — no amount of
+    # Size" are genuinely different words for the same field - no amount of
     # string-similarity scoring matches them ("company" vs "employee" score
     # well under the fuzzy threshold), so this previously left the column
     # blank despite both files having equivalent data.
@@ -400,7 +400,7 @@ def test_append_leads_does_not_match_a_short_leadfile_column_into_a_longer_targe
 
 
 def test_append_leads_leaves_ambiguous_containment_matches_unmatched(tmp_path):
-    # Two leadfile columns both contain "region" — auto-picking either one
+    # Two leadfile columns both contain "region" - auto-picking either one
     # risks silently wiring the wrong data into a client's real report, so
     # neither should be auto-matched.
     path = str(tmp_path / "accumulated.xlsx")
@@ -565,7 +565,7 @@ def test_detect_cids_from_pacing_overview_stops_at_first_blank_cid_row(tmp_path)
     ws["D3"] = "Campaign Segment"
     ws["C4"] = "118118"
     ws["D4"] = "APAC Mgr+ Q3"
-    # Row 5 has a blank CID cell — scanning must stop here.
+    # Row 5 has a blank CID cell - scanning must stop here.
     ws["D5"] = "Blank CID row"
     # A later, unrelated CID-labeled row must NOT be picked up.
     ws["C6"] = "999999"
@@ -684,7 +684,7 @@ def test_read_pacing_overview_table_formats_date_headers_without_timestamp(tmp_p
 def test_read_pacing_overview_table_skips_hidden_date_columns(tmp_path):
     # Regression test: a date column the sheet itself has hidden (e.g. an
     # old date the client collapsed to reduce clutter) must not appear in
-    # the Jira table — openpyxl reads a hidden column's values the same as
+    # the Jira table - openpyxl reads a hidden column's values the same as
     # any visible one, so without an explicit check it would show a date
     # the sheet doesn't visibly have.
     import datetime as dt

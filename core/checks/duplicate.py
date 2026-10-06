@@ -19,7 +19,7 @@ def _first3(value: str) -> str:
 
 def _prefix3_key(row: dict, fm: FieldMapping, third_field: str) -> tuple[str, str, str] | None:
     # third_field is a value (company name or email domain), already
-    # extracted/normalized by the caller — this only handles the shared
+    # extracted/normalized by the caller - this only handles the shared
     # first-name/last-name-prefix part.
     first3 = _first3(_norm(row.get(fm.first_name, "")))
     last3 = _first3(_norm(row.get(fm.last_name, "")))
@@ -36,7 +36,7 @@ def check_duplicates(
     outcome = CheckOutcome()
     fm = field_mapping
     # The Accumulated Report frequently uses different header text than the
-    # New Leads file (e.g. "Email Add." vs "emailaddress") — that's what
+    # New Leads file (e.g. "Email Add." vs "emailaddress") - that's what
     # accumulated_field_mapping is for. Reading accumulated rows with the
     # New Leads mapping silently returns "" for every field when the
     # headers differ, so the duplicate check would never match anything.
@@ -45,10 +45,10 @@ def check_duplicates(
     acc_emails: set[str] = set()
     # Each candidate carries the FieldMapping it was read with alongside the
     # row, so downstream lookups (company, email) always use the header
-    # names that actually exist on that particular row — accumulated rows
+    # names that actually exist on that particular row - accumulated rows
     # use acc_fm, new-batch rows use fm, and the two can differ.
     acc_by_name: dict[tuple[str, str], list[tuple[dict, FieldMapping]]] = {}
-    # Coarse "first 3 letters" indices for Rules 5/6 below — same
+    # Coarse "first 3 letters" indices for Rules 5/6 below - same
     # accumulated-vs-in-batch split as acc_by_name/seen_by_name: accumulated
     # entries are fixed from the start, so every matching new lead is
     # flagged (an accumulated lead already counts as delivered); the
@@ -99,7 +99,7 @@ def check_duplicates(
                 # company means it's just two different people who share a
                 # name, so the lead passes through untouched. Only when the
                 # company also matches does the email domain decide whether
-                # this is a confirmed duplicate (same domain — someone reused
+                # this is a confirmed duplicate (same domain - someone reused
                 # the same person under a different email) or one that needs
                 # a human look (same company, but a different email domain).
                 hard_match_other = None
@@ -131,11 +131,11 @@ def check_duplicates(
                         candidate_context="existing lead with the same name & company"
                                           + (f" ({other_email})" if other_email else ""),
                     )
-                # else: same name, but no candidate shares the company —
+                # else: same name, but no candidate shares the company -
                 # different people, let it pass.
 
-            # Rules 5/6: a full name/email match can miss near-duplicates —
-            # typos, nicknames, a maiden/married name change — that still
+            # Rules 5/6: a full name/email match can miss near-duplicates -
+            # typos, nicknames, a maiden/married name change - that still
             # share the first 3 letters of the first name, last name, and
             # either the company or the email domain. Deliberately coarse,
             # so it only ever sends to review, never auto-fails. Skipped

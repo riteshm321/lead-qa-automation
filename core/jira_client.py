@@ -5,7 +5,7 @@ import requests
 
 
 class JiraError(Exception):
-    """A Jira API call failed — the response text is included for context."""
+    """A Jira API call failed - the response text is included for context."""
 
 
 _TICKET_KEY_RE = re.compile(r"([A-Z][A-Z0-9]+-\d+)")
@@ -14,7 +14,7 @@ _TICKET_KEY_RE = re.compile(r"([A-Z][A-Z0-9]+-\d+)")
 def extract_ticket_key(value: str) -> str:
     """Accepts either a bare Jira ticket key ("PROJ-1234") or a full ticket
     URL ("https://yourteam.atlassian.net/browse/PROJ-1234") and returns
-    just the key — the comment API only accepts the key, but a link is
+    just the key - the comment API only accepts the key, but a link is
     usually what's actually on hand, copied straight from the browser's
     address bar while looking at the ticket.
     """
@@ -27,7 +27,7 @@ def path_to_link_href(path: str) -> str:
     """Best-effort file:// URI for a local/OneDrive-synced path, so a
     linked file name is actually clickable. Only opens correctly on a
     machine where this exact path exists (e.g. the poster's own machine,
-    or a teammate syncing the identical OneDrive folder structure) — falls
+    or a teammate syncing the identical OneDrive folder structure) - falls
     back to the plain path text if it can't be turned into a URI at all
     (e.g. a relative path).
     """
@@ -67,7 +67,7 @@ def _links_to_adf_list(links: list[tuple[str, str]]) -> dict:
 
 _MIN_COLUMN_WIDTH = 56
 _MAX_COLUMN_WIDTH = 220
-# Rough px-per-character plus fixed cell padding — Jira doesn't expose real
+# Rough px-per-character plus fixed cell padding - Jira doesn't expose real
 # font-metrics, so this is a deliberately simple heuristic, not a precise
 # measurement.
 _PX_PER_CHAR = 10
@@ -75,7 +75,7 @@ _CELL_PADDING_PX = 32
 
 
 def _longest_token_length(text: str) -> int:
-    # A cell only needs to be as wide as its longest unbreakable word — text
+    # A cell only needs to be as wide as its longest unbreakable word - text
     # wraps at spaces without looking broken (a 2-line "Campaign Segment"
     # header is fine, matching how the source spreadsheet already displays
     # it), but a single-word header ("Delivered", "Contracted") narrower
@@ -90,7 +90,7 @@ def _longest_token_length(text: str) -> int:
 def _estimate_column_widths(headers: list[str], rows: list[list]) -> list[int]:
     # Uniform, name-agnostic column widths (Jira's ADF "default" table
     # layout) squeezed every column in the Pacing Overview table to the same
-    # width regardless of content — sizing each column from its own actual
+    # width regardless of content - sizing each column from its own actual
     # content, rather than hardcoding by header name (which would break for
     # a client using different column names), fixes this generically for
     # any Pacing Overview layout.
@@ -110,7 +110,7 @@ _MAX_CELL_TEXT_LENGTH = 20
 
 def _truncate_value(value):
     # A long free-text value (a Campaign Segment name, say) would otherwise
-    # wrap onto several lines and stretch that whole row taller — fine in
+    # wrap onto several lines and stretch that whole row taller - fine in
     # the source spreadsheet, but chosen here to keep every row a single,
     # predictable height in the posted comment instead, at the cost of not
     # showing the full name.
@@ -137,7 +137,7 @@ def _table_to_adf(headers: list[str], rows: list[list]) -> dict:
     return {
         "type": "table",
         # "full-width" uses the whole comment pane width instead of ADF's
-        # narrower "default" layout — with a wide Pacing Overview table
+        # narrower "default" layout - with a wide Pacing Overview table
         # (7+ columns, growing by one every time a new date is added),
         # "default" squeezed every column so tight that nearly every cell
         # wrapped word-by-word, which is what made the posted table
@@ -155,7 +155,7 @@ def build_comment_body(
     table_rows: list[list] | None = None,
 ) -> dict:
     """Build the full ADF comment: opening text, then an optional numbered
-    list of file links, then an optional native table, then closing text —
+    list of file links, then an optional native table, then closing text -
     matching "greeting/summary sentence -> file links -> sign-off" while
     keeping the links and table as real Jira structures, not plain text.
     """
@@ -188,7 +188,7 @@ def upload_attachment(
 ) -> None:
     """Uploads file_bytes as a named attachment on a Jira Cloud issue.
 
-    A separate endpoint from the comment APIs above — Jira requires the
+    A separate endpoint from the comment APIs above - Jira requires the
     X-Atlassian-Token: no-check header here (its CSRF check otherwise
     rejects the multipart request) and no JSON Content-Type, since requests
     sets the multipart boundary itself from the `files` argument.

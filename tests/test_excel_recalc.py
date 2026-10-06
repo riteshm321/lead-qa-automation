@@ -15,7 +15,7 @@ except ImportError:
 
 @pytest.mark.skipif(not _PYWIN32_AVAILABLE, reason="pywin32/Excel not available on this machine")
 def test_recalculate_workbook_produces_fresh_cached_formula_value(tmp_path):
-    # openpyxl never evaluates formulas — a formula cell it just wrote has no
+    # openpyxl never evaluates formulas - a formula cell it just wrote has no
     # cached value at all until something (normally Excel) actually opens and
     # calculates the file. This is the exact mechanism behind the reported
     # bug: a Pacing Overview column driven by a formula read back as blank
@@ -38,7 +38,7 @@ def test_recalculate_workbook_produces_fresh_cached_formula_value(tmp_path):
     after = openpyxl.load_workbook(recalculated_path, data_only=True)
     assert after["Sheet"]["B1"].value == 15
 
-    # The original file must never be touched — only a temp copy is opened.
+    # The original file must never be touched - only a temp copy is opened.
     untouched = openpyxl.load_workbook(path, data_only=True)
     assert untouched["Sheet"]["B1"].value is None
 

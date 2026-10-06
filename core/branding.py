@@ -11,7 +11,7 @@ from core.app_settings import get_shared_root_dir
 from core.resources import resource_path
 
 _LOGO_PATH = resource_path("assets/madison_logic_logo.svg")
-# A separate, dedicated favicon file — the sidebar logo above is a wide
+# A separate, dedicated favicon file - the sidebar logo above is a wide
 # wordmark (~3:1 aspect ratio) that reads fine at sidebar size but becomes an
 # illegible smudge squeezed into a 16-32px browser tab icon.
 _FAVICON_PATH = resource_path("assets/favicon.ico")
@@ -79,7 +79,7 @@ def configure_page(page_title: str) -> dict:
     # color) has no separate light/reversed variant, so it reads fine on the
     # light theme's near-white sidebar but nearly vanishes against the dark
     # theme's own indigo-toned one. A small light backdrop behind it keeps it
-    # legible in both — a standard treatment for a single-ink logo that isn't
+    # legible in both - a standard treatment for a single-ink logo that isn't
     # dark-mode-safe on its own. Uses stSidebarLogo, Streamlit's own stable
     # test id for this element, so it isn't tied to generated CSS class names.
     st.markdown(
@@ -155,7 +155,7 @@ def _render_quit_app_button() -> None:
             # actually closes anything.
             st.sidebar.markdown(
                 "<script>window.close();</script>"
-                "<p style='font-size:0.85rem;'>App is quitting — you can close this browser tab now.</p>",
+                "<p style='font-size:0.85rem;'>App is quitting - you can close this browser tab now.</p>",
                 unsafe_allow_html=True,
             )
             # Give Streamlit's server a moment to push the markdown above
@@ -185,7 +185,7 @@ def _cached_time_saved_summary(shared_root: str) -> dict:
     return compute_time_saved_summary()
 
 
-# Inline line-icons (not emoji) so the card stays crisp at sidebar size —
+# Inline line-icons (not emoji) so the card stays crisp at sidebar size -
 # emoji glyphs are bitmap-ish at small sizes and render blurry/inconsistent
 # across platforms. `currentColor` lets each one inherit whatever text
 # color it's placed in, so the same markup works in both the light and

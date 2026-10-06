@@ -21,7 +21,7 @@ from core.ui_components import render_empty_state, render_status_strip, setup_st
 _current_user = configure_page("Settings")
 show_pending_toast()
 st.title(":material/settings: Settings")
-st.caption("App-wide settings, set up once — not tied to any specific client.")
+st.caption("App-wide settings, set up once - not tied to any specific client.")
 # Saved state, not live input -- every Save button on this page reruns, so
 # this row catches up the moment anything below is saved.
 _jira_now = get_jira_settings()
@@ -41,27 +41,27 @@ with st.expander("Shared team data location", expanded=False, icon=":material/fo
     st.caption(f"Company aliases are currently stored at: `{os.path.abspath(_aliases_path)}`")
     st.caption(
         "Required, and must be a folder inside a OneDrive folder you sync locally (each person sets "
-        "their own local path to that same shared folder) — a folder on your personal computer that "
+        "their own local path to that same shared folder) - a folder on your personal computer that "
         "isn't OneDrive-synced won't be accepted, since your colleagues (and, later, the admin "
         "activity dashboard) need to see the same data. Pick the folder itself, not a 'clients' "
         "subfolder inside it; the app creates and manages its own `clients/` and `aliases/` subfolders "
-        "under whatever you select here. Note: OneDrive syncs file-by-file, not instantly — if two "
+        "under whatever you select here. Note: OneDrive syncs file-by-file, not instantly - if two "
         "people save the *same* client profile at the *same* moment, OneDrive may create a conflicted "
         "copy instead of merging, so treat this as low-frequency shared config, not simultaneous "
         "editing."
     )
     # Label rendered above (not inline in the text_input) so both columns
-    # start at the exact same vertical offset — keeps the Browse button
+    # start at the exact same vertical offset - keeps the Browse button
     # aligned with the input box regardless of label text/theme font metrics,
     # same as _path_input_with_browse on the Client Setup page.
     st.markdown("**Shared team data folder**")
     col_input, col_browse = st.columns([5, 1])
     # The Browse button's session_state write must run before the
-    # text_input with the same key is instantiated below — Streamlit
+    # text_input with the same key is instantiated below - Streamlit
     # forbids modifying a widget's session_state value after that widget
     # has already been created in the same script run. Filling col_browse
-    # first (button) and col_input second (text_input) — both from this one
-    # st.columns() call, with no bare/unwrapped calls in between — keeps
+    # first (button) and col_input second (text_input) - both from this one
+    # st.columns() call, with no bare/unwrapped calls in between - keeps
     # col_input rendering on the left regardless of that fill order, exactly
     # like the proven pattern in Client Setup's _path_input_with_browse.
     with col_browse:
@@ -78,7 +78,7 @@ with st.expander("Shared team data location", expanded=False, icon=":material/fo
     if st.button("Save", key="clients_dir_save", use_container_width=True):
         new_root = _new_dir.strip()
         if not new_root:
-            render_problem("A shared team data folder is required — this can no longer be left blank.",
+            render_problem("A shared team data folder is required - this can no longer be left blank.",
                            "Click **Browse...** and pick a folder inside your synced OneDrive.")
         elif not is_onedrive_synced_path(new_root):
             # Kept verbatim with no separate suggestion -- the message already ends with the fix.
@@ -106,7 +106,7 @@ with st.expander("Jira account (private to this machine)", expanded=False, icon=
     st.caption(
         "Used only for the \"Post summary to Jira\" button on the Run Check page, so a finalized run's "
         "summary can be posted as a comment on that client's Jira ticket under your own account. "
-        "This is stored locally on this machine only — never inside the shared clients folder above, "
+        "This is stored locally on this machine only - never inside the shared clients folder above, "
         "since an API token is a secret tied to your Jira login."
     )
     _jira = get_jira_settings()
@@ -126,8 +126,8 @@ with st.expander("Enhancio Client ID (private to this machine)", expanded=False,
     st.caption(
         "Used by the **Enhancio** page and by Client Setup's \"Fetch allocations\"/\"Test connection\" "
         "buttons. Unlike Jira/Convertr, this is ONE shared credential for the whole org (Enhancio's "
-        "Enhancio-Managed OAuth2 Connected App Client ID — Settings → Org Settings → API Integrations → "
-        "Connected Apps on pubnet.enhancio.com), not tied to your own login — but it's still a live API "
+        "Enhancio-Managed OAuth2 Connected App Client ID - Settings → Org Settings → API Integrations → "
+        "Connected Apps on pubnet.enhancio.com), not tied to your own login - but it's still a live API "
         "credential, so it's stored locally on this machine only, never inside the shared clients folder "
         "above."
     )
@@ -142,7 +142,7 @@ with st.expander("Enhancio Client ID (private to this machine)", expanded=False,
 with st.expander("Integrate API credentials (private to this machine)", expanded=False, icon=":material/key:"):
     st.caption(
         "Used by the **Integrate** page. One shared API Key/Secret for the whole org (from Integrate's "
-        "Keys & credentials admin page) — each client just needs its own Source ID (SID), set on Client "
+        "Keys & credentials admin page) - each client just needs its own Source ID (SID), set on Client "
         "Setup. This is a live API credential, so it's stored locally on this machine only, never inside "
         "the shared clients folder above."
     )
@@ -159,7 +159,7 @@ with st.expander("Integrate API credentials (private to this machine)", expanded
 with st.expander("Google Sheets service account (private to this machine)", expanded=False, icon=":material/key:"):
     st.caption(
         "Used by any client with Google Sheets Lead Delivery enabled. One shared service-account key file "
-        "for the whole org — each individual Sheet still needs to be shared with that service account's "
+        "for the whole org - each individual Sheet still needs to be shared with that service account's "
         "email as Editor. This is a live credential, so only its local file path is stored here, never "
         "inside the shared clients folder above."
     )
@@ -207,7 +207,7 @@ if _current_user["is_admin"]:
         for _username, _record in _users.items():
             with st.container(border=True):
                 _col_name, _col_remove = st.columns([4, 1])
-                _col_name.markdown(f"**{_username}** — {'Admin' if _record.get('is_admin') else 'User'}")
+                _col_name.markdown(f"**{_username}** - {'Admin' if _record.get('is_admin') else 'User'}")
                 _is_last_admin = _record.get("is_admin") and _admin_count <= 1
                 # Two-step confirm before the actual delete_user call --
                 # this used to remove the account permanently on a single
@@ -264,9 +264,9 @@ if _current_user["is_admin"]:
                 _count = _activity_record.get("process_count", 0)
                 _stats = get_user_stats(_activity_record)
                 st.markdown(
-                    f"**{_activity_username}** — {_count} process(es), "
+                    f"**{_activity_username}** - {_count} process(es), "
                     f"{format_minutes(_stats['total_saved_minutes'])} saved "
-                    f"(last: {_activity_record.get('last_updated', '—')})"
+                    f"(last: {_activity_record.get('last_updated', '-')})"
                 )
                 st.caption(
                     f"Avg {format_minutes(_stats['avg_automated_minutes'])}/process · "

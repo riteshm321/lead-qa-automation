@@ -32,7 +32,7 @@ def test_friendly_error_key_error():
 
 def test_friendly_error_old_xls_format():
     # Real openpyxl exception when a client's Lead Template/Accumulated
-    # Report path points at a legacy .xls file — this tool only reads/writes
+    # Report path points at a legacy .xls file - this tool only reads/writes
     # .xlsx, since append_leads relies on openpyxl throughout (style/formula
     # preservation) which can't open .xls at all.
     exc = ValueError(
@@ -60,7 +60,7 @@ def test_friendly_error_unrecognized_falls_back_to_raw_text():
 
 def test_render_error_logs_the_full_exception(tmp_path, monkeypatch, caplog):
     # Regression test: render_error() used to convert an exception into a
-    # short friendly message and discard the original entirely — if a user
+    # short friendly message and discard the original entirely - if a user
     # reported "the tool did something wrong," there was no way to find out
     # what actually happened. It must now leave a diagnosable trail.
     monkeypatch.chdir(tmp_path)

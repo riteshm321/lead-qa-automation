@@ -36,7 +36,7 @@ def test_browse_for_file_returns_none_when_cancelled(monkeypatch):
 
 def test_browse_for_file_destroys_root_even_if_dialog_raises(monkeypatch):
     # Regression test: root.destroy() must run even when the dialog call
-    # itself raises (e.g. a Tcl error) — otherwise every failed "Browse..."
+    # itself raises (e.g. a Tcl error) - otherwise every failed "Browse..."
     # click leaked a hidden Tk root permanently.
     destroyed = []
 

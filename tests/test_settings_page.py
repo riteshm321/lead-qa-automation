@@ -63,7 +63,7 @@ def test_migrated_aliases_do_not_pollute_client_list_in_shared_folder(tmp_path, 
     # shared team data folder at a root (which migrates company_aliases.json
     # into a subfolder under it), a real client profile saved under that
     # same root's "clients" subfolder must still be the only thing
-    # list_profile_names() returns for it — mirrors the exact layout a user
+    # list_profile_names() returns for it - mirrors the exact layout a user
     # naturally created by hand (root/clients/*.json, root/aliases/...).
     monkeypatch.chdir(tmp_path)
     os.makedirs("aliases", exist_ok=True)

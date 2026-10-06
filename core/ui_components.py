@@ -55,7 +55,7 @@ def render_empty_state(message: str, hint: str = "", icon: str = "inbox") -> Non
     it -- instead of rendering nothing or a bare caption (spec section 2)."""
     text = f":material/{icon}: {message}"
     if hint:
-        text += f" — {hint}"
+        text += f" - {hint}"
     st.caption(text)
 
 

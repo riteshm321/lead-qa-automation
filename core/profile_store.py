@@ -144,7 +144,7 @@ def load_profile(name: str, clients_dir: str = "clients") -> ClientProfile:
 
 def _looks_like_profile(path: str) -> bool:
     # A shared clients_dir can accumulate .json files that aren't client
-    # profiles at all — e.g. OneDrive conflict copies, or (before aliases
+    # profiles at all - e.g. OneDrive conflict copies, or (before aliases
     # moved to their own subfolder) the aliases file itself. Requiring the
     # shape of an actual profile avoids treating those as fake clients.
     try:

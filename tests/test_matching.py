@@ -12,7 +12,7 @@ def test_extract_domain():
 
 def test_extract_domain_handles_nan_float_without_crashing():
     # Blank Excel/CSV cells surface as a raw float NaN (not a string) after
-    # pandas astype(str) on some pandas versions — must not raise.
+    # pandas astype(str) on some pandas versions - must not raise.
     assert extract_domain(float("nan")) == ""
     assert extract_domain(None) == ""
 

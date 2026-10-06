@@ -92,7 +92,7 @@ if not _api_key or not _api_secret:
                    "It's under **Settings → Integrate API credentials (private to this machine)**.")
     st.stop()
 if not _integrate.sid:
-    render_problem("This client has no Integrate Source ID (SID) saved — set one on Client Setup.",
+    render_problem("This client has no Integrate Source ID (SID) saved - set one on Client Setup.",
                    "It's under **Client Setup → Delivery → Integrate Upload**.")
     st.stop()
 
@@ -135,7 +135,7 @@ def _upload_leads(send_df: pd.DataFrame, dup_df: pd.DataFrame) -> None:
             # entry in filter_already_uploaded and get silently
             # skipped as "already uploaded" forever. Surfacing it here
             # instead keeps it visible in the results table.
-            results.append({"Email": email, "Result": "Failed — No email value for this row"})
+            results.append({"Email": email, "Result": "Failed - No email value for this row"})
             failed_entries.append(make_failed_entry(lead.to_dict(), email, "No email value for this row"))
         else:
             try:
@@ -143,7 +143,7 @@ def _upload_leads(send_df: pd.DataFrame, dup_df: pd.DataFrame) -> None:
                     _integrate.sid, _api_key, _api_secret, attributes, callback_url=_integrate.callback_url,
                 )
                 lead_id = str(response.get("id", ""))
-                results.append({"Email": email, "Result": f"Uploaded — Lead ID {lead_id}"})
+                results.append({"Email": email, "Result": f"Uploaded - Lead ID {lead_id}"})
                 # Saved per-lead, not batched to the end of the whole loop
                 # -- same reasoning as pages/7_Convertr.py's per-CID
                 # incremental save: an exception on a LATER lead must
@@ -152,7 +152,7 @@ def _upload_leads(send_df: pd.DataFrame, dup_df: pd.DataFrame) -> None:
                 save_uploaded_emails(client_name, {str(email)})
                 succeeded_emails.add(email)
             except IntegrateError as exc:
-                results.append({"Email": email, "Result": f"Failed — {exc}"})
+                results.append({"Email": email, "Result": f"Failed - {exc}"})
                 failed_entries.append(make_failed_entry(lead.to_dict(), email, str(exc)))
         sent_so_far += 1
         if send_progress is not None:
@@ -176,7 +176,7 @@ with st.container(border=True):
     )
 
     _test_mode = st.checkbox(
-        "Test mode — upload only 1 lead", key="integrate_test_mode",
+        "Test mode - upload only 1 lead", key="integrate_test_mode",
         help="Use this for a first-time check before uploading real volume.",
     )
     _upload_file = st.file_uploader("Verified leadfile", type=["xlsx", "csv"], key="integrate_upload_file")
@@ -190,7 +190,7 @@ with st.container(border=True):
 
         if not _leadfile_mapping or not _leadfile_mapping.email:
             render_problem(
-                "This client has no leadfile column mapping for Integrate yet — set one under Client "
+                "This client has no leadfile column mapping for Integrate yet - set one under Client "
                 "Setup's Integrate section (at least the Email column)."
             )
             st.stop()
@@ -206,13 +206,13 @@ with st.container(border=True):
         if not _dup_df.empty:
             render_problem(
                 f"{len(_dup_df)} lead(s) in this file were already uploaded to (accepted by) Integrate before and "
-                "will be skipped. Leads that failed before are never counted here — they're sent again "
+                "will be skipped. Leads that failed before are never counted here - they're sent again "
                 "automatically.",
                 level="warning")
             if st.checkbox(
                 "Also resend the leads Integrate already accepted", value=False,
                 key="integrate_reupload_duplicates",
-                help="Leave unchecked to retry only what failed before (recommended — failed leads are never "
+                help="Leave unchecked to retry only what failed before (recommended - failed leads are never "
                      "remembered as uploaded, so they go out again on their own). Tick this only to deliberately "
                      "resend leads Integrate already accepted; that creates duplicate submissions.",
             ):
@@ -224,7 +224,7 @@ with st.container(border=True):
 
         if not _integrate.field_mapping:
             render_problem(
-                "This client has no Integrate field mapping configured yet — set one under Client Setup's "
+                "This client has no Integrate field mapping configured yet - set one under Client Setup's "
                 "Integrate section."
             )
             st.stop()

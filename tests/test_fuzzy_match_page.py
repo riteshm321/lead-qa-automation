@@ -23,7 +23,7 @@ def test_fuzzy_match_title_icon_and_empty_state(monkeypatch, tmp_path):
     at.run()
     assert not at.exception
     assert at.title[0].value == ":material/search: Fuzzy Match"
-    assert any(c.value == ":material/upload_file: No file uploaded yet. — Upload an .xlsx or .csv above "
+    assert any(c.value == ":material/upload_file: No file uploaded yet. - Upload an .xlsx or .csv above "
                "to compare two of its columns." for c in at.caption)
 
 

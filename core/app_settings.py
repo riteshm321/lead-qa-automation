@@ -20,8 +20,8 @@ def save_app_settings(settings: dict) -> None:
 def get_shared_root_dir() -> str:
     # The folder a user points "Shared team data folder" at (e.g. inside a
     # synced OneDrive folder). The app owns "clients/" and "aliases/" as
-    # subfolders under this root — mirroring the private-mode layout
-    # (cwd/clients, cwd/aliases) — rather than expecting profile JSONs
+    # subfolders under this root - mirroring the private-mode layout
+    # (cwd/clients, cwd/aliases) - rather than expecting profile JSONs
     # directly in the selected folder, which is what a user picking a plain
     # shared folder would naturally assume. Falls back to the older
     # "clients_dir" settings key (which used to hold this same folder
@@ -47,7 +47,7 @@ def get_aliases_path() -> str:
 
 
 def get_jira_settings() -> dict:
-    # Deliberately read from the plain local app_settings.json only — never
+    # Deliberately read from the plain local app_settings.json only - never
     # from anything under get_shared_root_dir(). An API token is a secret
     # tied to one person's Jira account; it must never end up inside the
     # clients folder a whole team may sync via OneDrive.

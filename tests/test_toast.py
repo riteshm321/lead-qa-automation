@@ -25,7 +25,7 @@ def test_queue_then_show_displays_and_clears_the_message():
         show_pending_toast()
 
     mock_toast.assert_called_once_with("Saved.", icon=":material/check_circle:")
-    # Shown once — a second call on a later run must not repeat it.
+    # Shown once - a second call on a later run must not repeat it.
     with patch("core.toast.st.toast") as mock_toast_again:
         show_pending_toast()
     mock_toast_again.assert_not_called()

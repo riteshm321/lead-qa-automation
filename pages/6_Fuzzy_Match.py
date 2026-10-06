@@ -15,7 +15,7 @@ st.title(":material/search: Fuzzy Match")
 st.caption(
     "Scores how closely two columns in the same file match (e.g. the leadfile's own Job Title "
     "against a LinkedIn-derived Job Title), so you can review weak matches before sending the file "
-    "to the client. Not tied to a specific client — usable for anyone."
+    "to the client. Not tied to a specific client - usable for anyone."
 )
 
 uploaded = st.file_uploader("File to check", type=["xlsx", "csv"])

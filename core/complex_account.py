@@ -124,7 +124,7 @@ def load_tal_index(tal_path: str) -> dict[str, list[dict]]:
     domain -> [{"account_id", "account_name", "country_code"}, ...] index,
     reading only the 4 columns actually needed to keep memory/load time
     reasonable. More than one TAL row can share the same domain (different,
-    genuinely distinct accounts, not just duplicate rows) — match_tal_account
+    genuinely distinct accounts, not just duplicate rows) - match_tal_account
     resolves that ambiguity per lead using the lead's own country.
     """
     df = pd.read_csv(tal_path, usecols=["web_domain", "account_id", "account_name", "country_code"])
@@ -145,7 +145,7 @@ def match_tal_account(domain: str, country: str, tal_index: dict[str, list[dict]
     """Returns (account_id, account_name) for the given domain, or (None, None)
     if the domain isn't in the TAL at all. When a domain maps to more than one
     distinct account, prefers one whose country_code matches the lead's own
-    Country — if that still doesn't resolve it, returns the first candidate
+    Country - if that still doesn't resolve it, returns the first candidate
     rather than leaving it blank (a real client-facing report should never
     show an empty Account ID just because two TAL rows share a domain).
     """
@@ -285,12 +285,12 @@ def load_domain_value_map(
     plain open file).
 
     aggregate: a domain can appear on more than one row (e.g. Installed
-    Technologies lists one technology per row) — when True, every distinct
+    Technologies lists one technology per row) - when True, every distinct
     value seen for a domain is joined with ", " in first-seen order,
     instead of only the last row winning.
 
     skip_values: values to treat as "nothing to report" (case-insensitive
-    exact match) — e.g. Predictive Buying Stage's "No Active Signals"
+    exact match) - e.g. Predictive Buying Stage's "No Active Signals"
     should leave that domain unmapped rather than showing the label text
     itself.
     """
@@ -333,7 +333,7 @@ _DATE_FORMATS = (
 
 def reformat_capture_date(value) -> str | None:
     """Returns the date as mm/dd/yyyy text, or None if value is blank or
-    couldn't be parsed as a date at all (caller flags that lead for review —
+    couldn't be parsed as a date at all (caller flags that lead for review -
     per instruction, this should never actually be blank in practice).
     US-style m/d/y is tried first since that's this client's own convention
     (and the ambiguous case, e.g. "03/04/2026", only has one sane reading
@@ -373,7 +373,7 @@ def clean_email_optin(value) -> str | None:
 
 def asset_download_parts(capture_date) -> tuple[int, str]:
     """(day-of-month as a number, full month name) from a Capture Date
-    value — either an already mm/dd/yyyy-formatted string, or a real
+    value - either an already mm/dd/yyyy-formatted string, or a real
     date/datetime object. Returned as a number (not zero-padded text) so
     Excel stores and filters it as a number rather than text."""
     parsed = (
@@ -527,15 +527,15 @@ def check_complex_account_conditions(
     leads_df: pd.DataFrame, asset_specs: dict[str, dict] | None = None, field_mapping=None,
 ) -> dict[int, list[ReviewDetail]]:
     """Evaluates the Complex Account conditions that can actually flag a
-    lead — a Capture Date that's blank/unparseable, an Email Opt-in value
+    lead - a Capture Date that's blank/unparseable, an Email Opt-in value
     that isn't clearly Yes/No, or an already-filled Asset URN/Form
     URL/Dell Asset URL that doesn't match the specifications file for that
-    Asset Title — without touching any column.
+    Asset Title - without touching any column.
 
     Used at Run Check time, before the valid/refund/review split, so these
     leads get resolved through the same Refund/Needs Review flow as every
     other check. The column-filling rules (TAL mapping, Installed
-    Technologies/Predictive Buying Stage, phone/date formatting — see
+    Technologies/Predictive Buying Stage, phone/date formatting - see
     apply_complex_account_rules) are deliberately deferred to a separate
     step run only on the leads that end up valid, since there's no point
     enriching a lead that's about to be refunded.
@@ -737,7 +737,7 @@ def apply_complex_account_rules(
     capture_date_ok = pd.Series(True, index=df.index)
     if CAPTURE_DATE_COLUMN in df.columns:
         # A string-typed column (e.g. pandas' pyarrow-backed "str" dtype)
-        # rejects assigning a real date object cell-by-cell below — widen it
+        # rejects assigning a real date object cell-by-cell below - widen it
         # to plain object dtype first so it can hold dates.
         df[CAPTURE_DATE_COLUMN] = df[CAPTURE_DATE_COLUMN].astype(object)
         for idx, row in df.iterrows():
@@ -749,7 +749,7 @@ def apply_complex_account_rules(
                 ))
                 capture_date_ok[idx] = False
             else:
-                # Store a real date, not text — so Excel writes/filters it as
+                # Store a real date, not text - so Excel writes/filters it as
                 # an actual date instead of flagging "Number Stored as Text".
                 df.at[idx, CAPTURE_DATE_COLUMN] = datetime.datetime.strptime(formatted, "%m/%d/%Y").date()
 
@@ -765,7 +765,7 @@ def apply_complex_account_rules(
                 df.at[idx, EMAIL_OPTIN_COLUMN] = cleaned
 
     if CAPTURE_DATE_COLUMN in df.columns and DOWNLOAD_DAY_COLUMN in df.columns:
-        # Same string-dtype widening as Capture Date above — day/year are
+        # Same string-dtype widening as Capture Date above - day/year are
         # real numbers now, not zero-padded text, so Excel doesn't flag them.
         df[DOWNLOAD_DAY_COLUMN] = df[DOWNLOAD_DAY_COLUMN].astype(object)
         df[DOWNLOAD_YEAR_COLUMN] = df[DOWNLOAD_YEAR_COLUMN].astype(object)
@@ -786,7 +786,7 @@ def apply_complex_account_rules(
 def merge_complex_account_review(result, complex_review: dict[int, list[ReviewDetail]]) -> None:
     """Merges Complex Account review flags into an existing PipelineResult
     in place, respecting the same fail > review > valid priority
-    run_pipeline() itself uses — a lead already auto-refunded by one of the
+    run_pipeline() itself uses - a lead already auto-refunded by one of the
     standard checks stays refunded; anything else moves to (or stays in)
     review.
     """

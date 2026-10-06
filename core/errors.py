@@ -11,7 +11,7 @@ def friendly_error(exc: Exception) -> tuple[str, str]:
     """Return (short message, suggested fix) for a caught exception.
 
     Falls back to the raw exception text with no fix when the error doesn't
-    match a known pattern — better a plain message than a wrong guess.
+    match a known pattern - better a plain message than a wrong guess.
     """
     text = str(exc)
 
@@ -22,7 +22,7 @@ def friendly_error(exc: Exception) -> tuple[str, str]:
 
     if "WinError 3" in text:
         return ("Windows couldn't find part of that file path.",
-                "This usually means the full path is too long (Windows has a ~260-character limit) — "
+                "This usually means the full path is too long (Windows has a ~260-character limit) - "
                 "common with deeply nested OneDrive folders. Try moving the file to a shorter path, "
                 "or renaming a parent folder to something shorter.")
 
@@ -67,7 +67,7 @@ def render_error(exc: Exception) -> None:
     """Show a short, friendly error with a suggested fix when one is known.
 
     The friendly message deliberately hides the raw exception/traceback
-    from the user — but that detail must not simply vanish, or a client
+    from the user - but that detail must not simply vanish, or a client
     who reports "the tool did something wrong" leaves no way to find out
     what actually happened. Logging it here, at the one place every
     caught, user-facing error already passes through, means every such

@@ -29,7 +29,7 @@ def read_external_link_parts(path: str) -> dict[str, bytes]:
 def restore_external_link_parts(path: str, original_parts: dict[str, bytes]) -> None:
     # openpyxl loses/corrupts the cached values in xl/externalLinks/*.xml when
     # it round-trips a workbook that references another (possibly closed)
-    # workbook — e.g. a data-validation picklist backed by an external file.
+    # workbook - e.g. a data-validation picklist backed by an external file.
     # Excel still opens the result, but flags it as needing repair every
     # time. Since we never touch external links ourselves, restoring the
     # original bytes for exactly those parts is always safe and correct.
@@ -288,7 +288,7 @@ def read_csv_bytes_robust(raw: bytes) -> pd.DataFrame:
 
 
 def read_leadfile(uploaded_file) -> pd.DataFrame:
-    """Read an uploaded New Leads file — Excel or CSV — into a DataFrame."""
+    """Read an uploaded New Leads file - Excel or CSV - into a DataFrame."""
     name = getattr(uploaded_file, "name", "") or ""
     if not name.lower().endswith(".csv"):
         uploaded_file.seek(0)
@@ -297,14 +297,14 @@ def read_leadfile(uploaded_file) -> pd.DataFrame:
         # Two independent problems, both producing the same "Unnamed: N"
         # symptom: (1) a workbook can have multiple sheets where the real
         # leads live on whichever sheet was active when the file was last
-        # saved, not necessarily the first one by position — e.g. a pivot
+        # saved, not necessarily the first one by position - e.g. a pivot
         # summary sheet sitting before the real data sheet. wb.active is
         # openpyxl's read of that "last viewed" sheet, same as Excel shows
         # you on open; pd.read_excel's default sheet_name=0 has no such
         # concept and just takes the first by position, so it was reading
         # the wrong sheet entirely. (2) New Leads files, like Lead
         # Templates, sometimes carry a title/instruction row above the real
-        # header, which a fixed header=0 reads as the header — detect the
+        # header, which a fixed header=0 reads as the header - detect the
         # true header row the same way find_header_row() does for target
         # sheets.
         wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True)
@@ -324,7 +324,7 @@ def read_leadfile(uploaded_file) -> pd.DataFrame:
 
 def _win_long_path(path: str) -> str:
     # Real client files often live in deeply nested OneDrive folders whose
-    # full path is already close to Windows' 260-character MAX_PATH limit —
+    # full path is already close to Windows' 260-character MAX_PATH limit -
     # appending "_backup_<timestamp>" (or a "backup\" subfolder) pushes some
     # of them over it, which surfaces as a confusing WinError 3 ("cannot
     # find the path specified") even though every folder in the path is
@@ -370,7 +370,7 @@ _FIELD_SYNONYMS = {
 def normalize_header_text(value) -> str:
     # Strips ALL non-alphanumeric characters (not just collapsing them to a
     # single space), so "Job Function", "Job_Function" and the fully
-    # concatenated "jobfunction" all normalize to the same "jobfunction" —
+    # concatenated "jobfunction" all normalize to the same "jobfunction" -
     # real leadfiles frequently drop separators entirely, and requiring an
     # exact-ish phrase match left most non-core columns unmatched.
     import re
@@ -407,7 +407,7 @@ def _resolve_field_attr(header_norm: str) -> str | None:
 def guess_target_field_mapping(headers: list) -> dict[str, str]:
     """Best-guess header name for each of the 5 known lead fields, via the synonym table.
 
-    Used only to seed a UI default — the caller should let the user confirm/override
+    Used only to seed a UI default - the caller should let the user confirm/override
     it and save an explicit mapping, since real target files (Accumulated Reports,
     Lead Templates) often use header text that doesn't match any synonym.
     """
@@ -460,13 +460,13 @@ def find_header_row(path: str, sheet_name: str, expected_headers: list | None = 
     1. Scan the first `max_scan_rows` rows for a cell matching a known marker
        (the client's saved column mapping if given, else the generic
        email/first name/last name/company/cid synonyms) and return that
-       row's 1-based index — most reliable when the header text is
+       row's 1-based index - most reliable when the header text is
        recognizable.
     2. If no marker matches (e.g. the template uses non-standard header text
        with no saved mapping yet to compare against), fall back to a
        structural heuristic: among rows with at least
        `_MIN_STRUCTURAL_HEADER_CELLS` non-empty cells, pick the one with the
-       MOST non-empty cells (earliest row wins on a tie) — real templates
+       MOST non-empty cells (earliest row wins on a tie) - real templates
        often carry annotation/instruction rows above the header that also
        have a handful of scattered notes in them, so "first row past a
        threshold" alone is not reliable; the true header row is reliably
@@ -507,7 +507,7 @@ def read_sheet_headers(path: str, sheet_name: str, header_row: int = 1) -> list:
     try:
         ws = wb[sheet_name]
         # ws[header_row] (openpyxl's __getitem__) raises IndexError on a
-        # genuinely empty sheet even though max_row reports 1 — iter_rows
+        # genuinely empty sheet even though max_row reports 1 - iter_rows
         # doesn't have that problem, so use it instead.
         rows = list(ws.iter_rows(min_row=header_row, max_row=header_row))
         if not rows:
@@ -573,15 +573,15 @@ def route_leads_by_cid(
     """Split leads across a Lead Template's tabs by CID.
 
     Tabs are checked in order; a lead is assigned to the first tab whose
-    `cids` list contains its CID (mutually exclusive — a lead never lands in
+    `cids` list contains its CID (mutually exclusive - a lead never lands in
     more than one tab). A tab with an empty `cids` list is never matched (a
     tab always needs its CIDs explicitly configured). Leads that match no
     tab at all are returned separately as "unmatched" rather than dropped.
 
     Returns ((file_path, sheet_name) -> matched leads for tabs with at least
-    one match, unmatched leads). A tab's own file_path is used when set —
+    one match, unmatched leads). A tab's own file_path is used when set -
     some CID groups go to an entirely different workbook, not just another
-    tab in the same one — otherwise falling back to default_file_path (the
+    tab in the same one - otherwise falling back to default_file_path (the
     client's shared Lead Template path).
     """
     remaining = leads_df
@@ -611,7 +611,7 @@ def _find_last_data_row(ws, first_data_row: int, headers: list) -> int | None:
     given header's columns, or None if every such row is empty.
 
     ws.max_row reflects the sheet's whole used range, which includes cells
-    that only ever had formatting applied — real templates are often
+    that only ever had formatting applied - real templates are often
     bulk-preformatted thousands of rows past the actual data, which made
     ws.max_row alone report a row far below the true last lead. Scanning
     actual cell values is the only reliable way to find where leads end.
@@ -622,7 +622,7 @@ def _find_last_data_row(ws, first_data_row: int, headers: list) -> int | None:
     num_cols = len(headers)
     # values_only=True skips constructing full Cell wrapper objects (style
     # refs, comments, hyperlinks) for every one of potentially tens of
-    # thousands of rows — this scan only needs the raw values.
+    # thousands of rows - this scan only needs the raw values.
     for offset, row in enumerate(ws.iter_rows(min_row=first_data_row, max_row=ws.max_row, values_only=True)):
         if any(v is not None for v in row[:num_cols]):
             last = first_data_row + offset
@@ -634,8 +634,8 @@ _FUZZY_MATCH_THRESHOLD = 88
 
 # Known passthrough-column synonym groups: real leadfiles and Lead Templates
 # use genuinely different words for the same field (not just typos/word
-# order, which the fuzzy tier below already catches) — e.g. "Company Size"
-# vs "Employee Size" — so no amount of string-similarity scoring will ever
+# order, which the fuzzy tier below already catches) - e.g. "Company Size"
+# vs "Employee Size" - so no amount of string-similarity scoring will ever
 # match them; "company" and "employee" just aren't similar strings. Each
 # inner set is normalized synonyms for one field; add more groups here as
 # further real-world mismatches turn up.
@@ -675,7 +675,7 @@ _PASSTHROUGH_SYNONYM_GROUP_BY_HEADER: dict[str, int] = {
 def find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str, str]) -> str | None:
     """Best-effort match of a target header to a leadfile column, for the
     "everything else" passthrough columns (beyond the 5 explicitly-mapped
-    roles). Real leadfiles vary in ways an exact match can't anticipate —
+    roles). Real leadfiles vary in ways an exact match can't anticipate -
     export tools append suffixes ("MarketSegmentReferential" for "Market
     Segment") or contract phrases ("IAMAReferential" for "I am a"). Tried in
     order, most to least confident:
@@ -683,11 +683,11 @@ def find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str, 
     1. Exact match on the fully-stripped normalized text (handles
        "Job Function" / "jobfunction").
     2. Known synonym group (handles genuinely different wording for the same
-       field, like "Company Size" vs "Employee Size" — see
+       field, like "Company Size" vs "Employee Size" - see
        _PASSTHROUGH_SYNONYM_GROUPS above).
     3. Containment: the target header is fully contained inside a leadfile
        column's own (longer) text (handles suffix/prefix noise like
-       "Referential") — guarded by a minimum length so short strings
+       "Referential") - guarded by a minimum length so short strings
        ("cid") don't swallow unrelated columns. Deliberately one-directional
        (leadfile column contains target, never the reverse) -- confirmed in
        a real client's data that the reverse direction wrongly matches a
@@ -698,7 +698,7 @@ def find_passthrough_lead_column(header_norm: str, lead_headers_norm: dict[str, 
     4. Fuzzy similarity (rapidfuzz) above a high threshold, for typos and
        reordered words.
 
-    A tier is only used if exactly one leadfile column qualifies — wiring
+    A tier is only used if exactly one leadfile column qualifies - wiring
     the wrong column into a client's real report is worse than leaving a
     cell blank, so ties are left unmatched rather than guessed.
     """
@@ -1085,7 +1085,7 @@ def append_leads(
                     formula_template[header] = (cell.value, cell.coordinate)
 
         # clear_existing wipes old data rows (e.g. a Lead Report re-sent fresh
-        # each period rather than accumulated) — capture the formatting from
+        # each period rather than accumulated) - capture the formatting from
         # the row about to be deleted first, since there'll be nothing left to
         # sample it from afterward.
         cleared_styles: dict[int, tuple] | None = None
@@ -1111,7 +1111,7 @@ def append_leads(
                 column_styles[col_idx] = (src.font, src.fill, src.border, src.alignment, src.number_format)
 
         # Which lead column (if any) feeds each header only depends on the
-        # header/column identity, never on a specific row — resolve it once
+        # header/column identity, never on a specific row - resolve it once
         # per column rather than once per (row, column) pair.
         manual_overrides, date_formats = resolve_lead_template_rules(lead_template_mapping)
 
@@ -1135,7 +1135,7 @@ def append_leads(
                     cell.font, cell.fill, cell.border, cell.alignment, cell.number_format = (
                         copy(font), copy(fill), copy(border), copy(alignment), number_format
                     )
-                # Captured before assigning cell.value below — openpyxl itself
+                # Captured before assigning cell.value below - openpyxl itself
                 # overwrites a "General" cell's number_format the moment a
                 # date/datetime value is assigned to it, so checking *after*
                 # assignment would always see openpyxl's own default format
@@ -1188,7 +1188,7 @@ def append_leads(
                     cell.value = lead_row.get(source_col, "") if source_col is not None else None
                     # A real date/datetime value written into a "General"-formatted
                     # cell displays as a raw serial number and Excel's date filter
-                    # can't group it — give it an explicit date format so it shows
+                    # can't group it - give it an explicit date format so it shows
                     # and filters like a real date instead.
                     if was_general_format and isinstance(cell.value, (datetime.date, datetime.datetime)):
                         cell.number_format = _DATE_NUMBER_FORMAT
@@ -1202,7 +1202,7 @@ def append_leads(
                         cell.number_format = _DATE_NUMBER_FORMAT
 
         if highlight_fill and not leads_df.empty:
-            # Only ever one batch highlighted at a time — strip ANY fill color
+            # Only ever one batch highlighted at a time - strip ANY fill color
             # from whatever rows existed before this run (an earlier run's
             # highlight, or manual formatting applied outside the tool), then
             # apply this run's color fresh to the rows it just added.
@@ -1296,7 +1296,7 @@ def detect_cids_from_pacing_overview(
 
 def _format_pacing_header(value) -> str:
     # Date column headers ("19-Aug") are stored as real datetime values, not
-    # text — str()'ing one directly gives a full "2026-08-19 00:00:00"
+    # text - str()'ing one directly gives a full "2026-08-19 00:00:00"
     # timestamp instead of the short date the sheet actually displays.
     if isinstance(value, (datetime.datetime, datetime.date)):
         return value.strftime("%d-%b")
@@ -1338,9 +1338,9 @@ def read_pacing_overview_table(accumulated_path: str, sheet_name: str = "Pacing 
     headers are shortened to a plain date, matching how the sheet actually
     displays them. A column the sheet itself has hidden (e.g. an old or
     not-yet-active date the client collapsed to reduce clutter) is skipped
-    — openpyxl reads a hidden column's values same as any other, so without
+    - openpyxl reads a hidden column's values same as any other, so without
     this check the Jira table would show a date the sheet doesn't visibly
-    have. Reading column visibility requires a non-read-only load — that
+    have. Reading column visibility requires a non-read-only load - that
     metadata isn't available in read_only mode.
     """
     wb = openpyxl.load_workbook(accumulated_path, read_only=False, data_only=True)

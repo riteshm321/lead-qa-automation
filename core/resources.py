@@ -2,7 +2,7 @@ import os
 
 # core/resources.py's own directory is always one level under the repo
 # root in dev, and under PyInstaller's bundled resource folder (sys._MEIPASS)
-# in the packaged exe — resolving from __file__ rather than the current
+# in the packaged exe - resolving from __file__ rather than the current
 # working directory means this works in both, and also under tests that
 # deliberately chdir() elsewhere for filesystem isolation (a plain
 # os.path.abspath(".")-based fallback broke under exactly that case).

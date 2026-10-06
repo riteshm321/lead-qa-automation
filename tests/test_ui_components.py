@@ -44,7 +44,7 @@ def test_render_empty_state_with_hint():
     at = AppTest.from_function(_app)
     at.run()
     assert not at.exception
-    assert at.caption[0].value == ":material/inbox: No TAL sources configured yet. — Click **Add TAL Source** below."
+    assert at.caption[0].value == ":material/inbox: No TAL sources configured yet. - Click **Add TAL Source** below."
 
 
 def test_render_empty_state_without_hint_and_custom_icon():
