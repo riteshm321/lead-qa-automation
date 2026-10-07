@@ -192,7 +192,7 @@ def test_run_pipeline_passes_lead_template_field_mapping_to_the_mandatory_check(
     assert result.review_reasons == {}
 
 
-def test_run_pipeline_flags_every_lead_when_a_mandatory_google_sheets_column_has_no_source():
+def test_run_pipeline_ignores_mandatory_google_sheets_rules():
     # Same fixture shape as
     # test_run_pipeline_passes_lead_template_field_mapping_to_the_mandatory_check
     # above, but via profile.google_sheets.mapping instead of
@@ -217,9 +217,9 @@ def test_run_pipeline_flags_every_lead_when_a_mandatory_google_sheets_column_has
 
     result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[])
 
-    assert set(result.review_reasons.keys()) == {0, 1}
-    for reasons in result.review_reasons.values():
-        assert any("Totally Unmatched Column" in str(d) for d in reasons)
+    # Mandatory columns apply only to the Lead Template, not Google Sheets.
+    assert result.review_reasons == {}
+    assert result.mandatory_blank_indices == set()
 
 
 def test_run_pipeline_with_no_mandatory_google_sheets_rules_is_unaffected():
@@ -338,3 +338,31 @@ def test_custom_questions_combined_cell_runs_in_pipeline_without_rules():
     assert result.valid_indices == [0]
     assert result.refund_reasons == {
         1: "Custom cell says 'Above $50,000' but 'Budget' column says '$10,000 to $50,000'"}
+
+
+def test_blank_mandatory_lead_template_value_goes_to_review_and_cannot_be_approved():
+    # A blank/unmapped mandatory column is a data/mapping gap, not a failed
+    # lead: it goes to Needs Review, but can never be approved as valid
+    # (directly, or after being marked refund), so it is never written blank.
+    from core.review_actions import approve_review_leads, refund_review_leads
+    profile = _profile(lead_template_mapping=LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Company Size", mandatory=True),
+    ]))
+    new_leads = pd.DataFrame([
+        {"emailaddress": "a@x.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1",
+         "Company Size": "50"},
+        {"emailaddress": "b@x.com", "firstname": "C", "lastname": "D", "company": "Y", "CID": "2",
+         "Company Size": " "},
+    ])
+    accumulated = pd.DataFrame(columns=["emailaddress", "firstname", "lastname", "company", "CID"])
+
+    result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[])
+    assert 1 in result.review_reasons and 1 not in result.refund_reasons
+    assert result.mandatory_blank_indices == {1}
+
+    assert approve_review_leads(result, [1]) == [1]
+    assert 1 in result.review_reasons and 1 not in result.valid_indices
+
+    refund_review_leads(result, [1])
+    final_valid, final_refunds = apply_refund_overrides(result, [1])
+    assert 1 not in final_valid and 1 in final_refunds

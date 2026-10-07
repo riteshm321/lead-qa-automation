@@ -14,7 +14,7 @@ from core.branding import configure_page
 from core.checks.leadcap import validate_purchased_report_cids
 from core.client_picker import preselect_client, render_client_picker
 from core.collation import collate_uploaded_files
-from core.errors import render_error
+from core.errors import render_error, render_problem
 from core.excel_io import (
     read_sheet_as_dataframe, append_leads, backup_file, require_columns, find_header_row, route_leads_by_cid,
     read_leadfile, read_pacing_overview_table, dataframe_to_excel_bytes, read_csv_bytes_robust,
@@ -411,8 +411,6 @@ if st.button("Run Check", disabled=not new_leads_file,
                 ("Checking Lead Notes", profile.lead_notes.enabled),
                 ("Checking Lead Template Mandatory Columns",
                  any(r.mandatory for r in profile.lead_template_mapping.rules)),
-                ("Checking Google Sheets Mandatory Columns",
-                 any(r.mandatory for r in profile.google_sheets.mapping.rules)),
             ] if on
         ]
         _progress_bar = st.progress(0.0, text=f"{_stage_labels[0]}...")
@@ -596,9 +594,23 @@ if "run_result" in st.session_state:
         approved_refund_indices = [
             idx for idx, approved in zip(refund_indices, edited_refund_table["Approve as valid"]) if approved
         ]
+        _locked_ticked = [idx for idx in approved_refund_indices
+                          if idx in getattr(result, "mandatory_blank_indices", set())]
+        if _locked_ticked:
+            render_problem(
+                f"{len(_locked_ticked)} ticked lead(s) are blank in a mandatory Lead Template column and can't "
+                "be approved as valid.",
+                "Add the missing values (or the missing column) to the leadfile, or map the column in Client "
+                "Setup, then run the check again.", level="warning")
 
     if result.review_reasons:
         st.subheader("Needs Review")
+        _blocked_count = st.session_state.pop("_mandatory_blocked_count", 0)
+        if _blocked_count:
+            render_problem(
+                f"{_blocked_count} lead(s) were not approved: they are blank in a mandatory Lead Template column.",
+                "Add the missing values (or the missing column) to the leadfile, or map the column in Client "
+                "Setup, then run the check again. You can still mark them as refund.", level="warning")
         st.caption("Pick an **Action** for individual leads and click **Apply row decisions**, or tick "
                    "**Select** on several and act on them in bulk. Either one resets the other's picks.")
         fm = profile.field_mapping
@@ -672,7 +684,7 @@ if "run_result" in st.session_state:
         row_decision_count = len(row_approve_indices) + len(row_refund_indices)
         if st.button(f"Apply {row_decision_count} row decision(s)", key="review_apply_row_actions",
                      use_container_width=True, disabled=not row_decision_count):
-            approve_review_leads(result, row_approve_indices)
+            st.session_state["_mandatory_blocked_count"] = len(approve_review_leads(result, row_approve_indices))
             refund_review_leads(result, row_refund_indices)
             st.session_state["review_all_selected_default"] = False
             st.session_state["review_editor_nonce"] += 1
@@ -683,7 +695,7 @@ if "run_result" in st.session_state:
             if st.button(f"Approve {len(selected_review_indices)} selected as valid",
                          key="review_bulk_approve", use_container_width=True,
                          disabled=not selected_review_indices):
-                approve_review_leads(result, selected_review_indices)
+                st.session_state["_mandatory_blocked_count"] = len(approve_review_leads(result, selected_review_indices))
                 st.session_state["review_all_selected_default"] = False
                 st.session_state["review_editor_nonce"] += 1
                 st.rerun()

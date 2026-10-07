@@ -13,6 +13,11 @@ class PipelineResult:
     valid_indices: list = field(default_factory=list)
     refund_reasons: dict = field(default_factory=dict)
     review_reasons: dict = field(default_factory=dict)
+    # Leads with a blank (or unmapped) mandatory Lead Template column. A
+    # mapping/data gap, not a failed lead, so they go to Needs Review - but
+    # they can never be approved as valid, or the column would be written
+    # blank. Fix the leadfile/mapping and re-run, or refund them.
+    mandatory_blank_indices: set = field(default_factory=set)
 
 
 def run_pipeline(
@@ -73,21 +78,20 @@ def run_pipeline(
         report("Checking Lead Notes")
         merge(lead_notes.check_lead_notes(new_leads, profile.lead_notes, alias_groups))
 
+    locked: set[int] = set()
     if any(r.mandatory for r in profile.lead_template_mapping.rules):
         report("Checking Lead Template Mandatory Columns")
-        merge(lead_template_mapping.check_lead_template_mandatory_columns(
-            new_leads, fm, profile.lead_template_mapping, profile.lead_template_field_mapping))
-
-    if any(r.mandatory for r in profile.google_sheets.mapping.rules):
-        report("Checking Google Sheets Mandatory Columns")
-        merge(lead_template_mapping.check_lead_template_mandatory_columns(
-            new_leads, fm, profile.google_sheets.mapping))
+        outcome = lead_template_mapping.check_lead_template_mandatory_columns(
+            new_leads, fm, profile.lead_template_mapping, profile.lead_template_field_mapping)
+        locked.update(outcome.review)
+        merge(outcome)
 
     refund_reasons = {idx: "; ".join(reasons) for idx, reasons in fail.items()}
     review_reasons = {idx: reasons for idx, reasons in review.items() if idx not in fail}
     valid_indices = [idx for idx in new_leads.index if idx not in fail and idx not in review_reasons]
 
-    return PipelineResult(valid_indices=valid_indices, refund_reasons=refund_reasons, review_reasons=review_reasons)
+    return PipelineResult(valid_indices=valid_indices, refund_reasons=refund_reasons, review_reasons=review_reasons,
+                          mandatory_blank_indices=locked)
 
 
 def apply_refund_overrides(
@@ -101,6 +105,7 @@ def apply_refund_overrides(
     left unticked stays refund-only, unchanged from the tool's original
     call. Returns (final_valid_indices, final_refund_reasons).
     """
+    approved_refund_indices = [i for i in approved_refund_indices if i not in getattr(result, "mandatory_blank_indices", set())]
     final_valid_indices = list(result.valid_indices) + list(approved_refund_indices)
     final_refund_reasons = {
         idx: reason for idx, reason in result.refund_reasons.items()

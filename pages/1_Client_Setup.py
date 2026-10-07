@@ -1228,9 +1228,9 @@ with tab_delivery:
                 _existing_rule = _existing_gs_rules.get(_gs_col)
                 with st.container(border=True):
                     st.write(f"**{_gs_col}**")
-                    _gs_mandatory = st.checkbox(
-                        "Mandatory", value=_existing_rule.mandatory if _existing_rule else False,
-                        key=f"gs_mandatory_{_gs_col}")
+                    # No Mandatory option here: the mandatory-column rule only
+                    # applies to the Lead Template, not Google Sheets delivery.
+                    _gs_mandatory = False
                     _default_fmt = _existing_rule.date_format if _existing_rule else ""
                     if not is_date_column(_gs_col, _default_fmt):
                         # Same rule as the Lead Template Column Mapping

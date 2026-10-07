@@ -11,10 +11,20 @@ REVIEW_ACTION_REFUND = "Mark as refund"
 REVIEW_ACTIONS = (REVIEW_ACTION_APPROVE, REVIEW_ACTION_REFUND)
 
 
-def approve_review_leads(result: PipelineResult, indices: Iterable[int]) -> None:
+def approve_review_leads(result: PipelineResult, indices: Iterable[int]) -> list[int]:
+    """Moves the given Needs Review leads to valid, except any blank in a
+    mandatory Lead Template column (result.mandatory_blank_indices) - those
+    stay in Needs Review and are returned, so a mandatory column is never
+    written blank."""
+    locked = getattr(result, "mandatory_blank_indices", set())
+    indices = list(indices)
+    blocked = [idx for idx in indices if idx in locked]
     for idx in indices:
+        if idx in locked:
+            continue
         result.valid_indices.append(idx)
         del result.review_reasons[idx]
+    return blocked
 
 
 def refund_review_leads(result: PipelineResult, indices: Iterable[int]) -> None:

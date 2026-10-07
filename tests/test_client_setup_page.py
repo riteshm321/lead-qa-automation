@@ -1145,14 +1145,14 @@ def test_invalid_integrate_target_attribute_warns_but_still_saves(tmp_path, monk
     assert loaded.integrate.field_mapping == {"Email": "emial"}
 
 
-def test_saving_google_sheets_tabs_and_mandatory_column_persists(tmp_path, monkeypatch):
+def test_saving_google_sheets_tabs_and_date_format_persists(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from core.app_settings import save_app_settings, save_google_sheets_key_path
     save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
     save_google_sheets_key_path(str(tmp_path / "fake-key.json"))
 
     with patch("core.google_sheets_client.read_sheet_headers",
-               return_value=["First Name", "Last Name", "Work Email"]):
+               return_value=["First Name", "Last Name", "Work Email", "Lead Date"]):
         at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
         at.run()
         next(t for t in at.text_input if t.label == "Client name").set_value("China Webinar Client").run()
@@ -1163,7 +1163,7 @@ def test_saving_google_sheets_tabs_and_mandatory_column_persists(tmp_path, monke
             "119999,https://docs.google.com/spreadsheets/d/1o_v7oMh6Y5VcX0COIjWQ_y00IVKGbwbznCEzNGcyhpU/edit\n"
             "120000,https://docs.google.com/spreadsheets/d/1zU6rm9EvksfJUA91JrLIOPneWTNRgjK6jpm4Ukb2PPA/edit,Leads"
         ).run()
-        at.checkbox(key="gs_mandatory_Work Email").set_value(True).run()
+        at.selectbox(key="gs_fmt_Lead Date").set_value("MM/DD/YYYY").run()
 
         next(b for b in at.button if "Save Client Profile" in b.label).click().run()
     assert not at.exception
@@ -1177,8 +1177,10 @@ def test_saving_google_sheets_tabs_and_mandatory_column_persists(tmp_path, monke
         GoogleSheetTab(cid="119999", sheet_id="1o_v7oMh6Y5VcX0COIjWQ_y00IVKGbwbznCEzNGcyhpU"),
         GoogleSheetTab(cid="120000", sheet_id="1zU6rm9EvksfJUA91JrLIOPneWTNRgjK6jpm4Ukb2PPA", worksheet_name="Leads"),
     ]
-    rule = next(r for r in saved.google_sheets.mapping.rules if r.template_column == "Work Email")
-    assert rule.mandatory is True
+    rule = next(r for r in saved.google_sheets.mapping.rules if r.template_column == "Lead Date")
+    assert rule.date_format == "MM/DD/YYYY"
+    # Mandatory columns apply only to the Lead Template, not Google Sheets.
+    assert not any(c.key and c.key.startswith("gs_mandatory_") for c in at.checkbox)
 
 
 def test_gs_date_format_selector_only_renders_for_date_columns(tmp_path, monkeypatch):
@@ -1206,7 +1208,7 @@ def test_switching_client_clears_stale_gs_widget_state_for_same_named_column(tmp
     # Regression test, matching the fix already applied to the sibling Lead
     # Template Column Mapping section (see
     # test_switching_client_clears_stale_ltm_widget_state_for_same_named_column
-    # in this same file) for the same failure mode: gs_mandatory_*/gs_fmt_*
+    # in this same file) for the same failure mode: gs_fmt_*
     # widget keys are dynamic per Google Sheets column name, not a fresh
     # per-item uuid -- switching to a different client whose Sheet happens
     # to use the same column name ("Work Email") could otherwise keep
@@ -1216,7 +1218,7 @@ def test_switching_client_clears_stale_gs_widget_state_for_same_named_column(tmp
     save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
     save_google_sheets_key_path(str(tmp_path / "fake-key.json"))
 
-    with patch("core.google_sheets_client.read_sheet_headers", return_value=["Work Email"]):
+    with patch("core.google_sheets_client.read_sheet_headers", return_value=["Work Email", "Lead Date"]):
         at1 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
         at1.run()
         next(t for t in at1.text_input if t.label == "Client name").set_value("GS Switch Client One").run()
@@ -1225,7 +1227,7 @@ def test_switching_client_clears_stale_gs_widget_state_for_same_named_column(tmp
         at1.text_area(key="gs_tabs_input").set_value(
             "119999,https://docs.google.com/spreadsheets/d/1o_v7oMh6Y5VcX0COIjWQ_y00IVKGbwbznCEzNGcyhpU/edit"
         ).run()
-        at1.checkbox(key="gs_mandatory_Work Email").set_value(True).run()
+        at1.selectbox(key="gs_fmt_Lead Date").set_value("MM/DD/YYYY").run()
         next(b for b in at1.button if "Save Client Profile" in b.label).click().run()
         assert not at1.exception
 
@@ -1244,10 +1246,10 @@ def test_switching_client_clears_stale_gs_widget_state_for_same_named_column(tmp
         at3.run()
         next(r for r in at3.radio if r.label == "Mode").set_value("Edit existing client").run()
         next(s for s in at3.selectbox if s.label == "Client").set_value("GS Switch Client One").run()
-        assert at3.checkbox(key="gs_mandatory_Work Email").value is True
+        assert at3.selectbox(key="gs_fmt_Lead Date").value == "MM/DD/YYYY"
 
         next(s for s in at3.selectbox if s.label == "Client").set_value("GS Switch Client Two").run()
-        assert at3.checkbox(key="gs_mandatory_Work Email").value is False
+        assert at3.selectbox(key="gs_fmt_Lead Date").value == "(no special formatting)"
 
 
 def test_saving_when_google_sheet_is_unreadable_does_not_wipe_existing_rules(tmp_path, monkeypatch):
@@ -1266,7 +1268,7 @@ def test_saving_when_google_sheet_is_unreadable_does_not_wipe_existing_rules(tmp
     save_google_sheets_key_path(str(tmp_path / "fake-key.json"))
 
     with patch("core.google_sheets_client.read_sheet_headers",
-               return_value=["First Name", "Last Name", "Work Email"]):
+               return_value=["First Name", "Last Name", "Work Email", "Lead Date"]):
         at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
         at.run()
         next(t for t in at.text_input if t.label == "Client name").set_value("GS Unreadable Client").run()
@@ -1275,15 +1277,15 @@ def test_saving_when_google_sheet_is_unreadable_does_not_wipe_existing_rules(tmp
         at.text_area(key="gs_tabs_input").set_value(
             "119999,https://docs.google.com/spreadsheets/d/1o_v7oMh6Y5VcX0COIjWQ_y00IVKGbwbznCEzNGcyhpU/edit"
         ).run()
-        at.checkbox(key="gs_mandatory_Work Email").set_value(True).run()
+        at.selectbox(key="gs_fmt_Lead Date").set_value("MM/DD/YYYY").run()
         next(b for b in at.button if "Save Client Profile" in b.label).click().run()
         assert not at.exception
 
     from core.app_settings import get_clients_dir
     from core.profile_store import load_profile
     saved = load_profile("GS Unreadable Client", get_clients_dir())
-    rule = next(r for r in saved.google_sheets.mapping.rules if r.template_column == "Work Email")
-    assert rule.mandatory is True
+    rule = next(r for r in saved.google_sheets.mapping.rules if r.template_column == "Lead Date")
+    assert rule.date_format == "MM/DD/YYYY"
 
     with patch("core.google_sheets_client.read_sheet_headers",
                side_effect=GoogleSheetsError("Sheet access revoked")):
@@ -1295,8 +1297,8 @@ def test_saving_when_google_sheet_is_unreadable_does_not_wipe_existing_rules(tmp
         assert not at2.exception
 
     resaved = load_profile("GS Unreadable Client", get_clients_dir())
-    rule2 = next(r for r in resaved.google_sheets.mapping.rules if r.template_column == "Work Email")
-    assert rule2.mandatory is True
+    rule2 = next(r for r in resaved.google_sheets.mapping.rules if r.template_column == "Lead Date")
+    assert rule2.date_format == "MM/DD/YYYY"
 
 
 def test_a_custom_gs_date_format_survives_a_reload_and_resave(tmp_path, monkeypatch):

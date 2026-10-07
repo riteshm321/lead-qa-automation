@@ -38,14 +38,16 @@ def check_lead_template_mandatory_columns(
             for idx in new_leads.index:
                 outcome.review.setdefault(idx, ReviewDetail(
                     check="Lead Template Mapping",
-                    message=f"No leadfile column found for mandatory field '{rule.template_column}'",
+                    message=(f"No leadfile column found for mandatory field '{rule.template_column}' - add the "
+                             "column to the leadfile or map it in Client Setup, then run the check again"),
                 ))
             continue
         for idx, value in new_leads[source_col].items():
             if pd.isna(value) or str(value).strip() == "":
                 outcome.review.setdefault(idx, ReviewDetail(
                     check="Lead Template Mapping",
-                    message=f"'{rule.template_column}' is required but blank",
+                    message=(f"'{rule.template_column}' is required but blank - add the value to the leadfile "
+                             "and run the check again"),
                 ))
 
     return outcome
