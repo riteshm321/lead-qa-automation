@@ -1312,7 +1312,9 @@ with tab_leadcap:
         leadcap_blank_cap_segments: list[str] = []
         if leadcap_enabled and not leadcap_segmented:
             leadcap_flat_cap = st.number_input("Flat lead cap", min_value=0, step=1,
-                                                value=profile.leadcap.flat_cap if profile and profile.leadcap.flat_cap else 0)
+                                                value=profile.leadcap.flat_cap if profile and profile.leadcap.flat_cap else 0,
+                                                help="One cap per account, counted across every CID in the campaign. "
+                                                     "To cap each CID on its own, use segmented with one CID per segment.")
         if leadcap_enabled and leadcap_segmented:
             if accumulated_path and st.button("Detect CIDs from Accumulated Report"):
                 try:

@@ -45,7 +45,11 @@ def check_leadcap(
             continue
 
         cid_col = report[config.purchased_report_cid_column].map(_norm_cid)
-        cid_mask = cid_col.isin([_norm_cid(c) for c in relevant_cids]) if relevant_cids is not None else (cid_col == cid)
+        # Flat cap: one cap pooled across every CID in the campaign's
+        # Purchased Lead Report. Segmented: pooled only within the lead's
+        # own segment's CIDs (a one-CID segment counts that CID alone).
+        cid_mask = (cid_col.isin([_norm_cid(c) for c in relevant_cids]) if relevant_cids is not None
+                    else pd.Series(True, index=report.index))
 
         domain_pass_failed = False
         if config.purchased_report_email_column in report.columns:

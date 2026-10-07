@@ -239,3 +239,24 @@ def test_cids_read_as_floats_still_match():
     new_leads = pd.DataFrame({"CID": [120653.0, np.nan], "Email": ["z@acme.com", "y@other.com"]})
     outcome = check_leadcap(new_leads, fm, config, {"_flat_": report})
     assert outcome.fail == {0: "Leadcap exceeded"}
+
+
+def test_flat_cap_pools_every_cid_in_the_report():
+    # Flat cap applies to the whole campaign: 2 leads per CID for the same
+    # domain is 4 in total, over a cap of 3.
+    fm = FieldMapping(email="Email", first_name="F", last_name="L", company="Company", cid="CID")
+    config = LeadcapConfig(enabled=True, flat_cap=3, check_company_name=False)
+    report = pd.DataFrame({"Campaign ID": ["1", "1", "2", "2"],
+                           "Email": ["a@acme.com", "b@acme.com", "c@acme.com", "d@acme.com"], "Company": [""] * 4})
+    new_leads = pd.DataFrame({"CID": ["1"], "Email": ["a@acme.com"]})
+    assert check_leadcap(new_leads, fm, config, {"_flat_": report}).fail == {0: "Leadcap exceeded"}
+
+
+def test_single_cid_segments_count_each_cid_on_its_own():
+    fm = FieldMapping(email="Email", first_name="F", last_name="L", company="Company", cid="CID")
+    config = LeadcapConfig(enabled=True, segmented=True, check_company_name=False, segments=[
+        LeadcapSegment(name="s1", cids=["1"], cap=3), LeadcapSegment(name="s2", cids=["2"], cap=3)])
+    report = pd.DataFrame({"Campaign ID": ["1", "1", "2", "2"],
+                           "Email": ["a@acme.com", "b@acme.com", "c@acme.com", "d@acme.com"], "Company": [""] * 4})
+    new_leads = pd.DataFrame({"CID": ["1"], "Email": ["a@acme.com"]})
+    assert check_leadcap(new_leads, fm, config, {"s1": report, "s2": report}).fail == {}
