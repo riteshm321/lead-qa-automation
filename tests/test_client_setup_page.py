@@ -2273,3 +2273,34 @@ def test_phone_space_checkbox_only_renders_for_phone_columns_and_persists(tmp_pa
     resaved = load_profile("LTM Phone Client", get_clients_dir())
     rule2 = next(r for r in resaved.lead_template_mapping.rules if r.template_column == "Phone Number")
     assert rule2.phone_space_after_country_code is True
+
+
+def test_lead_template_with_a_repeated_column_name_gets_one_settings_row(tmp_path, monkeypatch):
+    # Regression test: a template with two "Purchase Timeframe" columns
+    # crashed Client Setup with StreamlitDuplicateElementKey.
+    monkeypatch.chdir(tmp_path)
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Purchase Timeframe", "Company Size", "Purchase Timeframe"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("Repeated Column Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+    assert not at.exception
+
+    assert [c.key for c in at.checkbox if c.key == "ltm_mandatory_Purchase Timeframe"] == [
+        "ltm_mandatory_Purchase Timeframe"]
+    at.checkbox(key="ltm_mandatory_Purchase Timeframe").set_value(True).run()
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+    saved = load_profile("Repeated Column Client", get_clients_dir())
+    assert [r.template_column for r in saved.lead_template_mapping.rules] == ["Purchase Timeframe"]

@@ -1041,10 +1041,14 @@ with tab_delivery:
                 render_error(exc)
         _ltm_formula_headers_norm = {normalize_header_text(h) for h in _ltm_formula_headers if h is not None}
 
-        _ltm_template_headers = [
+        # dict.fromkeys: a template can repeat a column name (e.g. two
+        # "Purchase Timeframe" columns). Rules are keyed by column name and
+        # apply to every column with that name, so it gets one settings row
+        # - two rows would also crash on their identical widget keys.
+        _ltm_template_headers = list(dict.fromkeys(
             h for h in _ltm_template_headers
             if normalize_header_text(h) not in _ltm_skip and normalize_header_text(h) not in _ltm_formula_headers_norm
-        ]
+        ))
 
         _ltm_sample_file = st.file_uploader(
             "Sample leadfile (optional - lets this preview show real auto-match results and pick a source "
@@ -1236,7 +1240,7 @@ with tab_delivery:
                 "(no special formatting)", "MM/DD/YYYY", "DD/MM/YYYY", "DD-MMM-YY",
                 "YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS", "Custom...",
             ]
-            for _gs_col in _gs_sample_headers:
+            for _gs_col in dict.fromkeys(_gs_sample_headers):  # repeated column names: one row
                 _existing_rule = _existing_gs_rules.get(_gs_col)
                 with st.container(border=True):
                     st.write(f"**{_gs_col}**")
