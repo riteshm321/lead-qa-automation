@@ -2223,3 +2223,53 @@ def test_saving_a_group_change_keeps_the_same_client_and_its_checks_selected(tmp
     assert next(s for s in at.selectbox if s.label == "Group").value == "G2"
     assert next(s for s in at.selectbox if s.label == "Client").value == "A2"
     assert at.checkbox(key="cq_enabled").value is True
+
+
+def test_phone_space_checkbox_only_renders_for_phone_columns_and_persists(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    template_path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Title", "Phone Number", "Mobile"])
+    wb.save(template_path)
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at.run()
+    next(t for t in at.text_input if t.label == "Client name").set_value("LTM Phone Client").run()
+    at.text_input(key="accumulated_path_input").set_value(str(tmp_path / "accumulated.xlsx")).run()
+    at.text_input(key="lead_template_path_input").set_value(template_path).run()
+    at.selectbox(key="lead_template_sheet_select").set_value("Sheet1").run()
+    assert not at.exception
+
+    phone_keys = {c.key for c in at.checkbox if c.key and c.key.startswith("ltm_phone_")}
+    assert phone_keys == {"ltm_phone_Phone Number", "ltm_phone_Mobile"}
+
+    at.checkbox(key="ltm_phone_Phone Number").check().run()
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    assert not at.exception
+
+    from core.app_settings import get_clients_dir
+    from core.profile_store import load_profile
+
+    saved = load_profile("LTM Phone Client", get_clients_dir())
+    rules = {r.template_column: r for r in saved.lead_template_mapping.rules}
+    assert set(rules) == {"Phone Number"}
+    assert rules["Phone Number"].phone_space_after_country_code is True
+    assert rules["Phone Number"].mandatory is False
+
+    # Reopen the same client in a fresh session: the checkbox comes back
+    # checked, and re-saving keeps the flag.
+    at2 = AppTest.from_file(_PAGE_PATH, default_timeout=15)
+    at2.run()
+    next(r for r in at2.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at2.selectbox if s.label == "Client").set_value("LTM Phone Client").run()
+    assert at2.checkbox(key="ltm_phone_Phone Number").value is True
+    assert at2.checkbox(key="ltm_phone_Mobile").value is False
+
+    next(b for b in at2.button if "Save Client Profile" in b.label).click().run()
+    assert not at2.exception
+    resaved = load_profile("LTM Phone Client", get_clients_dir())
+    rule2 = next(r for r in resaved.lead_template_mapping.rules if r.template_column == "Phone Number")
+    assert rule2.phone_space_after_country_code is True

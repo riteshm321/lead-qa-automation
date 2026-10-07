@@ -209,6 +209,9 @@ class LeadTemplateColumnRule:
     # name ("MM/DD/YYYY", "DD/MM/YYYY", "DD-MMM-YY", "YYYY-MM-DD",
     # "YYYY-MM-DD HH:MM:SS") or a custom strftime-style string.
     date_format: str = ""
+    # Phone columns only: write "917020209586" as "91 7020209586" (see
+    # core.phone_format.add_space_after_country_code).
+    phone_space_after_country_code: bool = False
 
 
 @dataclass

@@ -366,3 +366,45 @@ def test_blank_mandatory_lead_template_value_goes_to_review_and_cannot_be_approv
     refund_review_leads(result, [1])
     final_valid, final_refunds = apply_refund_overrides(result, [1])
     assert 1 not in final_valid and 1 in final_refunds
+
+
+def test_run_pipeline_flags_excel_mangled_phone_numbers_for_review():
+    profile = _profile(lead_template_mapping=LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Phone Number", source_column="Mobile Phone"),
+    ]))
+    new_leads = pd.DataFrame([
+        {"emailaddress": "a@example.com", "firstname": "A", "lastname": "B", "company": "X", "CID": "1",
+         "Mobile Phone": "917020209586", "Work Tel": "9.17E+11"},
+        {"emailaddress": "b@example.com", "firstname": "C", "lastname": "D", "company": "Y", "CID": "1",
+         "Mobile Phone": "917020200000", "Work Tel": "9.17E+11"},
+        {"emailaddress": "c@example.com", "firstname": "E", "lastname": "F", "company": "Z", "CID": "1",
+         "Mobile Phone": "447911123456", "Work Tel": ""},
+    ])
+    accumulated = pd.DataFrame(columns=["emailaddress", "firstname", "lastname", "company", "CID"])
+    seen_labels = []
+
+    result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[],
+                          on_progress=seen_labels.append)
+
+    assert seen_labels == ["Checking Phone Numbers"]
+    assert result.valid_indices == [2]
+    assert set(result.review_reasons) == {0, 1}
+    # One flag per row even when two phone columns are both damaged.
+    assert len(result.review_reasons[1]) == 1
+    assert result.review_reasons[1][0].check == "Phone Number"
+    assert "'Phone Number' looks damaged by Excel (917020200000)" in result.review_reasons[1][0].message
+    assert "'Work Tel' looks damaged by Excel (9.17E+11)" in result.review_reasons[0][0].message
+    # Approvable: not locked like a mandatory-blank flag.
+    assert result.mandatory_blank_indices == set()
+
+
+def test_run_pipeline_skips_phone_check_when_no_phone_columns():
+    profile = _profile()
+    new_leads = pd.DataFrame([{"emailaddress": "a@example.com", "firstname": "A", "lastname": "B",
+                               "company": "X", "CID": "100000000000"}])
+    accumulated = pd.DataFrame(columns=["emailaddress", "firstname", "lastname", "company", "CID"])
+    seen_labels = []
+    result = run_pipeline(new_leads, profile, accumulated, reference_data={}, alias_groups=[],
+                          on_progress=seen_labels.append)
+    assert seen_labels == []
+    assert result.valid_indices == [0]

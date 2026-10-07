@@ -19,6 +19,7 @@ from openpyxl.utils.cell import range_boundaries
 
 from core.matching import normalize_cid
 from core.models import FieldMapping, LeadTemplateMappingConfig, LeadTemplateTab
+from core.phone_format import add_space_after_country_code
 
 
 def read_external_link_parts(path: str) -> dict[str, bytes]:
@@ -828,8 +829,8 @@ def _resolve_date_format(value: str) -> tuple[str, str, bool]:
 
 def resolve_lead_template_rules(
     lead_template_mapping: LeadTemplateMappingConfig | None,
-) -> tuple[dict[str, str], dict[str, tuple[str, str, bool]]]:
-    """(manual_overrides, date_formats) exactly as append_leads' xlsx and
+) -> tuple[dict[str, str], dict[str, tuple[str, str, bool]], set[str]]:
+    """(manual_overrides, date_formats, phone_space_headers) exactly as append_leads' xlsx and
     CSV branches each used to compute inline -- factored out here so
     core.google_sheets_client can resolve the SAME rules against a
     Google Sheet's headers without a third copy of this logic.
@@ -844,7 +845,14 @@ def resolve_lead_template_rules(
         for r in (lead_template_mapping.rules if lead_template_mapping else [])
         if r.date_format
     }
-    return manual_overrides, date_formats
+    # Normalized template headers whose written value gets a space after
+    # the country code (core.phone_format.add_space_after_country_code).
+    phone_space_headers = {
+        normalize_header_text(r.template_column)
+        for r in (lead_template_mapping.rules if lead_template_mapping else [])
+        if getattr(r, "phone_space_after_country_code", False)
+    }
+    return manual_overrides, date_formats, phone_space_headers
 
 
 def resolve_one_header_source(
@@ -961,7 +969,7 @@ def _append_leads_csv(
         headers = headers + ["Refund Reason"]
         existing_data_rows = [row + [""] for row in existing_data_rows]
 
-    manual_overrides, date_formats = resolve_lead_template_rules(lead_template_mapping)
+    manual_overrides, date_formats, phone_space_headers = resolve_lead_template_rules(lead_template_mapping)
 
     skip_normalized = {"date", "comment", "status"} | _REASON_HEADER_NAMES
     column_source, unmatched_passthrough_headers = _resolve_passthrough_columns(
@@ -1018,6 +1026,8 @@ def _append_leads_csv(
                 value = value.strftime(_CSV_RUN_DATE_STRFTIME if header_norm == "date" else _CSV_DATE_STRFTIME)
             elif value is None or pd.isna(value):
                 value = ""
+            if header_norm in phone_space_headers:
+                value = add_space_after_country_code(str(value))
             new_row.append(str(value))
         new_rows.append(new_row)
 
@@ -1113,7 +1123,7 @@ def append_leads(
         # Which lead column (if any) feeds each header only depends on the
         # header/column identity, never on a specific row - resolve it once
         # per column rather than once per (row, column) pair.
-        manual_overrides, date_formats = resolve_lead_template_rules(lead_template_mapping)
+        manual_overrides, date_formats, phone_space_headers = resolve_lead_template_rules(lead_template_mapping)
 
         skip_normalized = (
             {"date", "comment", "status"} | _REASON_HEADER_NAMES
@@ -1186,6 +1196,13 @@ def append_leads(
                 else:
                     source_col = column_source.get(col_idx)
                     cell.value = lead_row.get(source_col, "") if source_col is not None else None
+                    if (header_norm in phone_space_headers and cell.value is not None
+                            and not isinstance(cell.value, bool) and pd.notna(cell.value)
+                            and str(cell.value).strip()):
+                        # Always a string: a spaced number can't be numeric,
+                        # and an unchanged long number written as text keeps
+                        # Excel from rounding it into scientific notation.
+                        cell.value = str(add_space_after_country_code(str(cell.value)))
                     # A real date/datetime value written into a "General"-formatted
                     # cell displays as a raw serial number and Excel's date filter
                     # can't group it - give it an explicit date format so it shows

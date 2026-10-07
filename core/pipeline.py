@@ -4,7 +4,7 @@ from typing import Callable
 import pandas as pd
 
 from core.check_result import CheckOutcome
-from core.checks import duplicate, leadcap, exclusion, tal, suppression, dedupe_list, lead_template_mapping, custom_questions, lead_notes
+from core.checks import duplicate, leadcap, exclusion, tal, suppression, dedupe_list, lead_template_mapping, custom_questions, lead_notes, phone_numbers
 from core.models import ClientProfile
 
 
@@ -85,6 +85,12 @@ def run_pipeline(
             new_leads, fm, profile.lead_template_mapping, profile.lead_template_field_mapping)
         locked.update(outcome.review)
         merge(outcome)
+
+    if phone_numbers.phone_check_applies(
+            new_leads, fm, profile.lead_template_mapping, profile.lead_template_field_mapping):
+        report("Checking Phone Numbers")
+        merge(phone_numbers.check_excel_mangled_phone_numbers(
+            new_leads, fm, profile.lead_template_mapping, profile.lead_template_field_mapping))
 
     refund_reasons = {idx: "; ".join(reasons) for idx, reasons in fail.items()}
     review_reasons = {idx: reasons for idx, reasons in review.items() if idx not in fail}

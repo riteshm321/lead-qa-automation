@@ -1401,7 +1401,7 @@ def test_resolve_lead_template_rules_returns_overrides_and_date_formats():
         LeadTemplateColumnRule(template_column="Untouched Column"),
     ])
 
-    overrides, date_formats = resolve_lead_template_rules(config)
+    overrides, date_formats, _phone = resolve_lead_template_rules(config)
 
     assert overrides == {"companysize": "Employee Count"}
     assert "capturedate" in date_formats
@@ -1410,5 +1410,54 @@ def test_resolve_lead_template_rules_returns_overrides_and_date_formats():
 
 def test_resolve_lead_template_rules_handles_none_config():
     from core.excel_io import resolve_lead_template_rules
-    overrides, date_formats = resolve_lead_template_rules(None)
+    overrides, date_formats, _phone = resolve_lead_template_rules(None)
     assert overrides == {} and date_formats == {}
+
+
+def test_append_leads_adds_space_after_country_code_to_xlsx(tmp_path):
+    path = str(tmp_path / "template.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Email", "Phone", "Mobile"])
+    wb.save(path)
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([{"Email": "a@example.com", "Phone": 917020209586, "Mobile": "447911123456"}])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Phone", phone_space_after_country_code=True),
+    ])
+
+    append_leads(path, "Sheet1", leads_df, fm, run_date="2026-08-08", lead_template_mapping=ltm)
+
+    ws2 = openpyxl.load_workbook(path)["Sheet1"]
+    assert ws2.cell(row=2, column=2).value == "91 7020209586"
+    # No rule on Mobile -> written unchanged.
+    assert ws2.cell(row=2, column=3).value == "447911123456"
+
+
+def test_append_leads_adds_space_after_country_code_to_csv(tmp_path):
+    path = tmp_path / "template.csv"
+    path.write_text("Email,Phone,Mobile\n", encoding="utf-8")
+
+    fm = FieldMapping(email="Email", first_name="", last_name="", company="", cid="")
+    leads_df = pd.DataFrame([
+        {"Email": "a@example.com", "Phone": "+447911123456", "Mobile": "447911123456"},
+        {"Email": "b@example.com", "Phone": "", "Mobile": ""},
+    ])
+    ltm = LeadTemplateMappingConfig(rules=[
+        LeadTemplateColumnRule(template_column="Phone", phone_space_after_country_code=True),
+    ])
+
+    append_leads(str(path), "(CSV file)", leads_df, fm, run_date="2026-08-13", lead_template_mapping=ltm)
+
+    result = pd.read_csv(path, dtype=str, keep_default_na=False)
+    assert result.loc[0, "Phone"] == "+44 7911123456"
+    assert result.loc[0, "Mobile"] == "447911123456"
+    assert result.loc[1, "Phone"] == ""
+
+
+def test_lead_template_column_rule_loads_without_phone_flag():
+    rule = LeadTemplateColumnRule(**{"template_column": "Phone", "source_column": "", "mandatory": False,
+                                     "date_format": ""})
+    assert rule.phone_space_after_country_code is False

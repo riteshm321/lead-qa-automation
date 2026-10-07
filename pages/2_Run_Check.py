@@ -11,6 +11,7 @@ import streamlit as st
 from core.activity_tracker import record_process_completed
 from core.app_settings import get_aliases_path, get_clients_dir, get_jira_settings, get_google_sheets_key_path
 from core.branding import configure_page
+from core.checks.phone_numbers import phone_check_applies
 from core.checks.leadcap import validate_purchased_report_cids
 from core.client_picker import preselect_client, render_client_picker
 from core.collation import collate_uploaded_files
@@ -411,6 +412,9 @@ if st.button("Run Check", disabled=not new_leads_file,
                 ("Checking Lead Notes", profile.lead_notes.enabled),
                 ("Checking Lead Template Mandatory Columns",
                  any(r.mandatory for r in profile.lead_template_mapping.rules)),
+                ("Checking Phone Numbers", phone_check_applies(
+                    new_leads_df, profile.field_mapping, profile.lead_template_mapping,
+                    profile.lead_template_field_mapping)),
             ] if on
         ]
         _progress_bar = st.progress(0.0, text=f"{_stage_labels[0]}...")
@@ -524,6 +528,9 @@ if "run_result" in st.session_state:
             ("Lead Notes", profile.lead_notes.enabled),
             ("Lead Template Mapping", any(r.mandatory for r in profile.lead_template_mapping.rules)),
             ("Google Sheets Mapping", any(r.mandatory for r in profile.google_sheets.mapping.rules)),
+            ("Phone Numbers", phone_check_applies(
+                new_leads, profile.field_mapping, profile.lead_template_mapping,
+                profile.lead_template_field_mapping)),
         ] if on
     ]
     if profile.complex_account.enabled:
@@ -904,7 +911,7 @@ if "run_result" in st.session_state:
             if not _gs_key_path:
                 st.error("Set the Google Sheets service account key path on the **Settings** page first.")
             else:
-                _gs_manual_overrides, _gs_date_formats = resolve_lead_template_rules(profile.google_sheets.mapping)
+                _gs_manual_overrides, _gs_date_formats, _ = resolve_lead_template_rules(profile.google_sheets.mapping)
                 _gs_tab_by_cid = {t.cid: t for t in profile.google_sheets.tabs}
                 _gs_unmatched_cids = []
                 # Two different CIDs can point at the same Sheet tab -- track

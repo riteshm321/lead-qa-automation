@@ -22,6 +22,7 @@ from core import google_sheets_client
 from core.google_sheets_client import GoogleSheetsError
 from core.file_browser import browse_for_file
 from core.jira_client import extract_ticket_key
+from core.phone_format import is_phone_column
 from core.models import (
     ClientProfile, DuplicateConfig, LeadcapConfig, LeadcapSegment,
     ExclusionConfig, TalConfig, ReferenceSource, SuppressionConfig, DedupeListConfig, FieldMapping,
@@ -1136,10 +1137,21 @@ with tab_delivery:
                     else:
                         _ltm_date_format = _ltm_fmt_selected
 
-            if _ltm_mandatory or _ltm_source or _ltm_date_format:
+                _saved_phone_space = bool(_existing_rule and _existing_rule.phone_space_after_country_code)
+                if is_phone_column(_ltm_col) or _saved_phone_space:
+                    _ltm_phone_space = st.checkbox(
+                        "Add a space after the country code", value=_saved_phone_space,
+                        key=f"ltm_phone_{_ltm_col}",
+                        help="Writes 917020209586 as 91 7020209586. Numbers that are already spaced, "
+                             "or have no recognizable country code, are written unchanged.")
+                else:
+                    _ltm_phone_space = False
+
+            if _ltm_mandatory or _ltm_source or _ltm_date_format or _ltm_phone_space:
                 lead_template_mapping_rules.append(LeadTemplateColumnRule(
                     template_column=_ltm_col, source_column=_ltm_source,
                     mandatory=_ltm_mandatory, date_format=_ltm_date_format,
+                    phone_space_after_country_code=_ltm_phone_space,
                 ))
 
         # Never silently drop a saved rule for a column that simply
