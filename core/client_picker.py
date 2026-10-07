@@ -76,6 +76,15 @@ def render_client_picker(clients_dir: str, key_prefix: str, label: str = "Client
     filter_key = f"{key_prefix}_group_filter"
     if st.session_state.get(filter_key) not in filter_options:
         st.session_state.pop(filter_key, None)
+    # The selected client was regrouped (e.g. its group was just changed
+    # and saved): follow it into its new group instead of silently
+    # swapping to the old group's first client, which made it look like
+    # the just-saved client's checks had been switched off.
+    current_client = st.session_state.get(client_key)
+    current_filter = st.session_state.get(filter_key)
+    if (current_client in name_to_group and current_filter is not None
+            and current_client not in profiles_in_group(name_to_group, current_filter)):
+        st.session_state[filter_key] = name_to_group[current_client] or ALL_GROUPS_LABEL
     group_col, client_col = st.columns(2)
     selected_group = group_col.selectbox(
         "Group", filter_options, key=filter_key, filter_mode=None,

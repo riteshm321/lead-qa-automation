@@ -2191,3 +2191,33 @@ def test_lead_notes_add_standard_fields_prefills_from_the_field_mapping(tmp_path
 
     at.button(key="ln_fields_add_standard").click().run()
     assert len([s for s in at.selectbox if s.label == "Field"]) == 6
+
+
+def test_saving_a_group_change_keeps_the_same_client_and_its_checks_selected(tmp_path, monkeypatch):
+    # Regression test: after saving a new group for the selected client, the
+    # next rerun saw it was no longer in the Group filter's old group and
+    # swapped to that group's first client - whose checks were off, so it
+    # looked like the just-enabled check had been reset.
+    monkeypatch.chdir(tmp_path)
+    from core.app_settings import save_app_settings, get_clients_dir
+    from core.models import ClientProfile
+    from core.profile_store import save_profile
+    save_app_settings({"shared_root_dir": str(tmp_path / "Shared")})
+    for name, group in [("A1", "G1"), ("A2", "G1"), ("B1", "G2")]:
+        save_profile(ClientProfile(name=name, accumulated_report_path="a.xlsx", client_group=group),
+                     get_clients_dir())
+
+    at = AppTest.from_file(_PAGE_PATH, default_timeout=30)
+    at.run()
+    next(r for r in at.radio if r.label == "Mode").set_value("Edit existing client").run()
+    next(s for s in at.selectbox if s.label == "Group").set_value("G1").run()
+    next(s for s in at.selectbox if s.label == "Client").set_value("A2").run()
+    at.checkbox(key="cq_enabled").check().run()
+    at.selectbox(key="client_group_select").set_value("G2").run()
+    next(b for b in at.button if "Save Client Profile" in b.label).click().run()
+    at.run()
+
+    assert not at.exception
+    assert next(s for s in at.selectbox if s.label == "Group").value == "G2"
+    assert next(s for s in at.selectbox if s.label == "Client").value == "A2"
+    assert at.checkbox(key="cq_enabled").value is True
