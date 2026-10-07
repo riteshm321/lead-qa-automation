@@ -5,6 +5,16 @@ from core.matching import extract_domain
 from core.models import FieldMapping, LeadcapConfig
 
 
+def _norm_cid(value) -> str:
+    # CSVs are read without dtype=str, so a CID column with any blank cell
+    # comes back as floats ("120653.0") and never equals the "120653" on
+    # the other side - which silently skipped the whole leadcap check.
+    text = str(value).strip()
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    return "" if text.lower() == "nan" else text
+
+
 def _resolve_scope(cid: str, config: LeadcapConfig):
     if config.segmented:
         segment = next((s for s in config.segments if cid in s.cids), None)
@@ -25,7 +35,7 @@ def check_leadcap(
         return outcome
 
     for idx, row in new_leads.iterrows():
-        cid = str(row.get(field_mapping.cid, "")).strip()
+        cid = _norm_cid(row.get(field_mapping.cid, ""))
         report_key, cap, relevant_cids = _resolve_scope(cid, config)
         if report_key is None:
             continue
@@ -34,8 +44,8 @@ def check_leadcap(
         if report is None or cap is None or config.purchased_report_cid_column not in report.columns:
             continue
 
-        cid_col = report[config.purchased_report_cid_column].astype(str).str.strip()
-        cid_mask = cid_col.isin(relevant_cids) if relevant_cids is not None else (cid_col == cid)
+        cid_col = report[config.purchased_report_cid_column].map(_norm_cid)
+        cid_mask = cid_col.isin([_norm_cid(c) for c in relevant_cids]) if relevant_cids is not None else (cid_col == cid)
 
         domain_pass_failed = False
         if config.purchased_report_email_column in report.columns:
@@ -61,6 +71,6 @@ def check_leadcap(
 
 
 def validate_purchased_report_cids(report: pd.DataFrame, expected_cids: list[str], cid_column: str) -> list[str]:
-    actual = set(report[cid_column].astype(str).str.strip().unique())
+    actual = set(report[cid_column].map(_norm_cid).unique()) - {""}
     expected = set(expected_cids)
     return sorted(actual - expected)

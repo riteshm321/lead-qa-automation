@@ -224,3 +224,18 @@ def test_leadcap_company_near_match_does_not_count_not_fuzzy():
     outcome = check_leadcap(new_leads, FM, config, {"Shared Pair": purchased})
 
     assert outcome.fail == {}
+
+
+def test_cids_read_as_floats_still_match():
+    # A CSV CID column with a blank cell is read as floats ("120653.0");
+    # that used to match nothing, so the cap was never applied.
+    import numpy as np
+    from core.checks.leadcap import check_leadcap
+    from core.models import FieldMapping, LeadcapConfig
+    fm = FieldMapping(email="Email", first_name="F", last_name="L", company="Company", cid="CID")
+    config = LeadcapConfig(enabled=True, flat_cap=1, check_company_name=False)
+    report = pd.DataFrame({"Campaign ID": [120653.0, 120653.0, np.nan],
+                           "Email": ["a@acme.com", "b@acme.com", "c@acme.com"], "Company": ["", "", ""]})
+    new_leads = pd.DataFrame({"CID": [120653.0, np.nan], "Email": ["z@acme.com", "y@other.com"]})
+    outcome = check_leadcap(new_leads, fm, config, {"_flat_": report})
+    assert outcome.fail == {0: "Leadcap exceeded"}
