@@ -74,43 +74,6 @@ def _log(level: str, msg: str, *args) -> None:
         pass
 
 
-def _guard_streamlit_thread_state() -> None:
-    """Recover from Streamlit losing its per-run thread state mid-run.
-
-    Seen once in the packaged exe: the Home page failed on st.title with
-    "RuntimeError: FragmentThreadState not initialized" right after
-    configure_page() had rendered fine on the same script thread. It could
-    not be reproduced in development, so the root cause is still unknown.
-    Rather than show the user a broken page, re-seed the state for the
-    current page when (and only when) this happens on a live script-run
-    thread, and log the stack so the cause can be traced if it recurs.
-    Anything else (no script context, another thread) still raises exactly
-    as before, since Streamlit itself relies on that RuntimeError.
-    """
-    from streamlit.runtime.scriptrunner_utils import script_run_context as src
-
-    thread_state = src.ThreadState
-    if getattr(thread_state, "_lead_qa_guarded", False):
-        return
-    original_get = thread_state.get
-
-    def _guarded_get():
-        try:
-            return original_get()
-        except RuntimeError:
-            ctx = src.get_script_run_ctx(suppress_warning=True)
-            if ctx is None or getattr(ctx, "_main_thread_ident", None) != threading.get_ident():
-                raise
-            thread_state.initialize(active_script_hash=ctx.page_script_hash)
-            import traceback
-            _log("warning", "Recovered lost Streamlit thread state (page hash %s):\n%s",
-                 ctx.page_script_hash, "".join(traceback.format_stack(limit=25)))
-            return original_get()
-
-    thread_state.get = staticmethod(_guarded_get)
-    thread_state._lead_qa_guarded = True
-
-
 def _app_data_dir() -> str:
     # A per-user folder outside the exe's own install directory. PyInstaller
     # deletes and rebuilds dist/LeadQAAutomation from scratch on every
@@ -192,7 +155,7 @@ def main() -> int:
     try:
         _chdir_to_app_folder()
 
-        port = "8501"
+        port = os.environ.get("LEADQA_PORT", "8501")  # override only for diagnostics (a second copy)
         url = f"http://localhost:{port}"
 
         if _port_already_serving(url):
@@ -209,13 +172,24 @@ def main() -> int:
         _log("info", "App starting (pid %s, protobuf backend: %s)", os.getpid(), api_implementation.Type())
 
         threading.Thread(target=_open_browser_when_ready, args=(url,), daemon=True).start()
-        _guard_streamlit_thread_state()
 
         sys.argv = [
             "streamlit", "run", _resource_path("Summary.py"),
             "--server.port", port,
             "--server.headless", "true",
             "--global.developmentMode=false",
+            # Root cause of the exe-only "numpy._core.multiarray failed to
+            # import", "FragmentThreadState not initialized" and cache
+            # "Cannot serialize the return value" errors: Streamlit treats
+            # every module under the script's folder as editable source, and
+            # in the exe that folder is _internal - so it watched ~1,500
+            # bundled files (numpy, pandas, Streamlit itself). One change
+            # event on any of them (Windows Defender, Search Indexer, OneDrive
+            # all cause spurious ones) evicts them all from sys.modules;
+            # numpy's C core can't be loaded twice in one process and
+            # Streamlit's re-imported internals no longer share state. A
+            # packaged app never edits its own code, so don't watch it.
+            "--server.fileWatcherType", "none",
         ]
         try:
             code = stcli.main()

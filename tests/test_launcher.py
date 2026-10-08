@@ -171,37 +171,18 @@ def test_main_logs_why_the_server_stopped(caplog):
     assert any("Streamlit server stopped (exit code 0)" in m for m in messages)
 
 
-def test_guard_recovers_lost_thread_state_only_on_a_live_script_thread(monkeypatch):
-    import threading
-    from types import SimpleNamespace
-
-    import launcher
-    from streamlit.runtime.scriptrunner_utils import script_run_context as src
-
-    # Restored after the test so the class-level patch never leaks.
-    monkeypatch.setattr(src.ThreadState, "get", src.ThreadState.get)
-    monkeypatch.setattr(src.ThreadState, "_lead_qa_guarded", False, raising=False)
-    launcher._guard_streamlit_thread_state()
-
-    results = {}
-
-    def _script_thread():
-        # A fresh thread: the ContextVar was never set here.
-        fake_ctx = SimpleNamespace(_main_thread_ident=threading.get_ident(), page_script_hash="page-hash")
-        monkeypatch.setattr(src, "get_script_run_ctx", lambda suppress_warning=False: fake_ctx)
-        results["state"] = src.ThreadState.get()
-
-    def _other_thread():
-        monkeypatch.setattr(src, "get_script_run_ctx", lambda suppress_warning=False: None)
-        try:
-            src.ThreadState.get()
-        except RuntimeError:
-            results["raised"] = True
-
-    for target in (_script_thread, _other_thread):
-        t = threading.Thread(target=target)
-        t.start()
-        t.join()
-
-    assert results["state"].active_script_hash == "page-hash"
-    assert results.get("raised") is True
+def test_main_turns_off_streamlits_file_watcher():
+    # The exe's script folder is _internal, so Streamlit watched every bundled
+    # module (numpy, pandas, Streamlit itself) and evicted them all from
+    # sys.modules on any change event - numpy can't be loaded twice in one
+    # process ("numpy._core.multiarray failed to import").
+    import sys as _sys
+    with patch("launcher._chdir_to_app_folder"), \
+         patch("launcher._port_already_serving", return_value=False), \
+         patch("launcher.stcli.main", return_value=0), \
+         patch("launcher.threading.Thread"), \
+         patch.object(_sys, "argv", list(_sys.argv)):
+        launcher.main()
+        argv = list(_sys.argv)
+    i = argv.index("--server.fileWatcherType")
+    assert argv[i + 1] == "none"
