@@ -140,9 +140,9 @@ def test_r5_single_country_slide():
     assert _deleted_titles(d.cs_deck(), "R5") == []
 
 
-def test_r6_single_channel_halo_with_no_site_visits_only():
-    titles = _deleted_titles(d.combined_deck(), "R6", "CS + Display")
-    assert len(titles) == 1  # the two-channel one stays
+def test_r6_deletes_halo_only_in_single_channel_reports():
+    assert _deleted_titles(d.combined_deck(), "R6", "CS + Display") == []
+    assert len(_deleted_titles(d.combined_deck(), "R6", "Display")) == 2
 
 
 def test_r7_custom_question_example():
@@ -271,9 +271,9 @@ def test_r15_fewer_than_three_topics(topics, sentence):
     assert text[4:] == topics
 
 
-def test_r15_skips_when_the_lead_percentage_is_blank():
+def test_r15_skips_when_the_lead_percentage_is_blank_and_not_computable():
     prs = d.new_prs()
-    d.audience_reach(prs, pct="% ")
+    d.audience_reach(prs, pct="% ", engagement=((10, 5, 0), (5, 2, 0)))
     d.audience_insights(prs, ["A", "B", "C"])
     assert run_rule(prs, "R15") == []
 
@@ -282,16 +282,23 @@ def test_r16_content_insights_top_job_titles():
     prs = d.cs_deck()
     run_rule(prs, "R16")
     assert _takeaway(prs, "content_insights", "Rectangle 14") == [
-        "Key Takeaways:", "", "The following are the top 3 job titles:", "",
-        "Chief Operations Officer", "Chief Technology Officer", "Chief Information Officer"]
+        "Key Takeaways:",
+        "Assets that generated the strongest engagement are closely aligned with the following top 3 job titles:",
+        "", "Chief Operations Officer", "Chief Technology Officer", "Chief Information Officer"]
+    box = shape_named(slide_of(prs, "content_insights"), "Rectangle 14")
+    assert box.text_frame.paragraphs[1].runs[0].font.size.pt == 16  # the old line's formatting
     assert run_rule(prs, "R16") == []
 
 
-def test_r16_two_job_titles():
-    prs = d.cs_deck(job_titles=(("CEO", "5", "50%"), ("CTO", "5", "50%")))
+@pytest.mark.parametrize("titles, sentence", [
+    ((("CEO", "5", "50%"), ("CTO", "5", "50%")), "with the following top 2 job titles:"),
+    ((("CEO", "5", "100%"),), "with the following top job title:"),
+])
+def test_r16_fewer_job_titles(titles, sentence):
+    prs = d.cs_deck(job_titles=titles)
     run_rule(prs, "R16")
     text = _takeaway(prs, "content_insights", "Rectangle 14")
-    assert text[2] == "The following are the top 2 job titles:" and text[4:] == ["CEO", "CTO"]
+    assert text[1].endswith(sentence) and text[3:] == [t[0] for t in titles]
 
 
 def test_r17_percentage_template_and_placeholder_removed():
@@ -323,10 +330,18 @@ def test_r18_country_takeaway_three_countries():
     run_rule(prs, "R18")
     box = shape_named(slide_of(prs, "country_insights"), "Rectangle 1")
     p = box.text_frame.paragraphs[2]
-    assert norm_text(p.text) == ("75% of leads (300 of 400) came from the United States, followed by Canada (15%) "
-                                 "and India (10%).")
-    assert p.runs[0].font.bold and not p.runs[1].font.bold
-    assert p.runs[0].text == "75% of leads (300 of 400) came from the United States"
+    assert norm_text(p.text) == (
+        "The United States led lead delivery with 75% (300 of 400 leads), followed by Canada at 15% and India "
+        "at 10%. Together, the top three markets contributed 100% of all leads.")
+    numbers = ["75%", "300", "400", "15%", "10%", "100%"]
+    styled = [r.text for r in p.runs if r.font.bold]
+    assert styled == numbers  # every number its own bold run, nothing else bold
+    for run in p.runs:
+        fill = run._r.find(qn("a:rPr")).find(qn("a:solidFill"))
+        if run.text in numbers:
+            assert fill.find(qn("a:schemeClr")).get("val") == "bg2"  # PPRA blue, theme reference
+        else:
+            assert run.font.bold is False and (fill is None or fill.find(qn("a:schemeClr")) is None)
     assert run_rule(prs, "R18") == []
 
 
@@ -334,7 +349,17 @@ def test_r18_two_countries():
     prs = d.cs_deck()
     run_rule(prs, "R18")
     assert _takeaway(prs, "country_insights", "Rectangle 1")[2] == (
-        "97% of leads (311 of 320) came from the United States, followed by Canada (3%).")
+        "The United States led lead delivery with 97% (311 of 320 leads), followed by Canada at 3%. "
+        "Together, these two markets contributed 100% of all leads.")
+
+
+def test_r18_top_pct_counts_only_listed_countries():
+    prs = d.cs_deck(countries=(("India", "50", "50%"), ("Canada", "30", "30%"), ("Brazil", "10", "10%"),
+                               ("Chile", "10", "10%")))
+    run_rule(prs, "R18")
+    text = _takeaway(prs, "country_insights", "Rectangle 1")[2]
+    assert text.startswith("India led lead delivery with 50% (50 of 100 leads)")
+    assert text.endswith("the top three markets contributed 90% of all leads.")
 
 
 def test_r19_autofit_never_shrinks_and_fits_estimate():
@@ -447,3 +472,259 @@ def test_every_finding_has_a_short_summary():
         for rule in RULES:
             for finding in rule.applies(deck, report_type, OWNER):
                 assert finding.summary and "slide" not in finding.summary.lower().split(" ")[:1]
+
+
+# ---------------------------------------------------------------- pacing CS keywords
+
+@pytest.mark.parametrize("name, unit", [
+    ("Int_X_ABM ContentSynd_APACTAL_Singapore", "100 Leads"),
+    ("Int_X_ABM Display_ALLTAL", "100 Imps"),
+    ("Acme Content Q3", "100 Leads"),
+    ("Acme_CS_Q3", "100 Leads"),
+    ("Acme CS-Q3", "100 Leads"),
+    ("Acme cs Q3", "100 Leads"),
+    ("CS_Acme_Q3", "100 Leads"),
+    ("Acme Display - Content Hub", "100 Imps"),  # "Content" alone never outranks a named channel
+    ("Acme CSM Q3", "100"),  # not a CS token: left for the checklist in a mixed report
+    ("Acme ECS Q3", "100"),
+])
+def test_r1_pacing_cs_keywords(name, unit):
+    prs = _pacing_only([name])
+    run_rule(prs, "R1", "CS + Display")
+    assert _unit_cells(prs) == [unit]
+
+
+def test_r1_contentsynd_rows_get_leads_next_to_display_imps():
+    prs = d.long_pacing_deck(4)
+    run_rule(prs, "R1", "CS + Display")
+    assert _unit_cells(prs) == ["25 Leads", "40,000 Imps", "25 Leads", "40,000 Imps"]
+
+
+# ---------------------------------------------------------------- R22 channel deletion
+
+def _channel_deck():
+    """CS, Display and CTV slides in one deck, sectioned per channel."""
+    prs = d.new_prs()
+    d.title_slide(prs, ["ABM Content Syndication: x", "ABM Display x"])
+    d.pacing(prs, [["Acme CS Q3", "$1", "$1", "$0", "5", "5", "0", "100%"]])
+    d.section(prs, "Audience, Content, and \nIndustry Insights: \nAcme Display - ABM")
+    d.audience_reach(prs)
+    d.ctv_performance(prs)
+    d.top_accounts_display(prs, [["Wells", "wells.com", "7,294", "5", "0", "8", "19"]])
+    d.creative_sets(prs, "Acme Display - ABM")
+    d.section(prs, "Audience, Content, and \nIndustry Insights: \nAcme CS")
+    d.top_accounts_cs(prs, [["Acme", "acme.com", "3", "uem", "5"]])
+    d.thank_you(prs)
+    return prs
+
+
+def _removed(prs, report_type):
+    deck = analyze(prs)
+    return {f.slide_index + 1: f.summary for f in RULES_BY_ID["R22"].applies(deck, report_type, {})}
+
+
+def test_r22_removes_ctv_slides_from_reports_without_ctv():
+    assert _removed(_channel_deck(), "CS + Display") == {5: "Remove CTV slide (not in a CS + Display report)"}
+
+
+def test_r22_removes_a_whole_display_section_from_a_cs_report():
+    removed = _removed(_channel_deck(), "CS")
+    # Display-section breaker, its insight slide, CTV, Top Accounts Display, Creative Sets.
+    assert sorted(removed) == [3, 4, 5, 6, 7]
+    assert removed[3] == "Remove Display section breaker (not in a CS report)"
+    assert removed[6] == "Remove Display / CTV slide (not in a CS report)"
+
+
+def test_r22_removes_cs_slides_from_a_display_report_but_keeps_the_frame():
+    removed = _removed(_channel_deck(), "Display")
+    # CTV and Top Accounts CS; the CS breaker stays because the Thank You
+    # page (never removed) sits in its section.
+    assert sorted(removed) == [5, 9]
+
+
+def test_r22_slide_is_listed_once_with_its_channel_reason():
+    prs = d.cs_deck()
+    d.ctv_performance(prs)
+    deck = analyze(prs)
+    ctv = deck.of_kind("ctv_performance")[0].index
+    assert ctv in {f.slide_index for f in RULES_BY_ID["R22"].applies(deck, "CS", {})}
+    for rule_id in ("R4", "R5", "R6", "R7", "R8"):
+        assert ctv not in {f.slide_index for f in RULES_BY_ID[rule_id].applies(deck, "CS", {})}
+
+
+def test_r22_does_nothing_without_a_report_type():
+    assert _removed(_channel_deck(), None) == {}
+
+
+# ---------------------------------------------------------------- R23 Halo
+
+def _halo_text(prs):
+    return paragraphs(shape_named(slide_of(prs, "halo"), "Rectangle 13"))
+
+
+def test_r23_halo_ratio_from_chart():
+    prs = d.new_prs()
+    # single: 100 accounts, 50 visits (0.5 each); multi: 20 accounts, 40 visits (2.0 each) -> 4.0x
+    d.halo(prs, categories=("Single-channel", "Two-channel", "Three-channel"), accounts=(100, 10, 10),
+           site_visits=(50, 30, 10))
+    assert len(run_rule(prs, "R23", "CS + Display")) == 1
+    assert _halo_text(prs)[1:3] == ["4.0x", d.HALO_EXPLAINER]
+    run = shape_named(slide_of(prs, "halo"), "Rectangle 13").text_frame.paragraphs[1].runs[0]
+    assert run.font.bold and run.font.size.pt == 16  # the placeholder run's formatting
+    assert run_rule(prs, "R23", "CS + Display") == []
+
+
+@pytest.mark.parametrize("value", ["X", "ERROR:Division by zero", "%"])
+def test_r23_single_channel_only_gets_the_fallback_sentence(value):
+    prs = d.new_prs()
+    d.halo(prs, value=value)
+    run_rule(prs, "R23", "CS + Display")
+    assert _halo_text(prs)[1:] == [TAKEAWAY_TEMPLATES["halo_single_channel"], ""]
+    run = shape_named(slide_of(prs, "halo"), "Rectangle 13").text_frame.paragraphs[1].runs[0]
+    assert run.font.bold and run.font.size.pt == 16
+    assert run_rule(prs, "R23", "CS + Display") == []
+
+
+def test_r23_leaves_an_uncomputable_value_for_the_checklist():
+    from core.ppra import engine
+    prs = d.new_prs()
+    d.halo(prs, categories=("Single-channel", "Two-channel"), site_visits=(0, 4))
+    assert run_rule(prs, "R23", "CS + Display") == []
+    messages = [a.message for a in engine.attention_items(analyze(prs), "CS + Display", OWNER)]
+    assert messages == [engine.MSG_HALO]
+
+
+# ---------------------------------------------------------------- R25 Audience Reach stat
+
+@pytest.mark.parametrize("stat", ["0% ", "0", "% ", "X% ", "ERROR:Division by zero% "])
+def test_r25_fills_a_blank_stat_from_the_engagement_chart(stat):
+    prs = d.new_prs()
+    d.audience_reach(prs, pct=stat, engagement=((4866, 818, 784), (3227, 501, 478)))
+    assert run_rule(prs, "R25")[0].after == "61%"  # 478 / 784
+    run = shape_named(slide_of(prs, "audience_reach"), "Rectangle 13").text_frame.paragraphs[1].runs[0]
+    assert run.text == "61% " and run.font.bold and run.font.size.pt == 16
+    assert run_rule(prs, "R25") == []
+
+
+def test_r25_never_overwrites_a_real_value_and_flags_a_zero_denominator():
+    from core.ppra import engine
+    prs = d.new_prs()
+    d.audience_reach(prs, pct="26% ", engagement=((10, 5, 4), (5, 2, 1)))
+    assert run_rule(prs, "R25") == []
+    prs = d.new_prs()
+    d.audience_reach(prs, pct="0% ", engagement=((10, 5, 0), (5, 2, 0)))
+    assert run_rule(prs, "R25") == []
+    assert engine.MSG_REACH in [a.message for a in engine.attention_items(analyze(prs), "CS", OWNER)]
+
+
+def test_r15_keeps_a_stat_run_in_the_same_paragraph():
+    prs = d.new_prs()
+    d.audience_reach(prs, pct="% ", one_paragraph=True)
+    d.audience_insights(prs, ["A", "B", "C"])
+    run_rule(prs, "R25")
+    run_rule(prs, "R15")
+    runs = shape_named(slide_of(prs, "audience_reach"), "Rectangle 13").text_frame.paragraphs[1].runs
+    assert runs[0].text == "22% " and runs[0].font.bold  # 48 / 217, still its own bold run
+    assert norm_text("".join(r.text for r in runs[1:])) == (
+        "of leads delivered from accounts actively engaging with the following top 3 intent topics:")
+    assert not runs[1].font.bold
+
+
+# ---------------------------------------------------------------- R19 padding
+
+def test_r19_adds_breathing_room_below_the_text():
+    from core.ppra.rules import BREATHING_ROOM, MIN_BOTTOM_INSET
+    prs = d.cs_deck()
+    run_rule(prs, "R16")
+    run_rule(prs, "R19")
+    for kind, name in (("content_insights", "Rectangle 14"), ("country_insights", "Rectangle 1")):
+        box = shape_named(slide_of(prs, kind), name)
+        body = box.text_frame._txBody.find(qn("a:bodyPr"))
+        assert int(body.get("bIns")) >= MIN_BOTTOM_INSET + BREATHING_ROOM
+        assert box.height >= estimate_text_height(box)
+    assert run_rule(prs, "R19") == []
+
+
+def test_r19_never_grows_past_the_bottom_margin():
+    from core.ppra import engine
+    from core.ppra.rules import BOTTOM_MARGIN
+    prs = d.new_prs()
+    d.content_insights(prs)
+    d.industry_insights(prs, job_titles=tuple((f"A very long job title number {i} " * 6, "1", "1%")
+                                              for i in range(3)))
+    run_rule(prs, "R16")
+    run_rule(prs, "R19")
+    box = shape_named(slide_of(prs, "content_insights"), "Rectangle 14")
+    assert box.top + box.height <= d.SLIDE_H - BOTTOM_MARGIN
+    assert engine.MSG_OVERFLOW in [a.message for a in engine.attention_items(analyze(prs), "CS", OWNER)]
+
+
+# ---------------------------------------------------------------- R20 always replaces
+
+def test_r20_replaces_someone_elses_details():
+    prs = d.new_prs()
+    d.thank_you(prs, ("Old Person", "Old Title", "Old Team"))
+    run_rule(prs, "R20", jira=OWNER)
+    assert paragraphs(shape_named(slide_of(prs, "thank_you"), "TextBox 7")) == [
+        "Pat Lee", "CXM", "plee@madisonlogic.com"]
+
+
+# ---------------------------------------------------------------- R24 pacing split
+
+def test_r24_splits_a_long_pacing_table_with_header_on_every_part_and_total_last():
+    from core.ppra import engine
+    out, log, _att = engine.format(d.to_bytes(d.long_pacing_deck()), "CS + Display", OWNER)
+    deck = analyze(Presentation(io.BytesIO(out)))
+    parts = deck.of_kind("pacing")
+    n = len(parts)
+    assert n >= 2
+    assert [p.title for p in parts] == [f"[{i}/{n}] Campaign Overview and Pacing" for i in range(1, n + 1)]
+    assert [p.index for p in parts] == list(range(parts[0].index, parts[0].index + n))  # right after it
+    body = []
+    for i, info in enumerate(parts):
+        frame, rows = info.tables[0]
+        assert norm_text(rows[0][0]) == "Campaign Name"
+        totals = [r for r in rows[1:] if norm_text(r[0]) == "Total"]
+        assert len(totals) == (1 if i == n - 1 else 0)
+        body += [norm_text(r[0]) for r in rows[1:] if norm_text(r[0]) != "Total"]
+        assert frame.top == parts[0].tables[0][0].top  # same top on every part
+    assert len(body) == 18 and len(set(body)) == 18
+    assert any(line.startswith("R24:") for line in log)
+    # Idempotent: an already split deck is not split again, and gets no second Total row.
+    again, log2, _att = engine.format(out, "CS + Display", OWNER)
+    assert log2 == []
+    assert len(Presentation(io.BytesIO(again)).slides) == len(deck.slides)
+
+
+def test_r24_summary_and_short_tables_are_left_alone():
+    from core.ppra.rules import split_part
+    findings = RULES_BY_ID["R24"].applies(analyze(d.long_pacing_deck()), "CS + Display", {})
+    assert findings[0].summary.startswith("Split the pacing table across ")
+    assert findings[0].summary.endswith(" slides (it runs off the slide)")
+    assert RULES_BY_ID["R24"].applies(analyze(d.cs_deck()), "CS", {}) == []
+    assert split_part("[2/3] Campaign Overview") == (2, 3) and split_part("Campaign Overview") is None
+
+
+def test_duplicate_slide_copies_charts_and_pictures(tmp_path):
+    from PIL import Image
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches
+
+    from core.ppra.slides import duplicate_slide
+    prs = d.new_prs()
+    slide = d.blank(prs, "Source")
+    d.chart(slide, XL_CHART_TYPE.PIE, ["A", "B"], {"S": (1, 2)}, name="Chart 9")
+    img = tmp_path / "px.png"
+    Image.new("RGB", (4, 4), (200, 0, 0)).save(img)
+    slide.shapes.add_picture(str(img), Inches(1), Inches(1))
+    d.blank(prs, "After")
+    duplicate_slide(prs, 0, 1)
+    prs = reopen(prs)
+    assert [s.title for s in analyze(prs).slides] == ["Source", "Source", "After"]
+    chart_parts = [next(r.target_part for r in s.part.rels.values() if r.reltype.endswith("/chart"))
+                   for s in list(prs.slides)[:2]]
+    assert chart_parts[0] is not chart_parts[1]  # each slide owns its chart
+    copy_slide = list(prs.slides)[1]
+    assert [s.name for s in copy_slide.shapes] == [s.name for s in list(prs.slides)[0].shapes]
+    assert list(copy_slide.shapes)[1].chart.plots[0].categories[0] == "A"
+    assert any(r.reltype.endswith("/image") for r in copy_slide.part.rels.values())

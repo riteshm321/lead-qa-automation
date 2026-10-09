@@ -33,7 +33,7 @@ UNIT_BY_CHANNEL = {
     DISPLAY: IMPS,
     CTV: IMPS,
     AUDIO: IMPS,
-    LINKEDIN: IMPS,  # LinkedIn unit unconfirmed
+    LINKEDIN: IMPS,
 }
 
 REPORT_CS = "CS"
@@ -74,6 +74,15 @@ _CHANNEL_RES = {
     AUDIO: re.compile(r"(?<![a-z])audio(?![a-z])|podcast|spotify", re.IGNORECASE),
     LINKEDIN: re.compile(r"linked\s?in", re.IGNORECASE),
 }
+# Extra Content Syndication keywords for Pacing campaign names only:
+# "ContentSynd", the word "Content", and "CS" as its own token in any case
+# ("_CS_", "CS-", " cs", but not "CSM" / "ECS"). Section names and slide
+# titles ("Audience, Content, and Industry Insights") are not campaign names,
+# so channels_of() does not use these. "Content" on its own is the weakest
+# hint, so it only counts when the name names no other channel ("Display -
+# Content Hub" stays Display).
+_PACING_CS_RE = re.compile(r"contentsynd|(?<![a-z0-9])cs(?![a-z0-9])", re.IGNORECASE)
+_PACING_CONTENT_RE = re.compile(r"(?<![a-z0-9])content(?![a-z0-9])", re.IGNORECASE)
 
 
 def norm_text(value: str | None) -> str:
@@ -90,6 +99,15 @@ def channels_of(text: str) -> frozenset[str]:
     if _CS_TOKEN_RE.search(text):
         found.add(CS)
     return frozenset(found)
+
+
+def pacing_channels_of(campaign_name: str) -> frozenset[str]:
+    """Channel keywords in a Pacing table campaign name: channels_of() plus
+    the campaign-name-only CS keywords (ContentSynd, Content, CS token)."""
+    found = channels_of(campaign_name)
+    if _PACING_CS_RE.search(campaign_name) or (not found and _PACING_CONTENT_RE.search(campaign_name)):
+        found = found | {CS}
+    return found
 
 
 def report_channels(report_type: str | None) -> frozenset[str]:

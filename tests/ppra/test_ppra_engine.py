@@ -61,11 +61,45 @@ def test_deletions_skip_other_changes_on_deleted_slides():
     assert any(line.startswith("R5:") for line in log)
 
 
-def test_attention_items_flag_what_the_tool_cannot_do():
+def test_checklist_keeps_only_manual_work():
     _out, _log, attention = engine.format(d.to_bytes(d.combined_deck()), "CS + Display", {})
-    messages = [str(a) for a in attention]
-    assert any("Creative Sets" in m for m in messages)
-    assert any("placeholder owner details" in m for m in messages)
+    messages = {a.message for a in attention}
+    assert engine.MSG_OWNER in messages  # the ticket has no owner details
+    assert engine.MSG_HALO in messages  # the two-channel Halo with 0 single-channel visits
+    # Never listed: Agenda, Creative Sets, logos, country placeholder, Recommended Actions.
+    joined = " ".join(messages).lower()
+    for word in ("agenda", "creative sets", "logos", "to be filled", "recommended", "key call outs"):
+        assert word not in joined
+
+
+def test_thank_you_owner_is_not_flagged_when_the_ticket_has_it():
+    """Regression: the Review step used to list "placeholder owner details"
+    straight from the raw deck, although R20 fills them from the ticket."""
+    scan = engine.scan(d.to_bytes(d.cs_deck()), "CS", OWNER)
+    assert scan.findings["R20"]
+    assert not [a for a in scan.attention if a.message in (engine.MSG_OWNER, engine.MSG_OWNER_BOX)]
+    missing = engine.scan(d.to_bytes(d.cs_deck()), "CS", {"owner_name": "Pat Lee", "owner_title": "",
+                                                          "owner_email": "plee@madisonlogic.com"})
+    assert [a.message for a in missing.attention if a.message == engine.MSG_OWNER] == [engine.MSG_OWNER]
+
+
+def test_scan_checklist_matches_the_formatted_deck():
+    data = d.to_bytes(d.cs_deck())
+    scan = engine.scan(data, "CS", OWNER)
+    _out, _log, attention = engine.format(data, "CS", OWNER)
+    assert engine.checklist_lines(scan.attention) == engine.checklist_lines(attention)
+    # Content Insights thumbnails are the only manual item left on the CS deck.
+    assert engine.checklist_lines(attention) == ["Slide 8 · Add the asset thumbnails"]
+
+
+def test_checklist_lines_merge_the_same_action():
+    items = [engine.AttentionItem(15, "B", "Add the asset thumbnails"),
+             engine.AttentionItem(9, "A", "Add the asset thumbnails"),
+             engine.AttentionItem(None, "", "Pick the report type"),
+             engine.AttentionItem(4, "C", "Replace the leftover ERROR value")]
+    assert engine.checklist_lines(items) == [
+        "Slides 9, 15 · Add the asset thumbnails", "Deck · Pick the report type",
+        "Slide 4 · Replace the leftover ERROR value"]
 
 
 def test_delete_slides_removes_section_list_references():

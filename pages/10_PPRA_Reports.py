@@ -132,6 +132,24 @@ def _enabled_rule_ids(ticket_key: str, scan) -> list[str]:
             and st.session_state.get(_rule_key(ticket_key, r.id), True)]
 
 
+def _check_key(ticket_key: str, line: str) -> str:
+    return f"ppra_check_{ticket_key}_{hashlib.sha1(line.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _render_checklist(ticket_key: str, lines: list[str]) -> None:
+    """Before you post: one checkbox per manual action left in the deck."""
+    with st.container(border=True, key="ppra_checklist"):
+        done = sum(bool(st.session_state.get(_check_key(ticket_key, line))) for line in lines)
+        if done == len(lines):
+            st.markdown(":green[:material/check_circle: **Nothing left to check by hand**]")
+        else:
+            st.markdown(f":material/checklist: **Before you post** · {done} of {len(lines)} checked")
+        for line in lines:
+            st.checkbox(_md(line), key=_check_key(ticket_key, line))
+        if lines:
+            st.caption("Slide numbers are in the formatted deck.")
+
+
 def _type_chips(report_type: str, from_ticket: str | None, detected: str | None) -> str:
     channels = report_channels(report_type)
     chips = [f":blue-badge[{c}: {UNIT_BY_CHANNEL[c]}]" for c in CHANNELS if c in channels]
@@ -264,16 +282,16 @@ if not _state.get("scan") or _state.get("scan_type") != _report_type:
 _scan = _state["scan"]
 _enabled = _enabled_rule_ids(_active, _scan)
 _skipped = _scan.skipped_rule_ids()
+# The checklist is about the deck that will be posted: the trial format the
+# scan ran, then the real one once the deck is formatted.
+_checklist = engine.checklist_lines(_state["attention"] if _state.get("formatted") else _scan.attention)
 render_metric_cards([
     ("Changes to make", _scan.change_count(_enabled), "edit_note"),
     ("Slides to remove", len(_scan.slides_to_remove(_enabled)), "delete"),
-    ("Needs your attention", len(_scan.attention), "warning"),
+    ("Before you post", len(_checklist), "checklist"),
     ("Skipped (not in this deck)", len(_skipped), "block"),
 ])
-
-if _scan.attention:
-    with st.expander(f"Needs your attention ({len(_scan.attention)})", expanded=True, icon=":material/warning:"):
-        st.markdown("\n".join(f"- {_md(_item)}" for _item in _scan.attention))
+_render_checklist(_active, _checklist)
 
 for _gid, _title, _ids in RULE_GROUPS:
     _items = sorted(((rid, f) for rid in _ids for f in _scan.findings.get(rid) or []),
@@ -330,10 +348,6 @@ if not _state.get("formatted"):
 st.success(f"Deck formatted: {len(_state['change_log'])} changes applied.", icon=":material/check_circle:")
 with st.expander(f"What changed ({len(_state['change_log'])})", icon=":material/list:"):
     st.markdown("\n".join(f"- {_md(_line)}" for _line in _state["change_log"]) or "Nothing changed.")
-if _state["attention"]:
-    with st.container(border=True, key="ppra_attention_card"):
-        st.markdown(":orange-badge[:material/warning: Still needs your attention in the formatted deck]")
-        st.markdown("\n".join(f"- {_md(_item)}" for _item in _state["attention"]))
 
 # ---------------------------------------------------------------- 4. download
 

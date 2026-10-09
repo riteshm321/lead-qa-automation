@@ -133,13 +133,18 @@ def mlp_box(slide, program="139823"):
                    top=Inches(6.3), width=Inches(7.4), height=Inches(0.27), size=10)
 
 
-def audience_reach(prs, pct="26% ", title="Audience Reach"):
+def audience_reach(prs, pct="26% ", title="Audience Reach", engagement=((550, 300, 217), (79, 60, 48)),
+                   one_paragraph=False):
+    """engagement: (All Accounts, Trending) values for Targeted / Reached /
+    Engaged. one_paragraph puts the stat run in the sentence's paragraph, as
+    the platform's real decks do."""
     slide = blank(prs, title + NBSP)
     chart(slide, XL_CHART_TYPE.COLUMN_CLUSTERED, ["Targeted", "Reached", "Engaged"],
-          {"All Accounts": (550, 300, 217)}, name="Chart 3")
-    textbox(slide, "Rectangle 13", ["Key Takeaways:", pct,
-                                    [("of leads delivered from accounts actively engaging with your ", None),
-                                     ("intent topics", None)]],
+          {"'All Accounts'": engagement[0], "'Trending'": engagement[1]}, name="Chart 3",
+          title="Account Engagement Summary")
+    sentence = [("of leads delivered from accounts actively engaging with your ", None), ("intent topics", None)]
+    body = [[(pct, True), *sentence]] if one_paragraph else [[(pct, True)], sentence]
+    textbox(slide, "Rectangle 13", ["Key Takeaways:", *body],
             left=Inches(9.4), top=Inches(1), width=Inches(3.65), height=Inches(2.7))
     mlp_box(slide)
     return slide
@@ -231,11 +236,43 @@ def creative_sets(prs, prefix):
     return slide
 
 
-def halo(prs, categories=("Single-channel",), site_visits=(0,)):
+HALO_EXPLAINER = ("Average number of website visits per account who engaged multi-channel, compared to "
+                  "single-channel")
+
+
+def halo(prs, categories=("Single-channel",), site_visits=(0,), accounts=None, value="X"):
     slide = blank(prs, "Multi-Channel Engagement (Halo Effect)" + NBSP)
     chart(slide, XL_CHART_TYPE.BAR_CLUSTERED, list(categories),
-          {"ACCOUNTS": [173] * len(categories), "Site Visits": list(site_visits)}, name="Chart 15")
+          {"ACCOUNTS": list(accounts or [173] * len(categories)), "Site Visits": list(site_visits)},
+          name="Chart 15")
+    textbox(slide, "Rectangle 13", [[("Key Takeaways:", True)], [(value, True)], [(HALO_EXPLAINER, None)], ""],
+            left=Inches(9.4), top=Inches(1), width=Inches(3.65), height=Inches(2.7))
     return slide
+
+
+def ctv_performance(prs):
+    slide = blank(prs, "Connected TV Performance")
+    table(slide, [["Asset Name", "CTV Impressions", "Accounts"], ["spot-30", "12,000", "5"]], name="Table 3")
+    return slide
+
+
+def long_pacing_deck(n_rows=18):
+    """A CS + Display deck whose pacing table has long, wrapping campaign
+    names: ContentSynd rows (Leads) and Display rows (Imps)."""
+    prs = new_prs()
+    title_slide(prs, ["ABM Content Syndication: 05/26/2026 - 10/01/2026", "ABM Display 05/26/2026 - 10/01/2026"])
+    rows = []
+    for i in range(n_rows):
+        if i % 2:
+            name = f"Int_X_ABM Display_ALLTAL_Global_Extended_Audience_Segment_{i:02d}_Q3-26"
+            units = ["40,000", "40,000", "0"]
+        else:
+            name = f"Int_X_ABM ContentSynd_APACTAL_Singapore_Extended_Audience_Segment_{i:02d}_Q3-26"
+            units = ["25", "25", "0"]
+        rows.append([name, "$1,000", "$1,000", "$0", *units, "100%"])
+    pacing(prs, rows)
+    thank_you(prs)
+    return prs
 
 
 def thank_you(prs, lines=("Owner Name", "Owner Title", "Owner Email")):

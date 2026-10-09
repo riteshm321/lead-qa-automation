@@ -1,4 +1,4 @@
-"""One function pair per formatting rule (R1-R21 of the PPRA spec).
+"""One function pair per formatting rule (R1-R25 of the PPRA spec).
 
 Every rule has applies(deck, report_type, jira_info) -> [Finding] and
 apply(prs, finding). applies() only reports work that is still needed, so a
@@ -7,7 +7,7 @@ Total row, no "26 Leads Leads", no double hyperlink, and so on.
 
 apply() re-reads the current slide state rather than trusting values captured
 at scan time, so rules can run one after another on the same Presentation.
-Slide deletions (R4-R8) only mark slides; engine.py removes them last.
+Slide deletions (R4-R8, R22) only mark slides; engine.py removes them last.
 """
 from __future__ import annotations
 
@@ -24,8 +24,9 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.text.text import _Run
 
 from core.ppra.detect import (
-    CS, IMPS, LEADS, DeckInfo, SlideInfo, analyze, chart_data, chart_has_data, chart_title, channels_of, find_shape,
-    has_impressions, is_top_level, iter_shapes, norm_text, parse_slides, report_channels, single_unit, table_rows,
+    AUDIO, CHANNELS, CS, CTV, DISPLAY, IMPS, LEADS, LINKEDIN, DeckInfo, SlideInfo, analyze, chart_data,
+    chart_has_data, chart_title, channels_of, find_shape, has_impressions, is_top_level, iter_shapes, norm_text,
+    pacing_channels_of, parse_slides, report_channels, single_unit, table_rows,
 )
 
 # Wording for every generated Key Takeaway. Edit here to change what the tool
@@ -35,16 +36,27 @@ TAKEAWAY_TEMPLATES = {
     # Audience Reach: keeps the original sentence start up to "engaging with".
     "audience_reach": "engaging with the following top {n} intent topics:",
     "audience_reach_one": "engaging with the following top intent topic:",
-    "content_insights": "The following are the top {n} job titles:",
-    "content_insights_one": "The following is the top job title:",
+    "content_insights": ("Assets that generated the strongest engagement are closely aligned with the following "
+                         "top {n} job titles:"),
+    "content_insights_one": ("Assets that generated the strongest engagement are closely aligned with the "
+                             "following top job title:"),
     "audience_insights": ("{pct}% of accounts are trending on 5+ intent topics, showing strong research "
                           "activity around your campaign topics."),
     "audience_insights_fallback": "The following are the top {n} intent topics in your campaign:",
     "audience_insights_fallback_one": "The following is the top intent topic in your campaign:",
-    "country_first": "{p1}% of leads ({n1} of {total}) came from {c1}",
-    "country_second": ", followed by {c2} ({p2}%)",
-    "country_third": " and {c3} ({p3}%)",
-    "country_end": ".",
+    # Country Insights: {p1}% / {n1} / {total} / {p2}% / {p3}% / {top_pct}% are
+    # written as bold PPRA-blue runs, the rest in the box's body style.
+    "country_three": ("{c1} led lead delivery with {p1}% ({n1} of {total} leads), followed by {c2} at {p2}% "
+                      "and {c3} at {p3}%. Together, the top three markets contributed {top_pct}% of all leads."),
+    "country_two": ("{c1} led lead delivery with {p1}% ({n1} of {total} leads), followed by {c2} at {p2}%. "
+                    "Together, these two markets contributed {top_pct}% of all leads."),
+    # Only used when R5 (one-country slide deletion) is switched off.
+    "country_one": "{c1} delivered all leads: {p1}% ({n1} of {total} leads).",
+    # Halo Effect: the number before "Average number of website visits per
+    # account who engaged multi-channel, compared to single-channel".
+    "halo_ratio": "{ratio}x",
+    # Halo Effect with no multi-channel accounts (the platform's division by zero).
+    "halo_single_channel": "All engaged accounts engaged through a single channel during this campaign.",
 }
 
 TOP_N = 3
@@ -60,7 +72,7 @@ _DELETABLE_WHEN_EMPTY = (
 )
 _WIDE_TABLE_KINDS = ("top_accounts_cs", "top_accounts_display", "top_accounts", "display_performance",
                      "ctv_performance")
-_TAKEAWAY_KINDS = ("audience_reach", "audience_insights", "content_insights", "country_insights")
+_TAKEAWAY_KINDS = ("audience_reach", "audience_insights", "content_insights", "country_insights", "halo")
 _COUNTRIES_WITH_THE = {
     "united states", "united kingdom", "netherlands", "philippines", "united arab emirates",
     "czech republic", "dominican republic", "bahamas", "maldives", "gambia", "central african republic",
@@ -344,16 +356,16 @@ def data_rows(rows) -> list[int]:
 def row_unit(campaign_name: str, row: list[str], cols: dict, deck: DeckInfo, report_type: str | None) -> str | None:
     """'Imps' or 'Leads' for one pacing row: an existing suffix, then campaign
     name keywords (display/video/banner, ctv/ott, audio/podcast, linkedin ->
-    Imps; cs/content syndication/lead -> Leads), then the title slide's
-    flight-date channels, then the report type - each only when it points to
-    exactly one unit. None means mixed and undetermined (flagged for
-    attention)."""
+    Imps; cs/content syndication/contentsynd/content/lead -> Leads), then the
+    title slide's flight-date channels, then the report type - each only when
+    it points to exactly one unit. None means mixed and undetermined (flagged
+    for attention)."""
     for key in _UNIT_KEYS:
         if key in cols:
             m = _SUFFIXED_RE.match(norm_text(row[cols[key]]))
             if m:
                 return IMPS if m.group(2).lower() == "imps" else LEADS
-    for channels in (channels_of(campaign_name), deck.flight_channels, report_channels(report_type)):
+    for channels in (pacing_channels_of(campaign_name), deck.flight_channels, report_channels(report_type)):
         unit = single_unit(channels)
         if unit:
             return unit
@@ -438,6 +450,9 @@ def _find_r2(deck, report_type, jira_info):
     for info, shape, rows, cols in pacing_tables(deck):
         if any(_is_total_row(r) for r in rows[1:]) or not data_rows(rows):
             continue
+        part = split_part(info.title)
+        if part and part[0] < part[1]:
+            continue  # an earlier part of a split table: its Total row is on the last part
         totals = _pacing_totals(rows, cols, deck, report_type)
         headline = [" + ".join(x for x in totals[cols["ug"]] if x)]
         if "bg" in cols:
@@ -534,13 +549,163 @@ def _apply_r3(prs, finding):
     table = frame.table
     header = [norm_text(c).lower() for c in table_rows(table)[0]]
     cols = {key: header.index(name) for key, name in _PACING_HEADERS.items() if name in header}
-    widths = [c.width for c in table.columns]
+    _fit_frame(int(prs.slide_width), frame, table, _planned_pacing_widths([c.width for c in table.columns], cols))
+
+
+def _planned_pacing_widths(widths: list[int], cols: dict) -> list[int]:
+    """Column widths once R3 has run: Campaign Name narrowed and the Units
+    columns widened (once), then scaled to 12.5 in."""
+    widths = list(widths)
     if not _pacing_rebalanced(widths, cols) and widths[cols["campaign"]] > 2 * abs(PACING_NAME_DELTA):
         widths[cols["campaign"]] += PACING_NAME_DELTA
         for key in _UNIT_KEYS:
             if key in cols:
                 widths[cols[key]] += PACING_UNITS_DELTA
-    _fit_frame(int(prs.slide_width), frame, table, widths)
+    return _scale_widths(widths, TABLE_WIDTH)
+
+
+# ---------------------------------------------------------------- R24 pacing split
+
+_SPLIT_RE = re.compile(r"^\[(\d+)/(\d+)\]\s*")
+_DEFAULT_TABLE_PT = 12.0
+_FOOTER_GAP = 45720  # 0.05 in clear of the footer bar
+_NO_FOOTER_MARGIN = 457200  # 0.5 in when the layout has no footer shape
+
+
+def split_part(title: str) -> tuple[int, int] | None:
+    """(i, n) when a pacing title already carries an "[i/n]" split prefix."""
+    m = _SPLIT_RE.match(title or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _cell_font_pt(tc) -> float:
+    sizes = [int(r.get("sz")) for r in tc.iter(qn("a:rPr")) if r.get("sz")]
+    sizes += [int(r.get("sz")) for r in tc.iter(qn("a:endParaRPr")) if r.get("sz")]
+    return max(sizes) / 100 if sizes else _DEFAULT_TABLE_PT
+
+
+def _cell_margin(tc, name: str, default: int) -> int:
+    tcpr = tc.find(qn("a:tcPr"))
+    value = tcpr.get(name) if tcpr is not None else None
+    return int(value) if value is not None else default
+
+
+def _cell_height(tc, lines_text: list[str], width: int) -> int:
+    """Conservative rendered height (EMU) of one cell's text."""
+    size = _cell_font_pt(tc)
+    usable = width - _cell_margin(tc, "marL", 91440) - _cell_margin(tc, "marR", 91440)
+    per_line = max(1, int(usable / (size * CHAR_WIDTH_EM * _EMU_PER_PT)))
+    lines = sum(wrapped_lines(text, per_line) for text in lines_text or [""])
+    return (int(lines * size * _LINE_SPACING * _EMU_PER_PT)
+            + _cell_margin(tc, "marT", 45720) + _cell_margin(tc, "marB", 45720))
+
+
+def _row_height(tr, widths: list[int], suffix_cols=()) -> int:
+    height = int(tr.get("h", "0"))
+    for c, (tc, width) in enumerate(zip(tr.findall(qn("a:tc")), widths)):
+        texts = [_p_text(p) for p in tc.iter(qn("a:p"))]
+        if c in suffix_cols:  # " Imps" / " Leads" still to come from R1
+            texts = [t + " Leads" if _NUMBER_RE.match(norm_text(t)) else t for t in texts]
+        height = max(height, _cell_height(tc, texts, width))
+    return height
+
+
+def pacing_bottom_limit(slide, slide_height: int) -> int:
+    """Lowest EMU a table may reach: just above the layout's footer bar (the
+    highest non-placeholder layout/master shape in the bottom half)."""
+    tops = []
+    layout = slide.slide_layout
+    for shape in list(layout.shapes) + list(layout.slide_master.shapes):
+        if shape.is_placeholder or shape.top is None:
+            continue
+        if slide_height // 2 < int(shape.top) < slide_height:
+            tops.append(int(shape.top))
+    return (min(tops) if tops else slide_height - _NO_FOOTER_MARGIN) - _FOOTER_GAP
+
+
+def _split_plan(info: SlideInfo, shape, rows, cols, slide_height: int) -> list[list[int]]:
+    """Row indices (header excluded) for each part, Total row last on the
+    last part; one part means the table fits. Planned like the deck will be
+    after R1-R3: final widths, unit suffixes and a Total row."""
+    tbl = shape.table._tbl
+    trs = tbl.tr_lst
+    widths = _planned_pacing_widths([c.width for c in shape.table.columns], cols)
+    suffix_cols = {cols[k] for k in _UNIT_KEYS if k in cols}
+    heights = [_row_height(tr, widths, suffix_cols if r else ()) for r, tr in enumerate(trs)]
+    body = [r for r in range(1, len(rows)) if not _is_total_row(rows[r])]
+    total = next((r for r in range(1, len(rows)) if _is_total_row(rows[r])), None)
+    total_height = heights[total] if total is not None else 0
+    if total is None and data_rows(rows):
+        # R2 will add one: header-row height, one line per unit type.
+        total_height = max(heights[0], _cell_height(trs[1].findall(qn("a:tc"))[0], ["Total", "Total"], widths[0]))
+    available = pacing_bottom_limit(info.slide, slide_height) - int(shape.top)
+    parts, current, used = [], [], heights[0]
+    for r in body:
+        if current and used + heights[r] > available:
+            parts.append(current)
+            current, used = [], heights[0]
+        current.append(r)
+        used += heights[r]
+    if current and used + total_height > available and len(current) > 1:
+        parts.append(current[:-1])
+        current = current[-1:]
+    parts.append(current + ([total] if total is not None else []))
+    return parts
+
+
+def _find_r24(deck, report_type, jira_info):
+    findings = []
+    for info, shape, rows, cols in pacing_tables(deck):
+        if split_part(info.title) or not is_top_level(shape):
+            continue
+        parts = _split_plan(info, shape, rows, cols, deck.slide_height)
+        if len(parts) < 2:
+            continue
+        findings.append(Finding(
+            "R24", info.index, f"Split the pacing table on {_slide_label(info)} across {len(parts)} slides",
+            before=info.title, after=f"[1/{len(parts)}] {info.title}",
+            data={"shape_id": shape.shape_id, "parts": len(parts)},
+            summary=f"Split the pacing table across {len(parts)} slides (it runs off the slide)"))
+    return findings
+
+
+def _prefix_title(slide, title_shape_id: int | None, i: int, n: int) -> None:
+    shape = find_shape(slide, title_shape_id) if title_shape_id else None
+    if shape is None:
+        return
+    for p in shape.text_frame.paragraphs:
+        runs = [r for r in p.runs if r.text.strip()]
+        if runs:
+            runs[0].text = f"[{i}/{n}] " + _SPLIT_RE.sub("", runs[0].text.lstrip())
+            return
+
+
+def _keep_rows(frame, keep: set[int]) -> None:
+    tbl = frame.table._tbl
+    for r, tr in reversed(list(enumerate(tbl.tr_lst))):
+        if r not in keep:
+            tbl.remove(tr)
+    frame.height = sum(int(tr.get("h", "0")) for tr in tbl.tr_lst)
+
+
+def _apply_r24(prs, finding):
+    from core.ppra.slides import duplicate_slide  # local: slides.py imports nothing from here
+
+    deck = analyze(prs)
+    info = deck.slides[finding.slide_index]
+    match = next(((shape, rows, cols) for table_info, shape, rows, cols in pacing_tables(deck)
+                  if table_info.index == info.index and shape.shape_id == finding.data["shape_id"]), None)
+    if match is None or split_part(info.title):
+        return
+    shape, rows, cols = match
+    parts = _split_plan(info, shape, rows, cols, deck.slide_height)
+    n = len(parts)
+    if n < 2:
+        return
+    slides = [info.slide] + [duplicate_slide(prs, info.index, info.index + k) for k in range(1, n)]
+    for k, (slide, part) in enumerate(zip(slides, parts), start=1):
+        _keep_rows(find_shape(slide, finding.data["shape_id"]), {0, *part})
+        _prefix_title(slide, info.title_shape_id, k, n)
 
 
 # ---------------------------------------------------------------- deletions (R4-R8)
@@ -589,17 +754,12 @@ def _find_r5(deck, report_type, jira_info):
 
 
 def _find_r6(deck, report_type, jira_info):
-    findings = []
-    for info in deck.of_kind("halo"):
-        for chart_shape in info.charts:
-            categories, series = chart_data(chart_shape.chart)
-            cats = [c.lower() for c in categories]
-            multi = any("two" in c or "multi" in c for c in cats)
-            visits = [values for name, values in series if "site visit" in name.lower()]
-            if cats and not multi and visits and all(v in (None, 0, 0.0) for vals in visits for v in vals):
-                findings.append(_delete_finding("R6", info, "single-channel only and 0 site visits"))
-                break
-    return findings
+    # A one-channel report has no multi-channel engagement to show; in a
+    # multi-channel report the slide stays (R23 fills its takeaway).
+    if len(report_channels(report_type)) != 1:
+        return []
+    return [_delete_finding("R6", info, f"a {report_type} report has only one channel")
+            for info in deck.of_kind("halo")]
 
 
 def _find_r7(deck, report_type, jira_info):
@@ -623,6 +783,85 @@ def _find_r8(deck, report_type, jira_info):
 
 def _apply_delete(prs, finding):
     """Deletions are carried out by engine.delete_slides after every other rule."""
+
+
+# ---------------------------------------------------------------- R22 channel deletion
+
+_IMPRESSION_CHANNELS = frozenset({DISPLAY, CTV, AUDIO, LINKEDIN})
+# Never removed for their channel: the deck frame and the pages every report
+# keeps. Halo Effect is R6's call.
+_CHANNEL_NEUTRAL_KINDS = ("title", "agenda", "section", "pacing", "recommended_actions", "thank_you", "halo")
+# Display-family slides: their impression channel comes from the title or
+# section ("CTV Insights" -> CTV), Display when neither names one.
+_DISPLAY_FAMILY_KINDS = ("program_performance", "key_call_outs", "creative_sets")
+
+
+def slide_channels(info: SlideInfo) -> frozenset:
+    """The channel(s) a slide reports on, from its kind first and then its
+    title / section keywords. Empty means it is not tied to a channel."""
+    kind = info.kind
+    if kind in _CHANNEL_NEUTRAL_KINDS or info.title.lower().startswith("campaign highlights"):
+        return frozenset()
+    title_channels = channels_of(info.title)
+    if kind == "ctv_performance":
+        return frozenset({CTV})
+    if kind == "display_performance":
+        return frozenset({DISPLAY})
+    if kind == "top_accounts_cs":
+        return frozenset({CS})
+    if kind == "top_accounts_display":
+        # "Top Accounts - Display and CTV" serves both; a plain "- Top Accounts" is Display.
+        return (title_channels & _IMPRESSION_CHANNELS) or frozenset({DISPLAY})
+    if kind in _DISPLAY_FAMILY_KINDS:
+        return ((title_channels | info.section_channels) & _IMPRESSION_CHANNELS) or frozenset({DISPLAY})
+    # Insight slides (Audience Reach, Content / Industry / Country Insights,
+    # Top Accounts, Custom Question, ...) belong to their section's channel.
+    return title_channels or info.section_channels
+
+
+def _channel_names(channels) -> str:
+    return " / ".join(c for c in CHANNELS if c in channels)
+
+
+def _section_ranges(deck: DeckInfo):
+    """(section breaker, [slides up to the next breaker]) pairs."""
+    breakers = [s.index for s in deck.slides if s.kind == "section"]
+    for i, start in enumerate(breakers):
+        end = breakers[i + 1] if i + 1 < len(breakers) else len(deck.slides)
+        yield deck.slides[start], deck.slides[start + 1:end]
+
+
+def _find_r22(deck, report_type, jira_info):
+    wanted = report_channels(report_type)
+    if not wanted:
+        return []
+    findings = {}
+    for info in deck.slides:
+        channels = slide_channels(info)
+        if channels and not channels & wanted:
+            findings[info.index] = Finding(
+                "R22", info.index, f"Delete {_slide_label(info)}: {_channel_names(channels)} slide, not in a "
+                f"{report_type} report", before=info.label, after="(slide removed)", data={},
+                summary=f"Remove {_channel_names(channels)} slide (not in a {report_type} report)")
+    # A section breaker goes too once every slide under it is removed.
+    for breaker, members in _section_ranges(deck):
+        if members and all(m.index in findings for m in members):
+            channels = channels_of(" ".join(text for _s, text in breaker.texts))
+            what = f"{_channel_names(channels)} section breaker" if channels else "Section breaker"
+            findings[breaker.index] = Finding(
+                "R22", breaker.index, f"Delete {_slide_label(breaker)}: every slide in its section is removed",
+                before=breaker.label, after="(slide removed)", data={},
+                summary=f"Remove {what} (not in a {report_type} report)")
+    return [findings[i] for i in sorted(findings)]
+
+
+def _skip_off_channel(finder):
+    """The other deleting rules leave alone slides R22 already removes, so a
+    slide is listed once, with its channel reason."""
+    def wrapped(deck, report_type, jira_info):
+        off = {f.slide_index for f in _find_r22(deck, report_type, jira_info)}
+        return [f for f in finder(deck, report_type, jira_info) if f.slide_index not in off]
+    return wrapped
 
 
 # ---------------------------------------------------------------- R9 CTV column
@@ -1070,7 +1309,8 @@ def _find_r15(deck, report_type, jira_info):
         idx = _reach_sentence_index(tf)
         if idx is None:
             continue
-        pct_ok = any(_PCT_RE.match(norm_text(_p_text(p._p))) for p in tf.paragraphs[:idx + 1])
+        pct_ok = (any(_PCT_RE.match(norm_text(_p_text(p._p))) for p in tf.paragraphs[:idx + 1])
+                  or reach_value(info) is not None)  # R25 fills a blank stat first
         topics = campaign_topics(deck.next_slide(info))
         if not topics or not pct_ok:
             continue
@@ -1094,10 +1334,21 @@ def _apply_r15(prs, finding):
         return
     p_el = tf.paragraphs[idx]._p
     topics = finding.data["topics"]
-    sentence = norm_text(_p_text(p_el))
-    new = sentence.split("engaging with")[0] + _template("audience_reach", len(topics))
-    rpr = _first_rpr(p_el)
-    _replace_paragraph_runs(p_el, [_make_run(new, rpr)])
+    # Only the text from "engaging with" on is rewritten, so a stat run in
+    # the same paragraph (the blue "26% ") keeps its own formatting.
+    joined = "".join(_run_text(r) for r in _runs(p_el))
+    start = joined.find("engaging with")
+    span = _isolate_span(p_el, start, len(joined)) if start >= 0 else []
+    if span:
+        rpr = span[0].find(qn("a:rPr"))
+        _set_run_text(span[0], _template("audience_reach", len(topics)))
+        for extra in span[1:]:
+            p_el.remove(extra)
+    else:
+        sentence = norm_text(_p_text(p_el))
+        rpr = _first_rpr(p_el)
+        new = sentence.split("engaging with")[0] + _template("audience_reach", len(topics))
+        _replace_paragraph_runs(p_el, [_make_run(new, rpr)])
     _remove_old_list(tf, idx)
     _insert_list_after(p_el, topics, rpr)
 
@@ -1116,10 +1367,18 @@ def _remove_old_list(tf, idx: int) -> None:
 
 # R16 Content Insights
 
-def _content_sentence_index(tf) -> int | None:
-    return _paragraph_index(
-        tf, lambda t: t.lower().startswith("assets that generated") or t.lower().startswith("the following")
-        and "job title" in t.lower())
+def _heading_count(tf) -> int:
+    """1 when the box starts with its "Key Takeaways:" heading paragraph."""
+    paras = tf.paragraphs
+    return 1 if paras and norm_text(_p_text(paras[0]._p)).lower().startswith("key takeaways") else 0
+
+
+def _content_body(tf) -> list[str]:
+    return [norm_text(_p_text(p._p)) for p in tf.paragraphs[_heading_count(tf):]]
+
+
+def _content_target(titles: list[str]) -> list[str]:
+    return [_template("content_insights", len(titles)), "", *titles]
 
 
 def _find_r16(deck, report_type, jira_info):
@@ -1129,42 +1388,42 @@ def _find_r16(deck, report_type, jira_info):
         if shape is None:
             continue
         tf = shape.text_frame
-        idx = _content_sentence_index(tf)
         titles = job_titles(deck.next_slide(info))
-        if idx is None or not titles:
+        if not titles:
             continue
-        sentence = norm_text(_p_text(tf.paragraphs[idx]._p))
-        new = _template("content_insights", len(titles))
-        if sentence == new and _already_listed(tf, idx, titles):
+        body = _content_body(tf)
+        while body and not body[-1]:
+            body.pop()
+        if body == _content_target(titles):
             continue
         findings.append(Finding(
             "R16", info.index, f"Rewrite the Content Insights takeaway on {_slide_label(info)} with the top "
-            f"{len(titles)} job title(s)", before=sentence,
-            after=new + " " + "; ".join(f"{i}. {t}" for i, t in enumerate(titles, 1)),
+            f"{len(titles)} job title(s)", before=" ".join(x for x in body if x),
+            after=_template("content_insights", len(titles)) + " " + "; ".join(
+                f"{i}. {t}" for i, t in enumerate(titles, 1)),
             data={"shape_id": shape.shape_id, "titles": titles},
             summary=f"Rewrite the Content Insights takeaway with the top {len(titles)} job titles"))
     return findings
 
 
 def _apply_r16(prs, finding):
+    """The whole takeaway after the heading becomes the fixed sentence, a
+    blank line and the numbered job titles, styled like the old first line."""
     tf = _shape(prs, finding).text_frame
-    idx = _content_sentence_index(tf)
-    if idx is None:
+    start = _heading_count(tf)
+    body = [p._p for p in tf.paragraphs[start:]]
+    source = next((p for p in body if norm_text(_p_text(p))), body[0] if body else None)
+    if source is None:
         return
-    p_el = tf.paragraphs[idx]._p
+    rpr = _first_rpr(source)
+    ppr = source.find(qn("a:pPr"))
+    sentence_ppr = copy.deepcopy(ppr) if ppr is not None and ppr.find(qn("a:buAutoNum")) is None else None
     titles = finding.data["titles"]
-    rpr = _first_rpr(p_el)
-    _replace_paragraph_runs(p_el, [_make_run(_template("content_insights", len(titles)), rpr)])
-    # The template's X / Y / Z placeholder lines and any earlier list go.
-    for p in list(tf.paragraphs[idx + 1:]):
-        text = norm_text(_p_text(p._p))
-        ppr = p._p.find(qn("a:pPr"))
-        numbered = ppr is not None and ppr.find(qn("a:buAutoNum")) is not None
-        if not text or numbered or re.fullmatch(r"[XYZ]", text):
-            p._p.getparent().remove(p._p)
-        else:
-            break
-    _insert_list_after(p_el, titles, rpr)
+    sentence = _make_paragraph([_make_run(_template("content_insights", len(titles)), rpr)], ppr=sentence_ppr)
+    source.addprevious(sentence)
+    for p_el in body:
+        p_el.getparent().remove(p_el)
+    _insert_list_after(sentence, titles, rpr)
 
 
 # R17 Audience Insights
@@ -1255,30 +1514,86 @@ def _apply_r17(prs, finding):
 
 # R18 Country
 
+# Template placeholders written as bold PPRA-blue number runs; the rest of
+# the sentence stays in the box's regular body style.
+_COUNTRY_NUMBER_KEYS = ("p1", "p2", "p3", "n1", "total", "top_pct")
+_TEMPLATE_TOKEN_RE = re.compile(r"(\{\w+\}%?)")
+# The PPRA blue as a theme reference: bg2 maps to lt2 (1C6BFF) in the
+# platform's "Madison Logic" theme, the colour of the slide titles.
+PPRA_BLUE_SCHEME = "bg2"
+
+
 def _with_the(country: str) -> str:
     return f"the {country}" if country.lower() in _COUNTRIES_WITH_THE else country
 
 
-def _country_sentence(rows: list[list[str]], header: list[str]) -> list[tuple[str, bool]]:
+def _pct_text(value) -> str:
+    text = str(value)
+    return text[:-2] if text.endswith(".0") else text
+
+
+def _country_values(rows: list[list[str]], header: list[str]) -> tuple[str, dict]:
+    """(template key, values) for the takeaway sentence."""
     low = [norm_text(h).lower() for h in header]
     leads_col = next((i for i, h in enumerate(low) if "lead" in h), 1)
     pct_col = next((i for i, h in enumerate(low) if "percent" in h or "%" in h), 2)
     data = []
     for r in rows:
         n = _parse_number(r[leads_col]) if leads_col < len(r) else None
-        pct = norm_text(r[pct_col]).rstrip("%") if pct_col < len(r) else ""
+        pct = norm_text(r[pct_col]).rstrip("%").strip() if pct_col < len(r) else ""
         data.append((norm_text(r[0]), int(n or 0), pct))
     total = sum(n for _c, n, _p in data)
     top = data[:TOP_N]
-    pcts = [p or str(_round_half_up(n * 100 / total)) if total else p for _c, n, p in top]
-    parts = [(TAKEAWAY_TEMPLATES["country_first"].format(
-        p1=pcts[0], n1=f"{top[0][1]:,}", total=f"{total:,}", c1=_with_the(top[0][0])), True)]
-    if len(top) > 1:
-        parts.append((TAKEAWAY_TEMPLATES["country_second"].format(c2=_with_the(top[1][0]), p2=pcts[1]), False))
-    if len(top) > 2:
-        parts.append((TAKEAWAY_TEMPLATES["country_third"].format(c3=_with_the(top[2][0]), p3=pcts[2]), False))
-    parts.append((TAKEAWAY_TEMPLATES["country_end"], False))
-    return parts
+    values = {"total": f"{total:,}", "n1": f"{top[0][1]:,}",
+              "top_pct": _pct_text(_round_half_up(sum(n for _c, n, _p in top) * 100 / total)) if total else "0"}
+    for i, (country, n, pct) in enumerate(top, 1):
+        values[f"c{i}"] = _with_the(country)
+        values[f"p{i}"] = pct or (_pct_text(_round_half_up(n * 100 / total)) if total else "0")
+    key = {1: "country_one", 2: "country_two"}.get(len(top), "country_three")
+    return key, values
+
+
+def _country_parts(rows, header) -> list[tuple[str, bool]]:
+    """The sentence as (text, is_number) pieces, numbers as their own runs."""
+    key, values = _country_values(rows, header)
+    parts = []
+    for piece in _TEMPLATE_TOKEN_RE.split(TAKEAWAY_TEMPLATES[key]):
+        if not piece:
+            continue
+        m = re.fullmatch(r"\{(\w+)\}(%?)", piece)
+        if m:
+            parts.append((values[m.group(1)] + m.group(2), m.group(1) in _COUNTRY_NUMBER_KEYS))
+        else:
+            parts.append((piece, False))
+    if parts and parts[0][0][:1].islower():  # "the United States led ..." starts the sentence
+        parts[0] = (parts[0][0][:1].upper() + parts[0][0][1:], parts[0][1])
+    merged = []
+    for text, is_number in parts:  # neighbouring plain pieces become one run
+        if merged and not is_number and not merged[-1][1]:
+            merged[-1] = (merged[-1][0] + text, False)
+        else:
+            merged.append((text, is_number))
+    return merged
+
+
+def _blue_number_run(text: str, rpr_source):
+    r = _make_run(text, rpr_source, bold=True)
+    rpr = r.find(qn("a:rPr"))
+    for fill in rpr.findall(qn("a:solidFill")):
+        rpr.remove(fill)
+    fill = OxmlElement("a:solidFill")
+    clr = OxmlElement("a:schemeClr")
+    clr.set("val", PPRA_BLUE_SCHEME)
+    fill.append(clr)
+    # a:solidFill sits before the effect / font children of a:rPr.
+    anchor = next((rpr.find(qn(t)) for t in ("a:effectLst", "a:effectDag", "a:highlight", "a:uLnTx", "a:uLn",
+                                             "a:uFillTx", "a:uFill", "a:latin", *_RPR_AFTER_LATIN)
+                   if rpr.find(qn(t)) is not None), None)
+    if anchor is not None:
+        anchor.addprevious(fill)
+    else:
+        rpr.append(fill)
+    return r
 
 
 def _country_table(info: SlideInfo):
@@ -1293,16 +1608,16 @@ def _find_r18(deck, report_type, jira_info):
     for info in deck.of_kind("country_insights"):
         shape = _takeaway_shape(info)
         header, rows = _country_table(info)
-        if shape is None or len(rows) < 2:
+        if shape is None or not rows:
             continue
         idx = _paragraph_index(shape.text_frame, lambda t: t.lower().startswith("to be filled by csm"))
         if idx is None:
             continue
-        parts = _country_sentence(rows, header)
+        parts = _country_parts(rows, header)
         findings.append(Finding(
             "R18", info.index, f"Write the Country Insights takeaway on {_slide_label(info)}",
             before=norm_text(_p_text(shape.text_frame.paragraphs[idx]._p)),
-            after="".join(text for text, _bold in parts), data={"shape_id": shape.shape_id},
+            after="".join(text for text, _number in parts), data={"shape_id": shape.shape_id},
             summary="Write the Country Insights takeaway"))
     return findings
 
@@ -1316,12 +1631,183 @@ def _apply_r18(prs, finding):
     header, rows = _country_table(info)
     p_el = tf.paragraphs[idx]._p
     rpr = _first_rpr(p_el)
-    runs = [_make_run(text, rpr, bold=bold) for text, bold in _country_sentence(rows, header)]
+    runs = [_blue_number_run(text, rpr) if number else _make_run(text, rpr, bold=False)
+            for text, number in _country_parts(rows, header)]
     _replace_paragraph_runs(p_el, runs)
     old_ppr = p_el.find(qn("a:pPr"))
     if old_ppr is not None:
         p_el.remove(old_ppr)
     p_el.insert(0, _bullet_ppr())
+
+
+# ---------------------------------------------------------------- R23 Halo Effect takeaway
+
+# The value the platform leaves unfilled: "X", "ERROR:Division by zero", or a bare "%".
+_HALO_PLACEHOLDER_RE = re.compile(r"^\s*(?:x\s*%?|%|.*error:.*)\s*$", re.IGNORECASE)
+_HALO_EXPLAINER = "average number of website visits"
+
+
+def halo_placeholder_index(tf) -> int | None:
+    """The takeaway paragraph still holding the platform's placeholder value."""
+    for i, p in enumerate(tf.paragraphs):
+        if i and _HALO_PLACEHOLDER_RE.match(norm_text(_p_text(p._p)) or "-"):
+            return i
+    return None
+
+
+def halo_value(info: SlideInfo) -> tuple[str, str | None]:
+    """What the Halo Effect takeaway should say, from the slide's own chart.
+
+    The chart has one bar per engagement category ("Single-channel",
+    "Two-channel", ...) with an ACCOUNTS series (accounts in that category)
+    and a Site Visits series (their website visits). The takeaway's number
+    reads "Average number of website visits per account who engaged
+    multi-channel, compared to single-channel", so it is the multiplier
+
+        (multi-channel site visits / multi-channel accounts)
+        / (single-channel site visits / single-channel accounts)
+
+    written as e.g. "2.5x", where multi-channel is every category that is
+    not single-channel. Returns ("ratio", text), ("single", None) when no
+    account engaged on more than one channel (the platform's division by
+    zero), or ("unknown", None) when the chart can't give the number.
+    """
+    for chart_shape in info.charts:
+        categories, series = chart_data(chart_shape.chart)
+        accounts = next((v for name, v in series if "account" in name.lower()), None)
+        visits = next((v for name, v in series if "site visit" in name.lower()), None)
+        if not categories or accounts is None or visits is None:
+            continue
+        totals = {"single": [0.0, 0.0], "multi": [0.0, 0.0]}
+        for category, n_accounts, n_visits in zip(categories, accounts, visits):
+            bucket = totals["single" if "single" in category.lower() else "multi"]
+            bucket[0] += n_accounts or 0
+            bucket[1] += n_visits or 0
+        (single_accounts, single_visits), (multi_accounts, multi_visits) = totals["single"], totals["multi"]
+        if not multi_accounts:
+            return "single", None
+        if not single_accounts or not single_visits:
+            return "unknown", None
+        ratio = (multi_visits / multi_accounts) / (single_visits / single_accounts)
+        return "ratio", TAKEAWAY_TEMPLATES["halo_ratio"].format(ratio=_round_half_up(ratio, "0.1"))
+    return "unknown", None
+
+
+def _find_r23(deck, report_type, jira_info):
+    findings = []
+    for info in deck.of_kind("halo"):
+        shape = _takeaway_shape(info)
+        if shape is None:
+            continue
+        idx = halo_placeholder_index(shape.text_frame)
+        if idx is None:
+            continue
+        outcome, value = halo_value(info)
+        if outcome == "unknown":
+            continue
+        after = value if outcome == "ratio" else TAKEAWAY_TEMPLATES["halo_single_channel"]
+        findings.append(Finding(
+            "R23", info.index, f"Fill the Halo Effect takeaway on {_slide_label(info)} from its chart",
+            before=norm_text(_p_text(shape.text_frame.paragraphs[idx]._p)), after=after,
+            data={"shape_id": shape.shape_id, "outcome": outcome, "value": after},
+            summary="Fill the Halo Effect takeaway from its chart"))
+    return findings
+
+
+def _apply_r23(prs, finding):
+    tf = _shape(prs, finding).text_frame
+    idx = halo_placeholder_index(tf)
+    if idx is None:
+        return
+    p_el = tf.paragraphs[idx]._p
+    runs = [r for r in _runs(p_el) if _run_text(r).strip()]
+    if not runs:
+        return
+    single = finding.data["outcome"] == "single"
+    # A ratio replaces only the placeholder run(s); the fallback sentence
+    # replaces the whole line. Either way it keeps the placeholder run's own
+    # formatting (same a:rPr).
+    targets = runs if single else ([r for r in runs if _HALO_PLACEHOLDER_RE.match(_run_text(r))] or runs)
+    trailing = " " if not single and _run_text(targets[-1]).endswith(" ") and targets[-1] is not runs[-1] else ""
+    _set_run_text(targets[0], finding.data["value"] + trailing)
+    for extra in targets[1:]:
+        p_el.remove(extra)
+    if single:
+        # The sentence explaining the multiplier no longer applies.
+        for p in list(tf.paragraphs[idx + 1:]):
+            if norm_text(_p_text(p._p)).lower().startswith(_HALO_EXPLAINER):
+                p._p.getparent().remove(p._p)
+
+
+# ---------------------------------------------------------------- R25 Audience Reach stat
+
+# The generator's unfilled big stat: "0", "0%", "%", "X%", "ERROR:...".
+_REACH_STAT_RE = re.compile(r"^\s*(?:0(?:\.0+)?\s*%?|%|x\s*%?|.*error:.*)\s*$", re.IGNORECASE)
+
+
+def reach_stat_run(tf):
+    """The big stat run before "of leads" in the Audience Reach takeaway
+    (it may share a paragraph with the sentence or sit on its own line)."""
+    for p in tf.paragraphs[1:]:
+        for r in _runs(p._p):
+            text = _run_text(r)
+            if "of leads" in text.lower():
+                return None
+            if text.strip():
+                return r
+    return None
+
+
+def reach_stat_missing(tf) -> bool:
+    run = reach_stat_run(tf)
+    return run is not None and bool(_REACH_STAT_RE.match(_run_text(run)))
+
+
+def reach_value(info: SlideInfo) -> str | None:
+    """The Audience Reach % from the slide's Account Engagement Summary chart:
+    Trending accounts Engaged / All Accounts Engaged, as a whole percent
+    (e.g. 478 / 784 -> "61%"). This is the user-confirmed stand-in for "% of
+    leads from engaged accounts" (the true lead-weighted share is not in the
+    deck). None when the chart is missing or no account engaged."""
+    for chart_shape in info.charts:
+        categories, series = chart_data(chart_shape.chart)
+        cats = [norm_text(c).lower() for c in categories]
+        if "engaged" not in cats:
+            continue
+        col = cats.index("engaged")
+        named = {name.strip("'\" ").lower(): values for name, values in series}
+        all_accounts, trending = named.get("all accounts"), named.get("trending")
+        if not all_accounts or not trending or col >= len(all_accounts) or col >= len(trending):
+            continue
+        if not all_accounts[col]:
+            return None
+        return f"{_round_half_up((trending[col] or 0) * 100 / all_accounts[col], '1')}%"
+    return None
+
+
+def _find_r25(deck, report_type, jira_info):
+    findings = []
+    for info in deck.of_kind("audience_reach"):
+        shape = _takeaway_shape(info)
+        if shape is None or not reach_stat_missing(shape.text_frame):
+            continue
+        value = reach_value(info)
+        if value is None:
+            continue
+        findings.append(Finding(
+            "R25", info.index, f"Fill the Audience Reach % on {_slide_label(info)} from its chart",
+            before=_run_text(reach_stat_run(shape.text_frame)).strip(), after=value,
+            data={"shape_id": shape.shape_id, "value": value},
+            summary=f"Fill the Audience Reach % ({value}, trending / all engaged accounts)"))
+    return findings
+
+
+def _apply_r25(prs, finding):
+    tf = _shape(prs, finding).text_frame
+    if not reach_stat_missing(tf):
+        return  # never overwrite a real value
+    run = reach_stat_run(tf)
+    _set_run_text(run, finding.data["value"] + " ")
 
 
 # ---------------------------------------------------------------- R19 auto-fit
@@ -1393,26 +1879,56 @@ def _has_sp_autofit(shape) -> bool:
     return body is not None and body.find(qn("a:spAutoFit")) is not None
 
 
+MIN_BOTTOM_INSET = 91440  # 0.1 in
+BREATHING_ROOM = 182880  # 0.2 in, about one line, under the last line of text
+BOTTOM_MARGIN = 228600  # 0.25 in: a takeaway box never grows past this above the slide's bottom edge
+
+
+def _bottom_inset(shape) -> int:
+    body = shape.text_frame._txBody.find(qn("a:bodyPr"))
+    return int(body.get("bIns")) if body is not None and body.get("bIns") else 45720
+
+
+def _padded_inset(shape) -> int:
+    """Bottom inset with the breathing room: at least 0.1 in, plus 0.2 in.
+    It lives in the inset (not just the height) so PowerPoint's own
+    shape-to-fit keeps it when someone edits the text later."""
+    current = _bottom_inset(shape)
+    target = MIN_BOTTOM_INSET + BREATHING_ROOM
+    return current if current >= target else max(current, MIN_BOTTOM_INSET) + BREATHING_ROOM
+
+
+def box_height_cap(shape, slide_height: int) -> int:
+    return slide_height - BOTTOM_MARGIN - int(shape.top)
+
+
+def _target_height(shape, slide_height: int, original: int) -> int:
+    """Fitted height, never below the original, capped at the bottom margin."""
+    return max(original, min(estimate_text_height(shape), box_height_cap(shape, slide_height)))
+
+
 def _find_r19(deck, report_type, jira_info):
     findings = []
     for info, shape in _takeaway_shapes(deck):
-        needed = estimate_text_height(shape)
-        if _has_sp_autofit(shape) and int(shape.height) >= needed:
+        padded = _bottom_inset(shape) >= MIN_BOTTOM_INSET + BREATHING_ROOM
+        if padded and _has_sp_autofit(shape) and int(shape.height) >= _target_height(
+                shape, deck.slide_height, 0):
             continue
         findings.append(Finding(
             "R19", info.index, f"Auto-fit the Key Takeaways box on {_slide_label(info)}",
             before=f"height {int(shape.height) / 914400:.2f} in",
-            after=f"resize shape to fit text (at least {max(needed, int(shape.height)) / 914400:.2f} in)",
-            data={"shape_id": shape.shape_id}, summary="Auto-fit the Key Takeaways box to its text"))
+            after="resize shape to fit text, 0.2 in clear below the last line",
+            data={"shape_id": shape.shape_id, "slide_height": deck.slide_height},
+            summary="Fit the Key Takeaways box to its text, with room below the last line"))
     return findings
 
 
 def _apply_r19(prs, finding):
     shape = _shape(prs, finding)
+    original = int(shape.height)
     shape.text_frame.auto_size = MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
-    needed = estimate_text_height(shape)
-    if needed > int(shape.height):
-        shape.height = needed
+    shape.text_frame._txBody.find(qn("a:bodyPr")).set("bIns", str(_padded_inset(shape)))
+    shape.height = _target_height(shape, int(prs.slide_height), original)
 
 
 # ---------------------------------------------------------------- R20 Thank You
@@ -1421,20 +1937,26 @@ _OWNER_PLACEHOLDERS = ("owner name", "<ml team member name>")
 
 
 def _thank_you_box(info: SlideInfo):
-    for shape, text in info.texts:
-        if len(shape.text_frame.paragraphs) >= 3 and not text.lower().startswith("thank you"):
-            low = text.lower()
-            if any(p in low for p in _OWNER_PLACEHOLDERS) or "@" in low:
-                return shape
-    return None
+    """The owner name / title / email box: the one with placeholders or an
+    email, else the only other text box with three or more paragraphs - so a
+    box already holding someone else's details is replaced too."""
+    candidates = [(shape, text.lower()) for shape, text in info.texts
+                  if len(shape.text_frame.paragraphs) >= 3 and not text.lower().startswith("thank you")]
+    for shape, low in candidates:
+        if any(p in low for p in _OWNER_PLACEHOLDERS) or "@" in low:
+            return shape
+    return candidates[0][0] if len(candidates) == 1 else None
 
 
-def _owner_values(jira_info: dict) -> list[str]:
-    return [norm_text(jira_info.get(k, "")) for k in ("owner_name", "owner_title", "owner_email")]
+def owner_values(jira_info: dict | None) -> list[str]:
+    """The ticket's Thank You Page Deck Owner name, title and email."""
+    jira_info = jira_info or {}
+    return [norm_text(jira_info.get(k) or "") for k in ("owner_name", "owner_title", "owner_email")]
+
 
 
 def _find_r20(deck, report_type, jira_info):
-    values = _owner_values(jira_info)
+    values = owner_values(jira_info)
     if not all(values):
         return []
     findings = []
@@ -1478,13 +2000,17 @@ RULES = [
     Rule("R1", "Pacing: add Imps / Leads after unit values", _find_r1, _apply_r1),
     Rule("R2", "Pacing: add a Total row", _find_r2, _apply_r2),
     Rule("R3", "Pacing: column widths, 12.5 in wide, centred", _find_r3, _apply_r3),
-    Rule("R4", "Delete slides with no data", _find_r4, _apply_delete, deletes=True),
-    Rule("R5", "Delete Country Insights when there is only one country", _find_r5, _apply_delete, deletes=True),
-    Rule("R6", "Delete single-channel Halo Effect slides with 0 site visits", _find_r6, _apply_delete,
+    Rule("R24", "Pacing: split a table that runs off the slide", _find_r24, _apply_r24),
+    Rule("R22", "Delete slides for channels not in this report", _find_r22, _apply_delete, deletes=True),
+    Rule("R4", "Delete slides with no data", _skip_off_channel(_find_r4), _apply_delete, deletes=True),
+    Rule("R5", "Delete Country Insights when there is only one country", _skip_off_channel(_find_r5),
+         _apply_delete, deletes=True),
+    Rule("R6", "Delete Halo Effect slides in single-channel reports", _skip_off_channel(_find_r6), _apply_delete,
          deletes=True),
-    Rule("R7", "Delete the Custom Question example slide", _find_r7, _apply_delete, deletes=True),
-    Rule("R8", "Delete Creative Sets slides in Content Syndication sections", _find_r8, _apply_delete,
+    Rule("R7", "Delete the Custom Question example slide", _skip_off_channel(_find_r7), _apply_delete,
          deletes=True),
+    Rule("R8", "Delete Creative Sets slides in Content Syndication sections", _skip_off_channel(_find_r8),
+         _apply_delete, deletes=True),
     Rule("R9", "Top Accounts: drop an all-zero CTV Impressions column (combined reports)", _find_r9, _apply_r9),
     Rule("R10", "Hyperlink the ML Platform URLs", _find_r10, _apply_r10),
     Rule("R11", "Round long decimals to 2 places", _find_r11, _apply_r11),
@@ -1495,6 +2021,8 @@ RULES = [
     Rule("R16", "Content Insights takeaway: top job titles", _find_r16, _apply_r16),
     Rule("R17", "Audience Insights takeaway", _find_r17, _apply_r17),
     Rule("R18", "Country Insights takeaway", _find_r18, _apply_r18),
+    Rule("R23", "Halo Effect takeaway from its chart", _find_r23, _apply_r23),
+    Rule("R25", "Audience Reach: fill a blank % from its chart", _find_r25, _apply_r25),
     Rule("R19", "Auto-fit Key Takeaways boxes", _find_r19, _apply_r19),
     Rule("R20", "Thank You page: owner name, title and linked email", _find_r20, _apply_r20),
     Rule("R21", "Top Accounts / Display tables 12.5 in wide, centred", _find_r21, _apply_r21),
@@ -1503,17 +2031,19 @@ RULES_BY_ID = {rule.id: rule for rule in RULES}
 
 # Plain-language groups the review page shows the rules in: (id, title, rule ids).
 RULE_GROUPS = [
-    ("pacing", "Pacing table", ("R1", "R2", "R3")),
-    ("remove", "Slides to remove", ("R4", "R5", "R6", "R7", "R8")),
-    ("takeaways", "Key takeaways", ("R15", "R16", "R17", "R18", "R19")),
+    ("pacing", "Pacing table", ("R1", "R2", "R3", "R24")),
+    ("remove", "Slides to remove", ("R22", "R4", "R5", "R6", "R7", "R8")),
+    ("takeaways", "Key takeaways", ("R25", "R15", "R16", "R17", "R18", "R23", "R19")),
     ("links", "Links and Thank You page", ("R10", "R20")),
     ("cleanup", "Number and chart clean-up", ("R9", "R11", "R12", "R13", "R14", "R21")),
 ]
 GROUP_OF_RULE = {rule_id: group_id for group_id, _title, ids in RULE_GROUPS for rule_id in ids}
 # Rules that rewrite visible text: the review list shows their before -> after.
-TEXT_CHANGE_RULES = ("R9", "R13", "R15", "R16", "R17", "R18")
+TEXT_CHANGE_RULES = ("R9", "R13", "R25", "R15", "R16", "R17", "R18", "R23")
 
 # Execution order for non-deleting rules: column removal before width fitting,
 # takeaway text before the auto-fit that sizes the boxes around it.
 EXECUTION_ORDER = ["R1", "R2", "R3", "R9", "R21", "R10", "R11", "R12", "R13", "R14",
-                   "R15", "R16", "R17", "R18", "R19", "R20"]
+                   "R25", "R15", "R16", "R17", "R18", "R23", "R19", "R20"]
+# Rules that add slides run after the deletions, on the final slide order.
+AFTER_DELETE_ORDER = ["R24"]

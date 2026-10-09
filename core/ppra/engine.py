@@ -3,7 +3,8 @@
 scan() reports what every rule would change on the uploaded deck; format()
 applies the enabled rules in EXECUTION_ORDER, each one re-reading the deck as
 it is at that point, then removes the slides the deleting rules picked (all
-decided from the ORIGINAL deck's data) last, highest index first.
+decided from the ORIGINAL deck's data), then runs the slide-adding rules
+(AFTER_DELETE_ORDER: the pacing split) on the final slide order.
 """
 from __future__ import annotations
 
@@ -15,7 +16,9 @@ from pptx import Presentation
 from core.app_logging import get_logger
 from core.ppra.detect import DeckInfo, SlideInfo, analyze, is_top_level, norm_text
 from core.ppra.rules import (
-    CHAR_WIDTH_EM, EXECUTION_ORDER, RULES, RULES_BY_ID, Finding, data_rows, pacing_tables, row_unit, wrapped_lines,
+    AFTER_DELETE_ORDER, CHAR_WIDTH_EM, EXECUTION_ORDER, RULES, RULES_BY_ID, Finding, data_rows,
+    box_height_cap, estimate_text_height, halo_placeholder_index, owner_values, pacing_tables, reach_stat_missing,
+    row_unit, wrapped_lines,
 )
 
 _P14_NS = "http://schemas.microsoft.com/office/powerpoint/2010/main"
@@ -23,13 +26,35 @@ _P14_NS = "http://schemas.microsoft.com/office/powerpoint/2010/main"
 
 @dataclass
 class AttentionItem:
+    """One thing to do by hand before posting. message is a short action;
+    slide_number is in the formatted deck (None = the whole deck)."""
     slide_number: int | None
     slide_title: str
     message: str
 
     def __str__(self) -> str:
-        where = f"Slide {self.slide_number} ({self.slide_title})" if self.slide_number else "Deck"
-        return f"{where}: {self.message}"
+        return f"{f'Slide {self.slide_number}' if self.slide_number else 'Deck'} · {self.message}"
+
+
+def checklist_lines(items) -> list[str]:
+    """One line per action, its slides merged: "Slides 9, 15 · Add the asset
+    thumbnails". Deck-wide actions read "Deck · ..."."""
+    order: list[str] = []
+    slides: dict[str, set] = {}
+    for item in items:
+        if item.message not in slides:
+            order.append(item.message)
+            slides[item.message] = set()
+        slides[item.message].add(item.slide_number)
+    lines = []
+    for message in order:
+        numbers = sorted(n for n in slides[message] if n)
+        if numbers:
+            where = f"Slide{'s' if len(numbers) > 1 else ''} {', '.join(str(n) for n in numbers)}"
+        else:
+            where = "Deck"
+        lines.append(f"{where} · {message}")
+    return lines
 
 
 @dataclass
@@ -37,6 +62,8 @@ class ScanResult:
     report_type: str | None
     detected_report_type: str | None
     findings: dict[str, list[Finding]] = field(default_factory=dict)  # every rule id present
+    # Predicted "Before you post" items: what is still manual once every
+    # found rule has run (slide numbers in that formatted deck).
     attention: list[AttentionItem] = field(default_factory=list)
     slide_titles: list[str] = field(default_factory=list)
 
@@ -74,10 +101,18 @@ def detect_report_type(pptx_bytes: bytes) -> str | None:
 def scan(pptx_bytes: bytes, report_type: str | None, jira_info: dict | None = None) -> ScanResult:
     deck = analyze(load(pptx_bytes))
     findings = {rule.id: rule.applies(deck, report_type, jira_info) for rule in RULES}
+    # The checklist is about the deck that gets posted, so it comes from a
+    # trial format rather than the raw deck: placeholders the rules fill
+    # (Thank You owner from the ticket, country / Halo takeaways, ...) must
+    # not show up as manual work.
+    try:
+        _out, _log, attention = format_deck(pptx_bytes, report_type, jira_info)
+    except Exception:  # noqa: BLE001 - fall back to the raw deck's view
+        get_logger().exception("PPRA trial format failed; checklist taken from the raw deck")
+        attention = attention_items(deck, report_type, jira_info)
     return ScanResult(
         report_type=report_type, detected_report_type=deck.detected_report_type, findings=findings,
-        attention=attention_items(deck, report_type, jira_info),
-        slide_titles=[s.label for s in deck.slides],
+        attention=attention, slide_titles=[s.label for s in deck.slides],
     )
 
 
@@ -109,7 +144,7 @@ def format_deck(pptx_bytes: bytes, report_type: str | None, jira_info: dict | No
     prs = load(pptx_bytes)
     original = analyze(prs)
     change_log: list[str] = []
-    problems: list[AttentionItem] = []
+    problems: list[tuple[int, str, str]] = []  # (slide id, label, message): ids survive deletes / inserts
 
     to_delete: dict[int, Finding] = {}
     for rule in RULES:
@@ -117,31 +152,40 @@ def format_deck(pptx_bytes: bytes, report_type: str | None, jira_info: dict | No
             for finding in rule.applies(original, report_type, jira_info):
                 to_delete.setdefault(finding.slide_index, finding)
 
-    for rule_id in EXECUTION_ORDER:
-        if rule_id not in enabled:
-            continue
+    def run(rule_id: str, skip=()) -> None:
         rule = RULES_BY_ID[rule_id]
         deck = analyze(prs)
         for finding in rule.applies(deck, report_type, jira_info):
-            if finding.slide_index in to_delete:
+            if finding.slide_index in skip:
                 continue
             try:
                 rule.apply(prs, finding)
-            except Exception as exc:  # noqa: BLE001 - one bad slide must not sink the whole deck
+            except Exception:  # noqa: BLE001 - one bad slide must not sink the whole deck
                 get_logger().exception("PPRA rule %s failed on slide %s", rule_id, finding.slide_index + 1)
                 info = deck.slides[finding.slide_index]
-                problems.append(AttentionItem(info.number, info.label,
-                                              f"{rule_id} could not be applied ({exc}) - check this by hand."))
+                problems.append((info.slide.slide_id, info.label,
+                                 f"Check this slide by hand ({rule_id} could not be applied)"))
                 continue
             change_log.append(_change_line(finding))
+
+    for rule_id in EXECUTION_ORDER:
+        if rule_id in enabled:
+            run(rule_id, skip=to_delete)
 
     for index in sorted(to_delete):
         change_log.append(_change_line(to_delete[index]))
     delete_slides(prs, to_delete.keys())
 
+    # Rules that insert slides (the pacing split) run on the final order.
+    for rule_id in AFTER_DELETE_ORDER:
+        if rule_id in enabled:
+            run(rule_id)
+
     out = save(prs)
     final = analyze(load(out))
-    return out, change_log, problems + attention_items(final, report_type, jira_info)
+    position = {slide.slide_id: n for n, slide in enumerate(prs.slides, start=1)}
+    failed = [AttentionItem(position[sid], label, message) for sid, label, message in problems if sid in position]
+    return out, change_log, failed + attention_items(final, report_type, jira_info)
 
 
 format = format_deck  # noqa: A001 - the spec's public name
@@ -178,55 +222,73 @@ def _overlapping_tables(info: SlideInfo) -> bool:
     return False
 
 
+def _reach_missing(info: SlideInfo) -> bool:
+    shape = info.text_shape("key takeaways")
+    if shape is None:
+        return False
+    text = norm_text(shape.text_frame.text)
+    blank = "% of leads" in text and not any(ch.isdigit() for ch in text.split("% of leads")[0])
+    return blank or reach_stat_missing(shape.text_frame)
+
+
 def _takeaway_text(info: SlideInfo) -> str:
     shape = info.text_shape("key takeaways")
     return norm_text(shape.text_frame.text) if shape is not None else ""
 
 
+MSG_PICK_TYPE = "Pick the report type"
+MSG_THUMBNAILS = "Add the asset thumbnails"
+MSG_OWNER = "Add the owner name, title and email (missing on the Jira ticket)"
+MSG_OWNER_BOX = "Fill in the owner name, title and email"
+MSG_HALO = "Fill in the Halo Effect takeaway number"
+MSG_ERROR = "Replace the leftover ERROR value"
+MSG_REACH = "Fill the % of leads from engaged accounts"
+MSG_INDUSTRY = "Fill in the Industry Insights takeaway numbers"
+MSG_OVERLAP = "Move or shrink the overlapping tables"
+MSG_OVERFLOW = "Shorten the Key Takeaways text (it runs off the slide)"
+
+
 def attention_items(deck: DeckInfo, report_type: str | None, jira_info: dict | None = None) -> list[AttentionItem]:
-    """Things the tool can't do or can't be sure about - shown after Format."""
-    jira_info = jira_info or {}
+    """The "Before you post" checklist: only work the tool genuinely can't do
+    on this deck (run on the formatted deck, so anything a rule fills is
+    already gone). Agenda, Recommended Actions, Creative Sets, logos and
+    the country placeholder are never listed."""
     items: list[AttentionItem] = []
 
     def add(info: SlideInfo | None, message: str) -> None:
         items.append(AttentionItem(info.number if info else None, info.label if info else "", message))
 
     if report_type is None:
-        add(None, "Report type unknown - pick one so pacing units and CTV handling are right.")
+        add(None, MSG_PICK_TYPE)
     for info, shape, rows, cols in pacing_tables(deck):
         for r in data_rows(rows):
             if row_unit(rows[r][cols["campaign"]], rows[r], cols, deck, report_type) is None:
-                add(info, f"Couldn't tell whether '{norm_text(rows[r][cols['campaign']])}' is Imps or Leads.")
+                add(info, f"Add Imps or Leads to the '{norm_text(rows[r][cols['campaign']])}' row")
+    owner_missing = not all(owner_values(jira_info))
     for info in deck.slides:
         takeaway = _takeaway_text(info)
-        if info.kind == "agenda":
-            add(info, "Check the Agenda still matches the slides in the deck.")
-        elif info.kind == "content_insights" and any(len(rows) > 1 for _s, rows in info.tables):
-            add(info, "Add the asset preview thumbnails.")
-        elif info.kind == "creative_sets" and info.has_text("this slide will not be populated"):
-            add(info, "Creative Sets still has the template example - pull the report and add the insights.")
-        elif info.kind in ("top_accounts_cs", "top_accounts") and info.has_text("add in logos"):
-            add(info, "Add the top account logos.")
-        elif info.kind == "halo" and " X " in f" {takeaway} ":
-            add(info, "Halo Effect takeaway still has the X placeholder.")
-        elif info.kind == "recommended_actions":
-            add(info, "Write the recommended actions.")
-        elif info.kind == "key_call_outs":
-            add(info, "Review the Key Call Outs text.")
-        elif info.kind == "audience_reach" and takeaway and "% of leads" in takeaway and not any(
-                ch.isdigit() for ch in takeaway.split("% of leads")[0]):
-            add(info, "Audience Reach takeaway has no lead % - write this takeaway by hand.")
+        halo_left = False
+        if info.kind == "content_insights" and any(len(rows) > 1 for _s, rows in info.tables):
+            add(info, MSG_THUMBNAILS)
+        elif info.kind == "halo":
+            shape = info.text_shape("key takeaways")
+            halo_left = shape is not None and halo_placeholder_index(shape.text_frame) is not None
+            if halo_left:
+                add(info, MSG_HALO)
+        elif info.kind == "audience_reach" and _reach_missing(info):
+            add(info, MSG_REACH)
         elif info.kind == "industry_insights" and "(% of total)" in takeaway:
-            add(info, "Industry Insights takeaway has blank numbers.")
-        if info.kind == "thank_you" and (info.has_text("owner name") or info.has_text("<ml team member name>")):
-            add(info, "Thank You page still has placeholder owner details (missing from the Jira ticket?).")
-        if info.has_text("to be filled by csm"):
-            add(info, "A 'To be filled by CSM team' placeholder is still on this slide.")
-        if info.has_text("error:"):
-            add(info, "Slide still shows an ERROR value from the platform.")
+            add(info, MSG_INDUSTRY)
+        elif info.kind == "thank_you" and owner_missing:
+            add(info, MSG_OWNER)
+        elif info.kind == "thank_you" and (info.has_text("owner name") or info.has_text("<ml team member name>")):
+            add(info, MSG_OWNER_BOX)  # ticket has the details but the owner box wasn't found
+        if info.has_text("error:") and not halo_left:
+            add(info, MSG_ERROR)
         if len(info.tables) > 1 and _overlapping_tables(info):
-            add(info, "Tables overlap once their text wraps - move or shrink them.")
+            add(info, MSG_OVERLAP)
         shape = info.text_shape("key takeaways")
-        if shape is not None and int(shape.top) + int(shape.height) > deck.slide_height:
-            add(info, "Key Takeaways box runs off the bottom of the slide - shorten or resize it.")
+        if shape is not None and (int(shape.top) + int(shape.height) > deck.slide_height
+                                  or estimate_text_height(shape) > box_height_cap(shape, deck.slide_height)):
+            add(info, MSG_OVERFLOW)
     return items

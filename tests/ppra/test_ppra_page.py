@@ -120,6 +120,47 @@ def test_review_summary_groups_and_skipped(tmp_path, monkeypatch):
     assert not [t for t in at.toggle if t.key == f"ppra_rule_{_KEY}_R9"]
 
 
+def _checklist(at):
+    return [c for c in at.checkbox if str(c.key).startswith(f"ppra_check_{_KEY}_")]
+
+
+def test_before_you_post_checklist(tmp_path, monkeypatch):
+    with ExitStack() as stack:
+        _patches(stack)
+        at = _to_review(tmp_path, monkeypatch)
+        boxes = _checklist(at)
+        # The ticket has the owner details, so only the thumbnails are manual.
+        assert [b.label for b in boxes] == ["Slide 8 · Add the asset thumbnails"]
+        assert {m.label: m.value for m in at.metric}["Before you post"] == "1"
+        assert any("Before you post** · 0 of 1 checked" in m.value for m in at.markdown)
+        assert not any("Nothing left to check by hand" in m.value for m in at.markdown)
+        assert not [e for e in [*at.expander, *at.get("status")] if "attention" in e.label.lower()]
+
+        boxes[0].check().run()
+        assert any("Nothing left to check by hand" in m.value for m in at.markdown)
+        # The tick survives formatting (same item in the formatted deck).
+        at.button(key=f"ppra_format_button_{_KEY}").click().run()
+        assert not at.exception
+        assert _checklist(at)[0].value is True
+        assert any("Nothing left to check by hand" in m.value for m in at.markdown)
+
+
+def test_checklist_lists_missing_owner_details_and_empty_state(tmp_path, monkeypatch):
+    display = {**TICKET, "report_format": "Standard", "products": ["Display"]}
+    with ExitStack() as stack:
+        _patches(stack, fetch_ppra_ticket={"return_value": {**display, "owner_title": ""}})
+        at = _to_review(tmp_path, monkeypatch, deck=d.display_deck())
+        labels = [b.label for b in _checklist(at)]
+        assert labels == ["Slide 5 · Add the owner name, title and email (missing on the Jira ticket)"]
+
+    with ExitStack() as stack:
+        _patches(stack, fetch_ppra_ticket={"return_value": display})
+        at = _to_review(tmp_path, monkeypatch, deck=d.display_deck())
+        assert _checklist(at) == []
+        assert any("Nothing left to check by hand" in m.value for m in at.markdown)
+        assert {m.label: m.value for m in at.metric}["Before you post"] == "0"
+
+
 def test_group_include_and_rule_toggles_reach_format_deck(tmp_path, monkeypatch):
     with ExitStack() as stack:
         _patches(stack)
