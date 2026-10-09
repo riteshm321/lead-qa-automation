@@ -12,19 +12,32 @@ the user download the result, then posts it to the ticket.
    (customfield_12035), flight dates (12028/12029), reporter, Thank You Page
    Deck Owner Name/Title/Email (customfield_12051/12052/12053).
 2. Deck: upload the original .pptx, or pick a .pptx attachment of the ticket.
-3. Report type selectbox (CS / Display / CS + Display / other combined),
-   pre-filled from the ticket's PPRA Report Format + Products, falling back to
-   deck detection (title slide "Flight Dates" lines). User can override.
-4. Scan: show every rule as found -> will change / not found -> skipped, with
-   a short before/after and an on/off toggle per rule.
-5. Format: apply enabled rules; show a change log and a "needs your attention"
-   list (asset thumbnails, Creative Sets placeholder text, Agenda, anything
-   undetectable).
-6. Download (required): the Post step is disabled until the formatted deck
-   has been downloaded in this session.
-7. Post to Jira: upload the deck as `<TICKET>.pptx`, then post the comment
-   "Hi @<reporter> / PFA PPR for your reference. Let me know if you require
-   any changes. / Thanks" (reporter as a real mention). Preview before post.
+3. Report type selectbox, pre-filled from the ticket's PPRA Report Format +
+   Products, falling back to deck detection (title slide "Flight Dates"
+   lines). User can override. Each type is a set of channels (CS, Display,
+   CTV, Audio, LinkedIn): CS, Display, CTV, Audio, LinkedIn, CTV + Display,
+   CS + Display, CS + Audio, CS + Display + CTV, CS + Display + Audio + CTV.
+   Units per channel live in UNIT_BY_CHANNEL (CS = Leads, the rest Imps;
+   LinkedIn unconfirmed). Chips next to the selectbox show the channels and
+   where the type came from.
+4. Review: the deck is scanned automatically (again on a type change).
+   Summary cards (changes, slides to remove, needs attention, skipped), then
+   findings in plain-language groups (Pacing table, Slides to remove, Key
+   takeaways, Links and Thank You page, Number and chart clean-up), one line
+   per change, each group with one Include box; per-rule toggles sit in a
+   collapsed "Advanced" expander, rules with nothing to do in "Skipped".
+   Format applies the enabled rules and shows a change log and a "needs your
+   attention" list (asset thumbnails, Creative Sets placeholder text, Agenda,
+   anything undetectable).
+5. Download (required): the Post step is disabled until the formatted deck
+   has been downloaded in this session - or a different final deck has been
+   uploaded in the Post step.
+6. Post to Jira: upload the deck (or the uploaded final deck) as
+   `<TICKET>.pptx`, then post the comment "Hi @<reporter> / PFA PPR for your
+   reference. Let me know if you require any changes. / Thanks" (reporter as
+   a real mention). Preview before post. Afterwards: optional ticket status
+   change (Jira transitions) and "Start a new report", which clears every
+   `ppra_` session key and resets the file uploaders.
 
 ## Rules (each runs only when its target is detected)
 Slide identification is by stripped title text (titles live in text boxes
@@ -32,10 +45,11 @@ named Title N, contain \xa0/\x0b/en dashes) plus secondary signals - see the
 analysis notes. Deletion is ALWAYS decided from the slide's own data, never
 from its section label.
 
-- R1 Pacing units: suffix " Imps" (Display/Video/CTV rows) or " Leads" (CS
-  rows) on Units Goal/Delivered/Remaining values incl. 0; never budget or %.
-  Row channel from campaign name keywords, else title-slide Flight Dates
-  channels, else report type.
+- R1 Pacing units: suffix " Imps" (Display/Video/CTV/Audio/LinkedIn rows) or
+  " Leads" (CS rows) on Units Goal/Delivered/Remaining values incl. 0; never
+  budget or %. Row unit from campaign name keywords, else title-slide Flight
+  Dates channels, else report type - each only when it points to a single
+  unit; otherwise the row is flagged for attention.
 - R2 Pacing Total row: "Total", summed budgets ($, commas), units summed per
   unit type (mixed types = one paragraph per type in the same cell),
   % Delivered = sum delivered / sum goal (integer %). Bold, fill EBEEF5,
@@ -53,8 +67,9 @@ from its section label.
 - R7 Delete "Custom Question - Example".
 - R8 Delete "Display Data, Creative Sets" slides in CS sections (keep in
   Display sections).
-- R9 Top Accounts CTV Impressions column: remove when all zero and retitle
-  "Top Accounts - Display" - only for combined reports that include Display.
+- R9 Top Accounts CTV Impressions column: remove when all zero and then
+  retitle "Top Accounts - Display" - for any report with an impression
+  channel (never CS-only).
 - R10 MLP link: hyperlink the URL in "Click to view on ML Platform <url>".
 - R11 Float noise: `\d+\.\d{3,}%` -> rounded to 2 decimals.
 - R12 Remove empty KPI lines ("+ site visits generated", "0+ site visits ...").

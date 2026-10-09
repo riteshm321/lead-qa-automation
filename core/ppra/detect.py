@@ -14,23 +14,66 @@ from dataclasses import dataclass, field
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.oxml.ns import qn
 
+# Channels a report can cover. Every report type is a set of these, and the
+# rules ask questions of that set ("has CS?", "any impression channel?")
+# instead of comparing report-type strings.
 CS = "CS"
 DISPLAY = "Display"
+CTV = "CTV"
+AUDIO = "Audio"
+LINKEDIN = "LinkedIn"
+CHANNELS = (CS, DISPLAY, CTV, AUDIO, LINKEDIN)
+
+IMPS = "Imps"
+LEADS = "Leads"
+# The pacing unit each channel is bought in. All impression channels sum
+# together as one "Imps" total.
+UNIT_BY_CHANNEL = {
+    CS: LEADS,
+    DISPLAY: IMPS,
+    CTV: IMPS,
+    AUDIO: IMPS,
+    LINKEDIN: IMPS,  # LinkedIn unit unconfirmed
+}
 
 REPORT_CS = "CS"
 REPORT_DISPLAY = "Display"
+REPORT_CTV = "CTV"
+REPORT_AUDIO = "Audio"
+REPORT_LINKEDIN = "LinkedIn"
+REPORT_CTV_DISPLAY = "CTV + Display"
 REPORT_CS_DISPLAY = "CS + Display"
-REPORT_OTHER = "Other combined"
-REPORT_TYPES = (REPORT_CS, REPORT_DISPLAY, REPORT_CS_DISPLAY, REPORT_OTHER)
+REPORT_CS_AUDIO = "CS + Audio"
+REPORT_CS_DISPLAY_CTV = "CS + Display + CTV"
+REPORT_CS_DISPLAY_AUDIO_CTV = "CS + Display + Audio + CTV"
+
+# Selectbox order on the page.
+REPORT_TYPE_CHANNELS: dict[str, frozenset[str]] = {
+    REPORT_CS: frozenset({CS}),
+    REPORT_DISPLAY: frozenset({DISPLAY}),
+    REPORT_CTV: frozenset({CTV}),
+    REPORT_AUDIO: frozenset({AUDIO}),
+    REPORT_LINKEDIN: frozenset({LINKEDIN}),
+    REPORT_CTV_DISPLAY: frozenset({CTV, DISPLAY}),
+    REPORT_CS_DISPLAY: frozenset({CS, DISPLAY}),
+    REPORT_CS_AUDIO: frozenset({CS, AUDIO}),
+    REPORT_CS_DISPLAY_CTV: frozenset({CS, DISPLAY, CTV}),
+    REPORT_CS_DISPLAY_AUDIO_CTV: frozenset({CS, DISPLAY, AUDIO, CTV}),
+}
+REPORT_TYPES = tuple(REPORT_TYPE_CHANNELS)
 
 DEFAULT_CHART_CATEGORIES = ["1st Qtr", "2nd Qtr", "3rd Qtr", "4th Qtr"]
 
 _TITLE_NAME_RE = re.compile(r"^Title \d+$")
 _WS_RE = re.compile(r"\s+")
-_CS_RE = re.compile(r"content syndication", re.IGNORECASE)
 _CS_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])CS(?![A-Za-z0-9])")
-_DISPLAY_RE = re.compile(
-    r"display|video|connected tv|(?<![a-z])ctv(?![a-z])|(?<![a-z])audio(?![a-z])", re.IGNORECASE)
+_CHANNEL_RES = {
+    CS: re.compile(r"content syndication|(?<![a-z])lead(?:s|gen|\s*gen(?:eration)?)?(?![a-z])", re.IGNORECASE),
+    DISPLAY: re.compile(r"display|video|banner", re.IGNORECASE),
+    CTV: re.compile(r"connected tv|(?<![a-z])(?:ctv|ott)(?![a-z])", re.IGNORECASE),
+    AUDIO: re.compile(r"(?<![a-z])audio(?![a-z])|podcast|spotify", re.IGNORECASE),
+    LINKEDIN: re.compile(r"linked\s?in", re.IGNORECASE),
+}
 
 
 def norm_text(value: str | None) -> str:
@@ -42,13 +85,37 @@ def norm_text(value: str | None) -> str:
 
 
 def channels_of(text: str) -> frozenset[str]:
-    """Channel keywords in a campaign / section / flight-date label."""
-    found = set()
-    if _CS_RE.search(text) or _CS_TOKEN_RE.search(text):
+    """Channel keywords in a campaign / section / flight-date / Jira label."""
+    found = {channel for channel, pattern in _CHANNEL_RES.items() if pattern.search(text)}
+    if _CS_TOKEN_RE.search(text):
         found.add(CS)
-    if _DISPLAY_RE.search(text):
-        found.add(DISPLAY)
     return frozenset(found)
+
+
+def report_channels(report_type: str | None) -> frozenset[str]:
+    """The channels a report type covers (empty when unknown)."""
+    return REPORT_TYPE_CHANNELS.get(report_type or "", frozenset())
+
+
+def has_cs(report_type: str | None) -> bool:
+    return CS in report_channels(report_type)
+
+
+def has_impressions(report_type: str | None) -> bool:
+    """True when the report includes any impression channel (Display, CTV, Audio, LinkedIn)."""
+    return any(UNIT_BY_CHANNEL[c] == IMPS for c in report_channels(report_type))
+
+
+def single_unit(channels) -> str | None:
+    """'Imps' or 'Leads' when every channel in the set uses the same unit."""
+    units = {UNIT_BY_CHANNEL[c] for c in channels}
+    return units.pop() if len(units) == 1 else None
+
+
+def report_type_for(channels) -> str | None:
+    """The listed report type with exactly these channels, or None."""
+    channels = frozenset(channels)
+    return next((name for name, chans in REPORT_TYPE_CHANNELS.items() if chans == channels), None)
 
 
 def iter_shapes(shapes):
@@ -219,7 +286,8 @@ def _classify(title: str, layout: str, tables, charts, texts) -> str:
             return "top_accounts_display"
         if "content syndication" in t:
             return "top_accounts_cs"
-        return "top_accounts_display" if channels_of(title) == {DISPLAY} else "top_accounts"
+        title_channels = channels_of(title)
+        return "top_accounts_display" if title_channels and CS not in title_channels else "top_accounts"
     if "connected tv performance" in t or any(x.startswith("top assets by ctv impression") for x in lowered):
         return "ctv_performance"
     if ("display performance" in t or "display data" in t
@@ -250,42 +318,29 @@ def _flight_lines(slides: list[SlideInfo]) -> list[str]:
 
 
 def report_type_from_flight_lines(lines: list[str]) -> str | None:
+    """The report type whose channels match the title slide's Flight Dates
+    lines exactly. None when a line names no known channel (in a multi-line
+    list) or the combination isn't one of REPORT_TYPES."""
     if not lines:
         return None
     per_line = [channels_of(line) for line in lines]
-    union = frozenset().union(*per_line)
-    unknown = [line for line, ch in zip(lines, per_line) if not ch]
-    if unknown and len(lines) > 1:
-        return REPORT_OTHER
-    if union == {CS}:
-        return REPORT_CS
-    if union == {DISPLAY}:
-        return REPORT_DISPLAY
-    if union == {CS, DISPLAY}:
-        return REPORT_CS_DISPLAY
-    return None
+    if any(not ch for ch in per_line) and len(lines) > 1:
+        return None
+    return report_type_for(frozenset().union(*per_line))
 
 
 def map_report_type(ppra_format_value: str | None, products: list[str] | None) -> str | None:
     """Report type from the ticket's PPRA Report Format + Products fields.
 
-    "Redesigned CS Format" -> CS; anything naming both Display-type and CS
-    products -> CS + Display; Display/Video/CTV/Audio only -> Display;
-    anything else -> None (the caller falls back to deck detection).
+    Channel keywords in either field (Lead Gen / Content Syndication -> CS,
+    Display / Video, CTV / Connected TV, Audio, LinkedIn) are collected and
+    the listed report type with exactly that channel set is returned; any
+    other combination -> None (the caller falls back to deck detection).
     """
-    parts = [ppra_format_value or ""] + list(products or [])
-    found = set()
-    for part in parts:
+    found: set[str] = set()
+    for part in [ppra_format_value or ""] + list(products or []):
         found |= channels_of(part)
-    if found == {CS, DISPLAY}:
-        return REPORT_CS_DISPLAY
-    if found == {CS}:
-        return REPORT_CS
-    if found == {DISPLAY}:
-        return REPORT_DISPLAY
-    if "combined" in (ppra_format_value or "").lower():
-        return REPORT_OTHER
-    return None
+    return report_type_for(found)
 
 
 def parse_slides(prs) -> list[SlideInfo]:
@@ -320,7 +375,7 @@ def parse_slides(prs) -> list[SlideInfo]:
 def analyze(prs) -> DeckInfo:
     slides = parse_slides(prs)
     lines = _flight_lines([s for s in slides if s.kind == "title"] or slides[:1])
-    channels = frozenset().union(*[channels_of(x) for x in lines]) if lines else frozenset()
+    channels = frozenset().union(*[channels_of(x) for x in lines])
     return DeckInfo(
         slides=slides, flight_lines=lines, flight_channels=channels,
         detected_report_type=report_type_from_flight_lines(lines),

@@ -24,9 +24,8 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.text.text import _Run
 
 from core.ppra.detect import (
-    CS, DISPLAY, REPORT_CS, REPORT_CS_DISPLAY, REPORT_DISPLAY, REPORT_OTHER,
-    DeckInfo, SlideInfo, analyze, chart_data, chart_has_data, chart_title, channels_of, find_shape,
-    is_top_level, iter_shapes, norm_text, parse_slides, table_rows,
+    CS, IMPS, LEADS, DeckInfo, SlideInfo, analyze, chart_data, chart_has_data, chart_title, channels_of, find_shape,
+    has_impressions, is_top_level, iter_shapes, norm_text, parse_slides, report_channels, single_unit, table_rows,
 )
 
 # Wording for every generated Key Takeaway. Edit here to change what the tool
@@ -83,6 +82,13 @@ class Finding:
     before: str = ""
     after: str = ""
     data: dict = field(default_factory=dict)
+    # One short plain-language line for the review list (no slide number -
+    # the page prefixes it). Falls back to the description.
+    summary: str = ""
+
+    @property
+    def short(self) -> str:
+        return self.summary or self.description
 
 
 @dataclass(frozen=True)
@@ -337,22 +343,20 @@ def data_rows(rows) -> list[int]:
 
 def row_unit(campaign_name: str, row: list[str], cols: dict, deck: DeckInfo, report_type: str | None) -> str | None:
     """'Imps' or 'Leads' for one pacing row: an existing suffix, then campaign
-    name keywords, then the title slide's flight-date channels, then the
-    report type."""
+    name keywords (display/video/banner, ctv/ott, audio/podcast, linkedin ->
+    Imps; cs/content syndication/lead -> Leads), then the title slide's
+    flight-date channels, then the report type - each only when it points to
+    exactly one unit. None means mixed and undetermined (flagged for
+    attention)."""
     for key in _UNIT_KEYS:
         if key in cols:
             m = _SUFFIXED_RE.match(norm_text(row[cols[key]]))
             if m:
-                return "Imps" if m.group(2).lower() == "imps" else "Leads"
-    for channels in (channels_of(campaign_name), deck.flight_channels):
-        if channels == {CS}:
-            return "Leads"
-        if channels == {DISPLAY}:
-            return "Imps"
-    if report_type == REPORT_CS:
-        return "Leads"
-    if report_type == REPORT_DISPLAY:
-        return "Imps"
+                return IMPS if m.group(2).lower() == "imps" else LEADS
+    for channels in (channels_of(campaign_name), deck.flight_channels, report_channels(report_type)):
+        unit = single_unit(channels)
+        if unit:
+            return unit
     return None
 
 
@@ -375,7 +379,8 @@ def _find_r1(deck, report_type, jira_info):
             units = sorted({c[2] for c in cells})
             findings.append(Finding(
                 "R1", info.index, f"Add {' / '.join(units)} after {len(cells)} unit values on {_slide_label(info)}",
-                before=sample[0], after=sample[1], data={"shape_id": shape.shape_id, "cells": cells}))
+                before=sample[0], after=sample[1], data={"shape_id": shape.shape_id, "cells": cells},
+                summary=f"Add {' / '.join(units)} after {len(cells)} unit values"))
     return findings
 
 
@@ -434,10 +439,14 @@ def _find_r2(deck, report_type, jira_info):
         if any(_is_total_row(r) for r in rows[1:]) or not data_rows(rows):
             continue
         totals = _pacing_totals(rows, cols, deck, report_type)
+        headline = [" + ".join(x for x in totals[cols["ug"]] if x)]
+        if "bg" in cols:
+            headline.append(totals[cols["bg"]][0])
         findings.append(Finding(
             "R2", info.index, f"Add a bold Total row to the pacing table on {_slide_label(info)}",
             before="(no Total row)", after=" | ".join(" / ".join(c) for c in totals),
-            data={"shape_id": shape.shape_id, "report_type": report_type}))
+            data={"shape_id": shape.shape_id, "report_type": report_type},
+            summary="Add Total row: " + ", ".join(x for x in headline if x)))
     return findings
 
 
@@ -514,7 +523,9 @@ def _find_r3(deck, report_type, jira_info):
             "R3", info.index, f"Pacing table on {_slide_label(info)}: {what}12.5 in wide, centred",
             before=f"width {int(shape.width) / 914400:.2f} in, left {int(shape.left) / 914400:.2f} in",
             after=f"width 12.50 in, left {(deck.slide_width - TABLE_WIDTH) / 2 / 914400:.2f} in",
-            data={"shape_id": shape.shape_id}))
+            data={"shape_id": shape.shape_id},
+            summary=("Narrow Campaign Name, widen the Units columns, " if needs_rebalance else "Make the table ")
+            + "12.5 in wide and centred"))
     return findings
 
 
@@ -557,7 +568,7 @@ def _slide_has_data(info: SlideInfo) -> bool:
 
 def _delete_finding(rule_id: str, info: SlideInfo, why: str) -> Finding:
     return Finding(rule_id, info.index, f"Delete {_slide_label(info)}: {why}",
-                   before=info.label, after="(slide removed)", data={})
+                   before=info.label, after="(slide removed)", data={}, summary=f"Remove '{info.label}' ({why})")
 
 
 def _find_r4(deck, report_type, jira_info):
@@ -605,7 +616,7 @@ def _find_r8(deck, report_type, jira_info):
     findings = []
     for info in deck.of_kind("creative_sets"):
         channels = creative_sets_channels(info)
-        if channels == {CS} or (not channels and report_type == REPORT_CS):
+        if channels == {CS} or (not channels and report_channels(report_type) == {CS}):
             findings.append(_delete_finding("R8", info, "Creative Sets slide in a Content Syndication section"))
     return findings
 
@@ -617,8 +628,9 @@ def _apply_delete(prs, finding):
 # ---------------------------------------------------------------- R9 CTV column
 
 def _find_r9(deck, report_type, jira_info):
-    # Any report that includes Display (plain Display too); never CS-only.
-    if report_type not in (REPORT_DISPLAY, REPORT_CS_DISPLAY, REPORT_OTHER):
+    # Any report with an impression channel (Display, CTV, Audio, LinkedIn);
+    # never CS-only. The title loses "and CTV" only with the removed column.
+    if not has_impressions(report_type):
         return []
     findings = []
     for info in deck.of_kind("top_accounts_display", "top_accounts"):
@@ -635,7 +647,9 @@ def _find_r9(deck, report_type, jira_info):
                 findings.append(Finding(
                     "R9", info.index, f"Remove the all-zero CTV Impressions column on {_slide_label(info)}",
                     before=info.title, after=new_title,
-                    data={"shape_id": shape.shape_id, "title_shape_id": info.title_shape_id}))
+                    data={"shape_id": shape.shape_id, "title_shape_id": info.title_shape_id},
+                    summary="Drop the all-zero CTV Impressions column"
+                    + (" and retitle" if new_title != info.title else "")))
     return findings
 
 
@@ -688,7 +702,8 @@ def _find_r21(deck, report_type, jira_info):
                 "R21", info.index, f"Make the '{norm_text(rows[0][0]) if rows else ''}' table on "
                 f"{_slide_label(info)} 12.5 in wide and centred",
                 before=f"width {int(shape.width) / 914400:.2f} in", after="width 12.50 in, centred",
-                data={"shape_id": shape.shape_id}))
+                data={"shape_id": shape.shape_id},
+                summary=f"Make the '{norm_text(rows[0][0]) if rows else ''}' table 12.5 in wide and centred"))
     return findings
 
 
@@ -736,7 +751,8 @@ def _find_r10(deck, report_type, jira_info):
             findings.append(Finding(
                 "R10", info.index, f"Hyperlink the ML Platform URL on {_slide_label(info)}",
                 before=url, after=f"{url} (clickable)",
-                data={"shape_id": shape.shape_id, "paragraph": p_index}))
+                data={"shape_id": shape.shape_id, "paragraph": p_index},
+                summary="Make the ML Platform link clickable"))
     return findings
 
 
@@ -812,7 +828,9 @@ def _find_r11(deck, report_type, jira_info):
         if hits:
             findings.append(Finding(
                 "R11", info.index, f"Round {len(hits)} long decimal value(s) to 2 places on {_slide_label(info)}",
-                before=hits[0], after=_fix_float(hits[0]), data={}))
+                before=hits[0], after=_fix_float(hits[0]), data={},
+                summary=f"Round {len(hits)} long decimal{'s' if len(hits) != 1 else ''} to 2 places "
+                f"({hits[0]} -> {_fix_float(hits[0])})"))
     return findings
 
 
@@ -845,7 +863,8 @@ def _find_r12(deck, report_type, jira_info):
             if _empty_kpi_paragraphs(shape.text_frame):
                 findings.append(Finding(
                     "R12", info.index, f"Remove the empty 'site visits generated' line on {_slide_label(info)}",
-                    before="+ site visits generated", after="(removed)", data={"shape_id": shape.shape_id}))
+                    before="+ site visits generated", after="(removed)", data={"shape_id": shape.shape_id},
+                    summary="Remove the empty '+ site visits generated' line"))
     return findings
 
 
@@ -880,7 +899,7 @@ def _find_r13(deck, report_type, jira_info):
             findings.append(Finding(
                 "R13", info.index, f"Format company sizes on {_slide_label(info)}",
                 before=", ".join(h.strip() for h in hits), after=", ".join(_fix_size_band(h).strip() for h in hits),
-                data={"shape_id": shape.shape_id}))
+                data={"shape_id": shape.shape_id}, summary="Add thousands separators to company sizes"))
     return findings
 
 
@@ -956,7 +975,8 @@ def _find_r14(deck, report_type, jira_info):
             findings.append(Finding(
                 "R14", info.index, f"Make the {'pie' if target == 'country' else 'doughnut'} chart labels "
                 f"on {_slide_label(info)} {after}", before="regular labels", after=after,
-                data={"shape_id": shape.shape_id, "target": target}))
+                data={"shape_id": shape.shape_id, "target": target},
+                summary=f"Make the {'pie' if target == 'country' else 'doughnut'} chart labels {after}"))
     return findings
 
 
@@ -1062,7 +1082,8 @@ def _find_r15(deck, report_type, jira_info):
             "R15", info.index, f"Rewrite the Audience Reach takeaway on {_slide_label(info)} with the top "
             f"{len(topics)} intent topic(s)", before=sentence, after=new + " " + "; ".join(
                 f"{i}. {t}" for i, t in enumerate(topics, 1)),
-            data={"shape_id": shape.shape_id, "topics": topics}))
+            data={"shape_id": shape.shape_id, "topics": topics},
+            summary=f"Rewrite the Audience Reach takeaway with the top {len(topics)} intent topics"))
     return findings
 
 
@@ -1120,7 +1141,8 @@ def _find_r16(deck, report_type, jira_info):
             "R16", info.index, f"Rewrite the Content Insights takeaway on {_slide_label(info)} with the top "
             f"{len(titles)} job title(s)", before=sentence,
             after=new + " " + "; ".join(f"{i}. {t}" for i, t in enumerate(titles, 1)),
-            data={"shape_id": shape.shape_id, "titles": titles}))
+            data={"shape_id": shape.shape_id, "titles": titles},
+            summary=f"Rewrite the Content Insights takeaway with the top {len(titles)} job titles"))
     return findings
 
 
@@ -1190,7 +1212,8 @@ def _find_r17(deck, report_type, jira_info):
         after = new + ("" if not topics else " " + "; ".join(f"{i}. {t}" for i, t in enumerate(topics, 1)))
         findings.append(Finding(
             "R17", info.index, f"Rewrite the Audience Insights takeaway on {_slide_label(info)}",
-            before=text, after=after, data={"shape_id": shape.shape_id, "pct": pct, "topics": topics}))
+            before=text, after=after, data={"shape_id": shape.shape_id, "pct": pct, "topics": topics},
+            summary="Rewrite the Audience Insights takeaway"))
     return findings
 
 
@@ -1279,7 +1302,8 @@ def _find_r18(deck, report_type, jira_info):
         findings.append(Finding(
             "R18", info.index, f"Write the Country Insights takeaway on {_slide_label(info)}",
             before=norm_text(_p_text(shape.text_frame.paragraphs[idx]._p)),
-            after="".join(text for text, _bold in parts), data={"shape_id": shape.shape_id}))
+            after="".join(text for text, _bold in parts), data={"shape_id": shape.shape_id},
+            summary="Write the Country Insights takeaway"))
     return findings
 
 
@@ -1379,7 +1403,7 @@ def _find_r19(deck, report_type, jira_info):
             "R19", info.index, f"Auto-fit the Key Takeaways box on {_slide_label(info)}",
             before=f"height {int(shape.height) / 914400:.2f} in",
             after=f"resize shape to fit text (at least {max(needed, int(shape.height)) / 914400:.2f} in)",
-            data={"shape_id": shape.shape_id}))
+            data={"shape_id": shape.shape_id}, summary="Auto-fit the Key Takeaways box to its text"))
     return findings
 
 
@@ -1427,7 +1451,8 @@ def _find_r20(deck, report_type, jira_info):
         findings.append(Finding(
             "R20", info.index, f"Fill the Thank You page owner details on {_slide_label(info)}",
             before=" / ".join(current), after=" / ".join(values) + " (email linked)",
-            data={"shape_id": shape.shape_id, "values": values}))
+            data={"shape_id": shape.shape_id, "values": values},
+            summary=f"Fill the owner details: {values[0]}, {values[1]}, {values[2]} (email linked)"))
     return findings
 
 
@@ -1475,6 +1500,18 @@ RULES = [
     Rule("R21", "Top Accounts / Display tables 12.5 in wide, centred", _find_r21, _apply_r21),
 ]
 RULES_BY_ID = {rule.id: rule for rule in RULES}
+
+# Plain-language groups the review page shows the rules in: (id, title, rule ids).
+RULE_GROUPS = [
+    ("pacing", "Pacing table", ("R1", "R2", "R3")),
+    ("remove", "Slides to remove", ("R4", "R5", "R6", "R7", "R8")),
+    ("takeaways", "Key takeaways", ("R15", "R16", "R17", "R18", "R19")),
+    ("links", "Links and Thank You page", ("R10", "R20")),
+    ("cleanup", "Number and chart clean-up", ("R9", "R11", "R12", "R13", "R14", "R21")),
+]
+GROUP_OF_RULE = {rule_id: group_id for group_id, _title, ids in RULE_GROUPS for rule_id in ids}
+# Rules that rewrite visible text: the review list shows their before -> after.
+TEXT_CHANGE_RULES = ("R9", "R13", "R15", "R16", "R17", "R18")
 
 # Execution order for non-deleting rules: column removal before width fitting,
 # takeaway text before the auto-fit that sizes the boxes around it.

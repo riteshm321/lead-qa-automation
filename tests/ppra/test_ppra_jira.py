@@ -3,8 +3,8 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from core.jira_client import (
-    JiraError, build_ppra_comment_body, download_attachment, fetch_ppra_ticket, get_issue, post_ppra_deck,
-    ppra_comment_preview,
+    JiraError, build_ppra_comment_body, download_attachment, fetch_ppra_ticket, get_issue, get_issue_status,
+    get_transitions, post_ppra_deck, ppra_comment_preview, transition_issue,
 )
 
 BASE = "https://example.atlassian.net"
@@ -92,3 +92,52 @@ def test_post_ppra_deck_uploads_then_comments():
     assert manager.mock_calls[0] == call.upload(BASE, "me@x.com", "tok", "TM-10001", "TM-10001.pptx", b"deck")
     assert manager.mock_calls[1][0] == "post"
     assert manager.mock_calls[1].args[4]["content"][0]["content"][1]["type"] == "mention"
+
+
+TRANSITIONS = {"expand": "transitions", "transitions": [
+    {"id": "21", "name": "In Progress", "to": {"name": "In Progress", "id": "3"}},
+    {"id": "31", "name": "Send to Client", "to": {"name": "Client Review", "id": "10010"}},
+    {"id": "41", "name": "Done"},
+]}
+
+
+def test_get_transitions_lists_id_name_and_target_status():
+    response = MagicMock(status_code=200)
+    response.json.return_value = TRANSITIONS
+    with patch("core.jira_client.requests.get", return_value=response) as mock_get:
+        transitions = get_transitions(BASE + "/", "me@x.com", "tok", "TM-10001")
+    args, kwargs = mock_get.call_args
+    assert args[0] == f"{BASE}/rest/api/3/issue/TM-10001/transitions"
+    assert kwargs["auth"] == ("me@x.com", "tok")
+    assert transitions == [{"id": "21", "name": "In Progress", "to": "In Progress"},
+                           {"id": "31", "name": "Send to Client", "to": "Client Review"},
+                           {"id": "41", "name": "Done", "to": ""}]
+
+
+def test_get_transitions_raises_on_error():
+    with patch("core.jira_client.requests.get", return_value=MagicMock(status_code=403, text="no")):
+        with pytest.raises(JiraError, match="403"):
+            get_transitions(BASE, "me@x.com", "tok", "TM-1")
+
+
+def test_transition_issue_posts_the_transition_id():
+    with patch("core.jira_client.requests.post", return_value=MagicMock(status_code=204)) as mock_post:
+        transition_issue(BASE + "/", "me@x.com", "tok", "TM-10001", "31")
+    args, kwargs = mock_post.call_args
+    assert args[0] == f"{BASE}/rest/api/3/issue/TM-10001/transitions"
+    assert kwargs["json"] == {"transition": {"id": "31"}}
+    assert kwargs["auth"] == ("me@x.com", "tok")
+
+
+def test_transition_issue_raises_on_error():
+    with patch("core.jira_client.requests.post", return_value=MagicMock(status_code=400, text="field required")):
+        with pytest.raises(JiraError, match="400.*field required"):
+            transition_issue(BASE, "me@x.com", "tok", "TM-1", "31")
+
+
+def test_get_issue_status_reads_the_status_name():
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"fields": {"status": {"name": "In Progress", "id": "3"}}}
+    with patch("core.jira_client.requests.get", return_value=response) as mock_get:
+        assert get_issue_status(BASE, "me@x.com", "tok", "TM-1") == "In Progress"
+    assert mock_get.call_args.kwargs["params"] == {"fields": "status"}

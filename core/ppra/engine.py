@@ -43,6 +43,19 @@ class ScanResult:
     def found_rule_ids(self) -> list[str]:
         return [rid for rid, items in self.findings.items() if items]
 
+    def skipped_rule_ids(self) -> list[str]:
+        return [rid for rid, items in self.findings.items() if not items]
+
+    def change_count(self, rule_ids=None) -> int:
+        """Findings of the non-deleting rules (all, or only rule_ids)."""
+        return sum(len(items) for rid, items in self.findings.items()
+                   if not RULES_BY_ID[rid].deletes and (rule_ids is None or rid in rule_ids))
+
+    def slides_to_remove(self, rule_ids=None) -> list[int]:
+        """Distinct 1-based slide numbers the deleting rules picked."""
+        return sorted({f.slide_index + 1 for rid, items in self.findings.items()
+                       if RULES_BY_ID[rid].deletes and (rule_ids is None or rid in rule_ids) for f in items})
+
 
 def load(pptx_bytes: bytes):
     return Presentation(io.BytesIO(pptx_bytes))

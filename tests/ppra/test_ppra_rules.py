@@ -372,3 +372,78 @@ def test_r20_replaces_ml_team_member_placeholders():
     run_rule(prs, "R20", "CS + Display", jira=OWNER)
     assert paragraphs(shape_named(slide_of(prs, "thank_you"), "TextBox 7")) == [
         "Pat Lee", "CXM", "plee@madisonlogic.com"]
+
+
+# ---------------------------------------------------------------- report types / channels
+
+def _pacing_only(names, units=("100", "100", "0")):
+    prs = d.new_prs()
+    d.pacing(prs, [[name, "$1,000", "$1,000", "$0", *units, "100%"] for name in names])
+    return prs
+
+
+def _unit_cells(prs):
+    return [[c.text for c in r.cells][4] for r in list(pacing_table(prs).table.rows)[1:]]
+
+
+def test_r1_unit_per_row_from_campaign_keywords():
+    prs = _pacing_only(["Client Display Q1", "Client Banner Q1", "Client CTV Q1", "Client OTT Q1",
+                        "Client Spotify Q1", "Client Podcast Q1", "Client LinkedIn Q1", "Client Lead Gen Q1",
+                        "Client Content Syndication Q1", "Client CS Q1"])
+    run_rule(prs, "R1", "CS + Display + Audio + CTV")
+    assert _unit_cells(prs) == ["100 Imps"] * 7 + ["100 Leads"] * 3
+
+
+@pytest.mark.parametrize("report_type, unit", [
+    ("CS", "Leads"), ("Display", "Imps"), ("CTV", "Imps"), ("Audio", "Imps"), ("LinkedIn", "Imps"),
+    ("CTV + Display", "Imps"),
+])
+def test_r1_falls_back_to_a_single_unit_report_type(report_type, unit):
+    prs = _pacing_only(["Acme_NAMER_ABM_Q226"])
+    run_rule(prs, "R1", report_type)
+    assert _unit_cells(prs) == [f"100 {unit}"]
+
+
+@pytest.mark.parametrize("report_type", ["CS + Display", "CS + Audio", "CS + Display + CTV",
+                                         "CS + Display + Audio + CTV"])
+def test_r1_mixed_report_type_leaves_unknown_rows_for_attention(report_type):
+    from core.ppra import engine
+    prs = _pacing_only(["Acme_NAMER_ABM_Q226", "Acme Display Q1"])
+    run_rule(prs, "R1", report_type)
+    assert _unit_cells(prs) == ["100", "100 Imps"]
+    messages = [str(a) for a in engine.attention_items(analyze(prs), report_type)]
+    assert any("Acme_NAMER_ABM_Q226" in m and "Imps or Leads" in m for m in messages)
+
+
+def test_r2_all_impression_channels_total_as_one_imps_line():
+    prs = _pacing_only(["Client Display Q1", "Client CTV Q1", "Client Audio Q1", "Client CS Q1"])
+    run_rule(prs, "R1", "CS + Display + Audio + CTV")
+    findings = run_rule(prs, "R2", "CS + Display + Audio + CTV")
+    assert findings[0].summary == "Add Total row: 300 Imps + 100 Leads, $4,000"
+    total = last(pacing_table(prs).table.rows).cells
+    assert [p.text for p in total[4].text_frame.paragraphs] == ["300 Imps", "100 Leads"]
+    assert [p.text for p in total[7].text_frame.paragraphs] == ["100%", "100%"]
+
+
+@pytest.mark.parametrize("report_type, expected", [
+    ("CS", 0), ("Display", 1), ("CTV", 1), ("Audio", 1), ("LinkedIn", 1), ("CTV + Display", 1),
+    ("CS + Audio", 1), ("CS + Display + Audio + CTV", 1),
+])
+def test_r9_runs_for_any_report_with_an_impression_channel(report_type, expected):
+    assert len(RULES_BY_ID["R9"].applies(analyze(d.combined_deck()), report_type, {})) == expected
+
+
+def test_r9_keeps_a_ctv_column_with_data_and_its_title():
+    prs = d.new_prs()
+    d.top_accounts_display(prs, [["Wells", "wells.com", "7,294", "12", "0", "8", "19"]])
+    assert run_rule(prs, "R9", "CTV + Display") == []
+    assert analyze(prs).slides[0].title == f"Top Accounts {d.EN_DASH} Display and CTV"
+
+
+def test_every_finding_has_a_short_summary():
+    from core.ppra.rules import RULES
+    for deck_fn, report_type in ((d.cs_deck, "CS"), (d.combined_deck, "CS + Display"), (d.display_deck, "Display")):
+        deck = analyze(deck_fn())
+        for rule in RULES:
+            for finding in rule.applies(deck, report_type, OWNER):
+                assert finding.summary and "slide" not in finding.summary.lower().split(" ")[:1]

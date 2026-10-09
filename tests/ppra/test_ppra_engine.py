@@ -91,3 +91,13 @@ def test_delete_slides_removes_section_list_references():
     referenced = {e.get("id") for e in prs.part._element.iter(f"{{{ns}}}sldId")}
     assert referenced == remaining
     Presentation(io.BytesIO(engine.save(prs)))
+
+
+def test_scan_counts_for_the_review_summary():
+    result = engine.scan(d.to_bytes(d.cs_deck()), "CS", OWNER)
+    deleting = {r.id for r in RULES if r.deletes}
+    assert result.change_count() == sum(len(v) for k, v in result.findings.items() if k not in deleting)
+    assert result.slides_to_remove() == [11, 12]  # empty Top Accounts (R4) + Custom Question example (R7)
+    assert result.slides_to_remove(["R7"]) == [12]
+    assert result.change_count(["R1"]) == 1
+    assert set(result.skipped_rule_ids()) == {r.id for r in RULES} - set(result.found_rule_ids())

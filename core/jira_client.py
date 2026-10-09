@@ -321,7 +321,42 @@ def post_ppra_deck(
     base_url: str, email: str, api_token: str, ticket_key: str,
     deck_bytes: bytes, reporter_account_id: str, reporter_name: str,
 ) -> None:
-    """Attach the formatted deck as <TICKET>.pptx, then post the comment."""
+    """Attach the deck as <TICKET>.pptx, then post the comment."""
     upload_attachment(base_url, email, api_token, ticket_key, f"{ticket_key}.pptx", deck_bytes)
     post_comment_body(base_url, email, api_token, ticket_key,
                       build_ppra_comment_body(reporter_account_id, reporter_name))
+
+
+# ---------------------------------------------------------------- workflow status
+
+def get_issue_status(base_url: str, email: str, api_token: str, ticket_key: str) -> str:
+    """The issue's current workflow status name ("" when Jira sends none)."""
+    fields = get_issue(base_url, email, api_token, ticket_key, ["status"]).get("fields") or {}
+    return _field_text((fields.get("status") or {}).get("name"))
+
+
+def get_transitions(base_url: str, email: str, api_token: str, ticket_key: str) -> list[dict]:
+    """The workflow transitions the caller can make on the issue right now,
+    as [{"id", "name", "to"}] - "to" is the status the transition leads to."""
+    url = f"{base_url.rstrip('/')}/rest/api/3/issue/{ticket_key}/transitions"
+    response = requests.get(url, auth=(email, api_token), headers={"Accept": "application/json"}, timeout=15)
+    if response.status_code != 200:
+        raise JiraError(f"Jira returned {response.status_code} for {ticket_key}: {response.text[:300]}")
+    return [
+        {"id": str(t.get("id", "")), "name": t.get("name", ""), "to": _field_text((t.get("to") or {}).get("name"))}
+        for t in response.json().get("transitions") or []
+    ]
+
+
+def transition_issue(base_url: str, email: str, api_token: str, ticket_key: str, transition_id: str) -> None:
+    """Move the issue through one workflow transition (an id from get_transitions)."""
+    url = f"{base_url.rstrip('/')}/rest/api/3/issue/{ticket_key}/transitions"
+    response = requests.post(
+        url,
+        json={"transition": {"id": str(transition_id)}},
+        auth=(email, api_token),
+        headers={"Accept": "application/json"},
+        timeout=15,
+    )
+    if response.status_code not in (200, 204):
+        raise JiraError(f"Jira returned {response.status_code} for {ticket_key}: {response.text[:300]}")
