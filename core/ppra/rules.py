@@ -407,7 +407,6 @@ def _pacing_totals(rows, cols, deck, report_type) -> list[list[str]]:
                 out[cols[key]] = [_fmt_money(sum(values))]
     units = {}
     order = []
-    all_goal = all_delivered = 0.0
     for r in data:
         unit = row_unit(rows[r][cols["campaign"]], rows[r], cols, deck, report_type) or ""
         if unit not in units:
@@ -416,14 +415,16 @@ def _pacing_totals(rows, cols, deck, report_type) -> list[list[str]]:
         for key in _UNIT_KEYS:
             if key in cols:
                 units[unit][key] += _parse_number(rows[r][cols[key]]) or 0.0
-        all_goal += _parse_number(rows[r][cols["ug"]]) or 0.0
-        if "ud" in cols:
-            all_delivered += _parse_number(rows[r][cols["ud"]]) or 0.0
     for key in _UNIT_KEYS:
         if key in cols:
             out[cols[key]] = [f"{_fmt_int_or_float(units[u][key])} {u}".strip() for u in order]
-    if "pct" in cols and all_goal > 0:
-        out[cols["pct"]] = [f"{_round_half_up(all_delivered * 100 / all_goal)}%"]
+    # % Delivered per unit type (Imps and Leads each against their own goal),
+    # one line per type like the units cells - never a blend of the two.
+    if "pct" in cols and "ud" in cols:
+        pcts = [f"{_round_half_up(units[u]['ud'] * 100 / units[u]['ug'])}%"
+                for u in order if units[u].get("ug")]
+        if pcts:
+            out[cols["pct"]] = pcts
     return out
 
 
@@ -616,7 +617,8 @@ def _apply_delete(prs, finding):
 # ---------------------------------------------------------------- R9 CTV column
 
 def _find_r9(deck, report_type, jira_info):
-    if report_type not in (REPORT_CS_DISPLAY, REPORT_OTHER):
+    # Any report that includes Display (plain Display too); never CS-only.
+    if report_type not in (REPORT_DISPLAY, REPORT_CS_DISPLAY, REPORT_OTHER):
         return []
     findings = []
     for info in deck.of_kind("top_accounts_display", "top_accounts"):

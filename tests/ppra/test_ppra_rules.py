@@ -89,7 +89,8 @@ def test_r2_mixed_units_are_two_paragraphs_in_one_cell():
     total = last(pacing_table(prs).table.rows).cells
     assert [p.text for p in total[4].text_frame.paragraphs] == ["320,000 Imps", "181 Leads"]
     assert total[1].text == "$19,946"
-    assert total[7].text == "100%"
+    # % Delivered per unit type, Imps then Leads, never blended.
+    assert [p.text for p in total[7].text_frame.paragraphs] == ["100%", "100%"]
 
 
 def test_r2_percent_is_sum_delivered_over_sum_goal():
@@ -155,9 +156,9 @@ def test_r8_creative_sets_only_in_cs_sections():
 
 # ---------------------------------------------------------------- R9 / R21 tables
 
-def test_r9_drops_zero_ctv_column_and_retitles_for_combined_reports():
+def test_r9_drops_zero_ctv_column_and_retitles_for_reports_with_display():
     prs = d.combined_deck()
-    assert run_rule(prs, "R9", "Display") == []  # not a combined report
+    assert run_rule(prs, "R9", "CS") == []  # CS-only reports never touch it
     findings = run_rule(prs, "R9", "CS + Display")
     assert len(findings) == 1
     slide = prs.slides[findings[0].slide_index]
