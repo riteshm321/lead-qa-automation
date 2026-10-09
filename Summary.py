@@ -39,6 +39,7 @@ pg = st.navigation({
         st.Page("pages/7_Convertr.py", title="Convertr", icon=":material/link:"),
         st.Page("pages/8_Enhancio.py", title="Enhancio", icon=":material/link:"),
         st.Page("pages/9_Integrate.py", title="Integrate", icon=":material/link:"),
+        st.Page("pages/10_PPRA_Reports.py", title="PPRA Reports", icon=":material/slideshow:"),
     ],
 })
 pg.run()

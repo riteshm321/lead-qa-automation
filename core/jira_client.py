@@ -218,3 +218,110 @@ def post_comment_body(base_url: str, email: str, api_token: str, ticket_key: str
     """Post a pre-built ADF document (see build_comment_body) as a new
     comment on a Jira Cloud issue."""
     _post(base_url, email, api_token, ticket_key, adf_body)
+
+
+# ---------------------------------------------------------------- PPRA Reports
+
+PPRA_FIELDS = {
+    "client_name": "customfield_12032",
+    "report_format": "customfield_12167",
+    "products": "customfield_12035",
+    "flight_start": "customfield_12028",
+    "flight_end": "customfield_12029",
+    "owner_name": "customfield_12051",
+    "owner_title": "customfield_12052",
+    "owner_email": "customfield_12053",
+}
+PPRA_COMMENT_LINES = ("PFA PPR for your reference. Let me know if you require any changes.", "Thanks")
+
+
+def get_issue(base_url: str, email: str, api_token: str, ticket_key: str, fields: list[str] | None = None) -> dict:
+    """GET one Jira Cloud issue as JSON (only the named fields when given)."""
+    url = f"{base_url.rstrip('/')}/rest/api/3/issue/{ticket_key}"
+    params = {"fields": ",".join(fields)} if fields else None
+    response = requests.get(
+        url, params=params, auth=(email, api_token), headers={"Accept": "application/json"}, timeout=15,
+    )
+    if response.status_code != 200:
+        raise JiraError(f"Jira returned {response.status_code} for {ticket_key}: {response.text[:300]}")
+    return response.json()
+
+
+def _field_text(value) -> str:
+    # Custom fields come back as plain strings, select options ({"value": ...}),
+    # users ({"displayName": ...}) or lists of those, depending on field type.
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("value", "displayName", "name", "emailAddress"):
+            if value.get(key):
+                return str(value[key]).strip()
+        return ""
+    if isinstance(value, list):
+        return ", ".join(t for t in (_field_text(v) for v in value) if t)
+    return str(value).strip()
+
+
+def fetch_ppra_ticket(base_url: str, email: str, api_token: str, ticket_key: str) -> dict:
+    """The PPRA ticket fields the PPRA Reports page needs, flattened."""
+    fields = ["summary", "reporter", "attachment", *PPRA_FIELDS.values()]
+    issue_fields = get_issue(base_url, email, api_token, ticket_key, fields).get("fields") or {}
+    products_raw = issue_fields.get(PPRA_FIELDS["products"]) or []
+    if not isinstance(products_raw, list):
+        products_raw = [products_raw]
+    reporter = issue_fields.get("reporter") or {}
+    attachments = [
+        {"id": str(a.get("id", "")), "filename": a.get("filename", ""), "size": a.get("size", 0),
+         "content_url": a.get("content", "")}
+        for a in issue_fields.get("attachment") or []
+        if str(a.get("filename", "")).lower().endswith(".pptx")
+    ]
+    result = {
+        "key": ticket_key,
+        "summary": _field_text(issue_fields.get("summary")),
+        "products": [t for t in (_field_text(p) for p in products_raw) if t],
+        "reporter": {"accountId": reporter.get("accountId", ""), "displayName": reporter.get("displayName", "")},
+        "attachments": attachments,
+    }
+    for name, field_id in PPRA_FIELDS.items():
+        if name != "products":
+            result[name] = _field_text(issue_fields.get(field_id))
+    return result
+
+
+def download_attachment(email: str, api_token: str, content_url: str) -> bytes:
+    """Bytes of a Jira attachment from its `content` URL (Jira redirects to
+    the media store; requests follows that with the same auth)."""
+    response = requests.get(content_url, auth=(email, api_token), timeout=60, allow_redirects=True)
+    if response.status_code != 200:
+        raise JiraError(f"Jira returned {response.status_code} downloading the attachment: {response.text[:300]}")
+    return response.content
+
+
+def build_ppra_comment_body(reporter_account_id: str, reporter_name: str) -> dict:
+    """ADF for "Hi @reporter / PFA PPR ... / Thanks" with a real mention node,
+    so the reporter is notified."""
+    if reporter_account_id:
+        greeting = [{"type": "text", "text": "Hi "},
+                    {"type": "mention", "attrs": {"id": reporter_account_id, "text": f"@{reporter_name}"}}]
+    else:
+        greeting = [{"type": "text", "text": f"Hi {reporter_name}".strip()}]
+    content = [{"type": "paragraph", "content": greeting}]
+    content += [{"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in PPRA_COMMENT_LINES]
+    return {"type": "doc", "version": 1, "content": content}
+
+
+def ppra_comment_preview(reporter_name: str) -> str:
+    return "\n".join([f"Hi @{reporter_name}", *PPRA_COMMENT_LINES])
+
+
+def post_ppra_deck(
+    base_url: str, email: str, api_token: str, ticket_key: str,
+    deck_bytes: bytes, reporter_account_id: str, reporter_name: str,
+) -> None:
+    """Attach the formatted deck as <TICKET>.pptx, then post the comment."""
+    upload_attachment(base_url, email, api_token, ticket_key, f"{ticket_key}.pptx", deck_bytes)
+    post_comment_body(base_url, email, api_token, ticket_key,
+                      build_ppra_comment_body(reporter_account_id, reporter_name))
