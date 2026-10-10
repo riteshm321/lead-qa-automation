@@ -22,6 +22,7 @@ from core.ppra.rules import (
 )
 
 _P14_NS = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
 @dataclass
@@ -89,6 +90,12 @@ def load(pptx_bytes: bytes):
 
 
 def save(prs) -> bytes:
+    # python-pptx names an added slide slide{count + 1}.xml and renumbers slide
+    # parts only when prs.slides is first read, so adding slides after a
+    # delete can reuse a part name an existing slide still holds; the zip then
+    # carries two entries with that name and PowerPoint offers to repair it.
+    # Renumber every slide part in deck order right before writing.
+    prs.part.rename_slide_parts([entry.rId for entry in prs.slides._sldIdLst])
     buffer = io.BytesIO()
     prs.save(buffer)
     return buffer.getvalue()
@@ -123,6 +130,7 @@ def delete_slides(prs, indices) -> None:
     opens the file without a repair prompt."""
     sld_id_lst = prs.slides._sldIdLst
     entries = list(sld_id_lst)
+    removed = {id(prs.slides[index].part) for index in set(indices)}
     for index in sorted(set(indices), reverse=True):
         entry = entries[index]
         slide_id, r_id = entry.get("id"), entry.rId
@@ -131,6 +139,28 @@ def delete_slides(prs, indices) -> None:
         for ref in prs.part._element.iter(f"{{{_P14_NS}}}sldId"):
             if ref.get("id") == slide_id:
                 ref.getparent().remove(ref)
+    _drop_links_to(prs, removed)
+
+
+def _drop_links_to(prs, removed: set) -> None:
+    """A layout or slide can hold a slide-jump hyperlink to a deleted slide;
+    that link keeps the slide part in the package under its old name, which
+    a renumbered slide then also takes (two zip entries, repair prompt).
+    Drop such links: the hyperlink elements and their relationships."""
+    for part in list(prs.part.package.iter_parts()):
+        if id(part) in removed:
+            continue
+        stale = [r_id for r_id, rel in part.rels.items()
+                 if not rel.is_external and id(rel.target_part) in removed]
+        if not stale:
+            continue
+        element = getattr(part, "_element", None)
+        if element is not None:
+            for el in list(element.iter()):
+                if el.get(f"{{{_R_NS}}}id") in stale:
+                    el.getparent().remove(el)
+        for r_id in stale:
+            part.rels.pop(r_id)
 
 
 def _change_line(finding: Finding) -> str:

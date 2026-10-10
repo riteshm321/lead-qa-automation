@@ -678,7 +678,7 @@ def test_r24_splits_a_long_pacing_table_with_header_on_every_part_and_total_last
     parts = deck.of_kind("pacing")
     n = len(parts)
     assert n >= 2
-    assert [p.title for p in parts] == [f"[{i}/{n}] Campaign Overview and Pacing" for i in range(1, n + 1)]
+    assert [p.title for p in parts] == [f"Campaign Overview and Pacing [{i}/{n}]" for i in range(1, n + 1)]
     assert [p.index for p in parts] == list(range(parts[0].index, parts[0].index + n))  # right after it
     body = []
     for i, info in enumerate(parts):
@@ -702,7 +702,8 @@ def test_r24_summary_and_short_tables_are_left_alone():
     assert findings[0].summary.startswith("Split the pacing table across ")
     assert findings[0].summary.endswith(" slides (it runs off the slide)")
     assert RULES_BY_ID["R24"].applies(analyze(d.cs_deck()), "CS", {}) == []
-    assert split_part("[2/3] Campaign Overview") == (2, 3) and split_part("Campaign Overview") is None
+    assert split_part("Campaign Overview [2/3]") == (2, 3) and split_part("Campaign Overview") is None
+    assert split_part("[2/3] Campaign Overview") == (2, 3)  # the earlier leading form
 
 
 def test_duplicate_slide_copies_charts_and_pictures(tmp_path):
@@ -728,3 +729,128 @@ def test_duplicate_slide_copies_charts_and_pictures(tmp_path):
     assert [s.name for s in copy_slide.shapes] == [s.name for s in list(prs.slides)[0].shapes]
     assert list(copy_slide.shapes)[1].chart.plots[0].categories[0] == "A"
     assert any(r.reltype.endswith("/image") for r in copy_slide.part.rels.values())
+
+
+def _package_problems(data: bytes) -> list[str]:
+    """Structural faults PowerPoint repairs: duplicate zip entries, broken
+    or duplicate slide ids, rels to missing parts, parts with no content type."""
+    import posixpath
+    import zipfile
+    from collections import Counter
+
+    from lxml import etree
+    problems = []
+    z = zipfile.ZipFile(io.BytesIO(data))
+    entries = z.namelist()
+    problems += [f"duplicate entry {n}" for n, c in Counter(entries).items() if c > 1]
+    names = set(entries)
+    ct = etree.fromstring(z.read("[Content_Types].xml"))
+    overrides = {e.get("PartName").lstrip("/") for e in ct if e.tag.endswith("Override")}
+    defaults = {e.get("Extension").lower() for e in ct if e.tag.endswith("Default")}
+    problems += [f"override for missing {n}" for n in overrides - names]
+    problems += [f"no content type for {n}" for n in names
+                 if n not in overrides and n.rsplit(".", 1)[-1].lower() not in defaults]
+    for n in names:
+        if not n.endswith(".rels"):
+            continue
+        base = n.replace("_rels/", "")[:-len(".rels")]
+        folder = posixpath.dirname(base)
+        for rel in etree.fromstring(z.read(n)):
+            if rel.get("TargetMode") == "External":
+                continue
+            target = rel.get("Target")
+            path = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join(folder, target))
+            if path not in names:
+                problems.append(f"{n} -> missing {target}")
+    pres = etree.fromstring(z.read("ppt/presentation.xml"))
+    ids = [e.get("id") for e in pres.find(qn("p:sldIdLst"))]
+    if len(set(ids)) != len(ids) or any(int(i) < 256 for i in ids):
+        problems.append(f"bad slide ids {ids}")
+    return problems
+
+
+def test_split_after_a_delete_keeps_the_package_valid():
+    """R22/R4-R8 deletions then the R24 split: python-pptx names added slides
+    slide{count + 1}.xml, which an existing slide still held, so the saved
+    zip had two entries per name and PowerPoint asked to repair the file."""
+    from core.ppra import engine
+    prs = d.long_pacing_deck()
+    d.custom_question(prs)  # R7 deletes it
+    d.custom_question(prs)
+    lst = prs.slides._sldIdLst
+    for entry in list(lst)[-2:]:  # put the deleted slides before the pacing slide
+        lst.remove(entry)
+        lst.insert(1, entry)
+    out, log, _att = engine.format(d.to_bytes(prs), "CS + Display", OWNER)
+    assert any(line.startswith("R7:") for line in log) and any(line.startswith("R24:") for line in log)
+    assert _package_problems(out) == []
+    deck = analyze(Presentation(io.BytesIO(out)))
+    parts = deck.of_kind("pacing")
+    n = len(parts)
+    assert n >= 2 and [p.index for p in parts] == list(range(1, 1 + n))
+    assert [p.title for p in parts] == [f"Campaign Overview and Pacing [{i}/{n}]" for i in range(1, n + 1)]
+
+
+def test_r24_converts_an_old_leading_marker():
+    from core.ppra.rules import _mark_title
+    prs = d.new_prs()
+    slide = d.blank(prs, "[1/2] Campaign Overview and Pacing")
+    title_id = analyze(prs).slides[0].title_shape_id
+    _mark_title(slide, title_id, 1, 3)
+    _mark_title(slide, title_id, 1, 3)
+    assert analyze(prs).slides[0].title == "Campaign Overview and Pacing [1/3]"
+
+
+# ---------------------------------------------------------------- R26 duplicate highlight items
+
+def _highlights_with_dupes(prs):
+    slide = d.blank(prs, "Campaign Highlights", title_name="Title 7")
+    box = d.textbox(slide, "TextBox 9", ["Top Industries reached and engaged", "Fintech \u2013 100%",
+                                         "Fintech - 100%", " fintech  \u2013 100% ", "Banking \u2013 50%",
+                                         "Top Job Titles", "Fintech \u2013 100%", "Analyst", "Analyst",
+                                         "Top Job Titles"])
+    paras = box.text_frame.paragraphs
+    for i in (1, 2, 3, 4, 6, 7, 8):
+        paras[i].level = 1
+    paras[1].runs[0].font.bold = True
+    return box
+
+
+def test_r26_removes_duplicate_sub_items_only():
+    prs = d.new_prs()
+    _highlights_with_dupes(prs)
+    findings = run_rule(prs, "R26")
+    assert [f.summary for f in findings] == ["Remove 3 duplicate items on Campaign Highlights"]
+    box = shape_named(slide_of(reopen(prs), "highlights"), "TextBox 9")
+    assert [p.text for p in box.text_frame.paragraphs] == [
+        "Top Industries reached and engaged", "Fintech \u2013 100%", "Banking \u2013 50%",
+        "Top Job Titles", "Fintech \u2013 100%", "Analyst", "Top Job Titles"]  # headings stay
+    assert box.text_frame.paragraphs[1].runs[0].font.bold is True
+    assert run_rule(prs, "R26") == []  # idempotent
+
+
+def test_delete_drops_layout_links_to_the_deleted_slide():
+    """A layout shape with a slide-jump link to a deleted slide kept that
+    slide's part in the package under its old name, which a renumbered slide
+    then took too (two zip entries, repair prompt)."""
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    from core.ppra import engine
+    prs = d.cs_deck()
+    example = next(s.slide for s in analyze(prs).of_kind("custom_question"))  # R7 deletes it
+    lst = prs.slides._sldIdLst
+    entry = next(e for e in lst if int(e.get("id")) == example.slide_id)
+    lst.remove(entry)
+    lst.insert(1, entry)  # early, so a later slide is renumbered onto its part name
+    prs = reopen(prs)  # part names follow the new order
+    example = next(s.slide for s in analyze(prs).of_kind("custom_question"))
+    layout = prs.slides[0].slide_layout
+    r_id = layout.part.relate_to(example.part, RT.SLIDE)
+    box = prs.slides[0].shapes.add_textbox(0, 0, 100, 100)._element
+    layout.shapes._spTree.append(box)  # moves it onto the layout
+    c_nv_pr = box.nvSpPr.cNvPr
+    link = c_nv_pr.makeelement(qn("a:hlinkClick"), {qn("r:id"): r_id, "action": "ppaction://hlinksldjump"})
+    c_nv_pr.append(link)
+    out, log, _att = engine.format(d.to_bytes(prs), "CS", OWNER)
+    assert any(line.startswith("R7:") for line in log)
+    assert _package_problems(out) == []

@@ -1,4 +1,4 @@
-"""One function pair per formatting rule (R1-R25 of the PPRA spec).
+"""One function pair per formatting rule (R1-R26 of the PPRA spec).
 
 Every rule has applies(deck, report_type, jira_info) -> [Finding] and
 apply(prs, finding). applies() only reports work that is still needed, so a
@@ -566,15 +566,17 @@ def _planned_pacing_widths(widths: list[int], cols: dict) -> list[int]:
 
 # ---------------------------------------------------------------- R24 pacing split
 
-_SPLIT_RE = re.compile(r"^\[(\d+)/(\d+)\]\s*")
+_SPLIT_RE = re.compile(r"\s*\[(\d+)/(\d+)\]\s*$")
+_OLD_SPLIT_RE = re.compile(r"^\s*\[(\d+)/(\d+)\]\s*")  # earlier leading form
 _DEFAULT_TABLE_PT = 12.0
 _FOOTER_GAP = 45720  # 0.05 in clear of the footer bar
 _NO_FOOTER_MARGIN = 457200  # 0.5 in when the layout has no footer shape
 
 
 def split_part(title: str) -> tuple[int, int] | None:
-    """(i, n) when a pacing title already carries an "[i/n]" split prefix."""
-    m = _SPLIT_RE.match(title or "")
+    """(i, n) when a pacing title already carries an "[i/n]" split marker:
+    trailing ("Title [1/2]"), or the earlier leading form ("[1/2] Title")."""
+    m = _SPLIT_RE.search(title or "") or _OLD_SPLIT_RE.match(title or "")
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
@@ -663,20 +665,23 @@ def _find_r24(deck, report_type, jira_info):
             continue
         findings.append(Finding(
             "R24", info.index, f"Split the pacing table on {_slide_label(info)} across {len(parts)} slides",
-            before=info.title, after=f"[1/{len(parts)}] {info.title}",
+            before=info.title, after=f"{info.title} [1/{len(parts)}]",
             data={"shape_id": shape.shape_id, "parts": len(parts)},
             summary=f"Split the pacing table across {len(parts)} slides (it runs off the slide)"))
     return findings
 
 
-def _prefix_title(slide, title_shape_id: int | None, i: int, n: int) -> None:
+def _mark_title(slide, title_shape_id: int | None, i: int, n: int) -> None:
+    """Put " [i/n]" after the title, dropping any marker it already has
+    (trailing, or the earlier leading form)."""
     shape = find_shape(slide, title_shape_id) if title_shape_id else None
     if shape is None:
         return
     for p in shape.text_frame.paragraphs:
         runs = [r for r in p.runs if r.text.strip()]
         if runs:
-            runs[0].text = f"[{i}/{n}] " + _SPLIT_RE.sub("", runs[0].text.lstrip())
+            runs[0].text = _OLD_SPLIT_RE.sub("", runs[0].text)
+            runs[-1].text = _SPLIT_RE.sub("", runs[-1].text.rstrip()) + f" [{i}/{n}]"
             return
 
 
@@ -705,7 +710,7 @@ def _apply_r24(prs, finding):
     slides = [info.slide] + [duplicate_slide(prs, info.index, info.index + k) for k in range(1, n)]
     for k, (slide, part) in enumerate(zip(slides, parts), start=1):
         _keep_rows(find_shape(slide, finding.data["shape_id"]), {0, *part})
-        _prefix_title(slide, info.title_shape_id, k, n)
+        _mark_title(slide, info.title_shape_id, k, n)
 
 
 # ---------------------------------------------------------------- deletions (R4-R8)
@@ -1146,6 +1151,57 @@ def _apply_r13(prs, finding):
     for p in _shape(prs, finding).text_frame.paragraphs:
         for run in p.runs:
             run.text = _fix_size_band(run.text)
+
+
+# ---------------------------------------------------------------- R26 duplicate highlight items
+
+def _item_key(text: str) -> str:
+    text = text.replace("\u2013", "-").replace("\u2014", "-")
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _duplicate_items(shape) -> list:
+    """Sub-list paragraphs (level > 0) repeating an earlier item under the
+    same parent bullet; headings (level 0) are never picked."""
+    dupes, seen = [], {}
+    for p in shape.text_frame.paragraphs:
+        level, key = p.level, _item_key(p.text)
+        for deeper in [lv for lv in seen if lv > level]:
+            del seen[deeper]
+        if not key:
+            continue
+        if level == 0:
+            seen.clear()
+            continue
+        keys = seen.setdefault(level, set())
+        if key in keys:
+            dupes.append(p)
+        else:
+            keys.add(key)
+    return dupes
+
+
+def _find_r26(deck, report_type, jira_info):
+    findings = []
+    for info in deck.of_kind("highlights"):
+        for shape in info.slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            dupes = _duplicate_items(shape)
+            if dupes:
+                n = len(dupes)
+                items = "item" if n == 1 else "items"
+                findings.append(Finding(
+                    "R26", info.index, f"Remove {n} duplicate {items} on {_slide_label(info)}",
+                    before=", ".join(norm_text(p.text) for p in dupes), after="(removed)",
+                    data={"shape_id": shape.shape_id},
+                    summary=f"Remove {n} duplicate {items} on Campaign Highlights"))
+    return findings
+
+
+def _apply_r26(prs, finding):
+    for p in _duplicate_items(_shape(prs, finding)):
+        p._p.getparent().remove(p._p)
 
 
 # ---------------------------------------------------------------- R14 chart labels
@@ -2016,6 +2072,7 @@ RULES = [
     Rule("R11", "Round long decimals to 2 places", _find_r11, _apply_r11),
     Rule("R12", "Remove empty 'site visits generated' lines", _find_r12, _apply_r12),
     Rule("R13", "Campaign Highlights: format company sizes", _find_r13, _apply_r13),
+    Rule("R26", "Campaign Highlights: remove duplicate list items", _find_r26, _apply_r26),
     Rule("R14", "Bold chart data labels (Country pie, Program Performance doughnut)", _find_r14, _apply_r14),
     Rule("R15", "Audience Reach takeaway: top intent topics", _find_r15, _apply_r15),
     Rule("R16", "Content Insights takeaway: top job titles", _find_r16, _apply_r16),
@@ -2035,7 +2092,7 @@ RULE_GROUPS = [
     ("remove", "Slides to remove", ("R22", "R4", "R5", "R6", "R7", "R8")),
     ("takeaways", "Key takeaways", ("R25", "R15", "R16", "R17", "R18", "R23", "R19")),
     ("links", "Links and Thank You page", ("R10", "R20")),
-    ("cleanup", "Number and chart clean-up", ("R9", "R11", "R12", "R13", "R14", "R21")),
+    ("cleanup", "Number and chart clean-up", ("R9", "R11", "R12", "R13", "R26", "R14", "R21")),
 ]
 GROUP_OF_RULE = {rule_id: group_id for group_id, _title, ids in RULE_GROUPS for rule_id in ids}
 # Rules that rewrite visible text: the review list shows their before -> after.
@@ -2043,7 +2100,7 @@ TEXT_CHANGE_RULES = ("R9", "R13", "R25", "R15", "R16", "R17", "R18", "R23")
 
 # Execution order for non-deleting rules: column removal before width fitting,
 # takeaway text before the auto-fit that sizes the boxes around it.
-EXECUTION_ORDER = ["R1", "R2", "R3", "R9", "R21", "R10", "R11", "R12", "R13", "R14",
+EXECUTION_ORDER = ["R1", "R2", "R3", "R9", "R21", "R10", "R11", "R12", "R13", "R26", "R14",
                    "R25", "R15", "R16", "R17", "R18", "R23", "R19", "R20"]
 # Rules that add slides run after the deletions, on the final slide order.
 AFTER_DELETE_ORDER = ["R24"]
