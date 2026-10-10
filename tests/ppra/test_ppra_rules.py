@@ -562,36 +562,53 @@ def _halo_text(prs):
     return paragraphs(shape_named(slide_of(prs, "halo"), "Rectangle 13"))
 
 
-def test_r23_halo_ratio_from_chart():
+def _halo_box(prs):
+    return shape_named(slide_of(prs, "halo"), "Rectangle 13").text_frame
+
+
+def test_r23_standard_takeaway_from_accounts_when_there_are_no_site_visits():
+    # The real-deck case: accounts in both groups, site visits all zero.
+    prs = d.new_prs()
+    d.halo(prs, categories=("Multi-channel", "Single-channel"), accounts=(525, 293), site_visits=(0, 0),
+           value="ERROR:Division by zeroX")
+    assert len(run_rule(prs, "R23", "CS + Display")) == 1
+    tf = _halo_box(prs)
+    assert norm_text(tf.paragraphs[1].text) == (
+        "64% of engaged accounts (525 of 818) engaged across multiple channels.")
+    assert d.HALO_EXPLAINER not in tf.text  # the sentence explains itself
+    runs = tf.paragraphs[1].runs
+    numbers = [r for r in runs if r.font.bold]
+    assert [r.text for r in numbers] == ["64%", "525", "818"]
+    assert all(not r.font.bold for r in runs if r not in numbers)
+    assert run_rule(prs, "R23", "CS + Display") == []
+
+
+def test_r23_adds_the_visits_comparison_when_both_groups_have_visits():
     prs = d.new_prs()
     # single: 100 accounts, 50 visits (0.5 each); multi: 20 accounts, 40 visits (2.0 each) -> 4.0x
     d.halo(prs, categories=("Single-channel", "Two-channel", "Three-channel"), accounts=(100, 10, 10),
            site_visits=(50, 30, 10))
-    assert len(run_rule(prs, "R23", "CS + Display")) == 1
-    assert _halo_text(prs)[1:3] == ["4.0x", d.HALO_EXPLAINER]
-    run = shape_named(slide_of(prs, "halo"), "Rectangle 13").text_frame.paragraphs[1].runs[0]
-    assert run.font.bold and run.font.size.pt == 16  # the placeholder run's formatting
-    assert run_rule(prs, "R23", "CS + Display") == []
+    run_rule(prs, "R23", "CS + Display")
+    assert norm_text(_halo_box(prs).paragraphs[1].text) == (
+        "17% of engaged accounts (20 of 120) engaged across multiple channels, generating 4.0x more "
+        "website visits per account than single-channel accounts.")
 
 
 @pytest.mark.parametrize("value", ["X", "ERROR:Division by zero", "%"])
-def test_r23_single_channel_only_gets_the_fallback_sentence(value):
+def test_r23_single_channel_only(value):
     prs = d.new_prs()
     d.halo(prs, value=value)
     run_rule(prs, "R23", "CS + Display")
-    assert _halo_text(prs)[1:] == [TAKEAWAY_TEMPLATES["halo_single_channel"], ""]
-    run = shape_named(slide_of(prs, "halo"), "Rectangle 13").text_frame.paragraphs[1].runs[0]
-    assert run.font.bold and run.font.size.pt == 16
+    assert norm_text(_halo_box(prs).paragraphs[1].text) == (
+        "All 173 engaged accounts engaged through a single channel during this campaign.")
     assert run_rule(prs, "R23", "CS + Display") == []
 
 
-def test_r23_leaves_an_uncomputable_value_for_the_checklist():
-    from core.ppra import engine
+def test_halo_with_no_data_is_deleted_not_filled():
     prs = d.new_prs()
-    d.halo(prs, categories=("Single-channel", "Two-channel"), site_visits=(0, 4))
+    d.halo(prs, categories=("Multi-channel", "Single-channel"), accounts=(0, 0), site_visits=(0, 0))
     assert run_rule(prs, "R23", "CS + Display") == []
-    messages = [a.message for a in engine.attention_items(analyze(prs), "CS + Display", OWNER)]
-    assert messages == [engine.MSG_HALO]
+    assert len(_deleted_titles(prs, "R6", "CS + Display")) == 1
 
 
 # ---------------------------------------------------------------- R25 Audience Reach stat

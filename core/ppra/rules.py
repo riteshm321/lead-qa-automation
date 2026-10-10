@@ -52,11 +52,10 @@ TAKEAWAY_TEMPLATES = {
                     "Together, these two markets contributed {top_pct}% of all leads."),
     # Only used when R5 (one-country slide deletion) is switched off.
     "country_one": "{c1} delivered all leads: {p1}% ({n1} of {total} leads).",
-    # Halo Effect: the number before "Average number of website visits per
-    # account who engaged multi-channel, compared to single-channel".
-    "halo_ratio": "{ratio}x",
-    # Halo Effect with no multi-channel accounts (the platform's division by zero).
-    "halo_single_channel": "All engaged accounts engaged through a single channel during this campaign.",
+    # Halo Effect (from the slide's own chart). Numbers are bold PPRA blue.
+    "halo_multi": "{multi_pct}% of engaged accounts ({multi} of {total}) engaged across multiple channels",
+    "halo_visits": ", generating {ratio}x more website visits per account than single-channel accounts",
+    "halo_single_channel": "All {total} engaged accounts engaged through a single channel during this campaign.",
 }
 
 TOP_N = 3
@@ -761,10 +760,15 @@ def _find_r5(deck, report_type, jira_info):
 def _find_r6(deck, report_type, jira_info):
     # A one-channel report has no multi-channel engagement to show; in a
     # multi-channel report the slide stays (R23 fills its takeaway).
-    if len(report_channels(report_type)) != 1:
-        return []
-    return [_delete_finding("R6", info, f"a {report_type} report has only one channel")
-            for info in deck.of_kind("halo")]
+    # Deleted too when its chart has no data at all.
+    single = len(report_channels(report_type)) == 1
+    findings = []
+    for info in deck.of_kind("halo"):
+        if single:
+            findings.append(_delete_finding("R6", info, f"a {report_type} report has only one channel"))
+        elif halo_counts(info) is None:
+            findings.append(_delete_finding("R6", info, "the Halo Effect chart has no data"))
+    return findings
 
 
 def _find_r7(deck, report_type, jira_info):
@@ -1711,42 +1715,66 @@ def halo_placeholder_index(tf) -> int | None:
     return None
 
 
-def halo_value(info: SlideInfo) -> tuple[str, str | None]:
-    """What the Halo Effect takeaway should say, from the slide's own chart.
-
-    The chart has one bar per engagement category ("Single-channel",
-    "Two-channel", ...) with an ACCOUNTS series (accounts in that category)
-    and a Site Visits series (their website visits). The takeaway's number
-    reads "Average number of website visits per account who engaged
-    multi-channel, compared to single-channel", so it is the multiplier
-
-        (multi-channel site visits / multi-channel accounts)
-        / (single-channel site visits / single-channel accounts)
-
-    written as e.g. "2.5x", where multi-channel is every category that is
-    not single-channel. Returns ("ratio", text), ("single", None) when no
-    account engaged on more than one channel (the platform's division by
-    zero), or ("unknown", None) when the chart can't give the number.
-    """
+def halo_counts(info: SlideInfo):
+    """(single_accounts, single_visits, multi_accounts, multi_visits) from the
+    slide's chart (ACCOUNTS and Site Visits series; every category that is not
+    "Single-channel" counts as multi-channel), or None when there is no chart
+    or no account at all - the slide then has nothing to show and is deleted."""
     for chart_shape in info.charts:
         categories, series = chart_data(chart_shape.chart)
         accounts = next((v for name, v in series if "account" in name.lower()), None)
         visits = next((v for name, v in series if "site visit" in name.lower()), None)
-        if not categories or accounts is None or visits is None:
+        if not categories or accounts is None:
             continue
-        totals = {"single": [0.0, 0.0], "multi": [0.0, 0.0]}
+        visits = visits or [0] * len(categories)
+        sa = sv = ma = mv = 0.0
         for category, n_accounts, n_visits in zip(categories, accounts, visits):
-            bucket = totals["single" if "single" in category.lower() else "multi"]
-            bucket[0] += n_accounts or 0
-            bucket[1] += n_visits or 0
-        (single_accounts, single_visits), (multi_accounts, multi_visits) = totals["single"], totals["multi"]
-        if not multi_accounts:
-            return "single", None
-        if not single_accounts or not single_visits:
-            return "unknown", None
-        ratio = (multi_visits / multi_accounts) / (single_visits / single_accounts)
-        return "ratio", TAKEAWAY_TEMPLATES["halo_ratio"].format(ratio=_round_half_up(ratio, "0.1"))
-    return "unknown", None
+            if "single" in str(category).lower():
+                sa += n_accounts or 0
+                sv += n_visits or 0
+            else:
+                ma += n_accounts or 0
+                mv += n_visits or 0
+        if sa + ma <= 0:
+            return None
+        return sa, sv, ma, mv
+    return None
+
+
+def halo_parts(info: SlideInfo) -> list[tuple[str, bool]] | None:
+    """The standard Halo Effect takeaway as (text, is_number) pieces."""
+    counts = halo_counts(info)
+    if counts is None:
+        return None
+    sa, sv, ma, mv = counts
+    total = sa + ma
+    fmt = _fmt_int_or_float
+
+    def fill(key, values):
+        out = []
+        for piece in _TEMPLATE_TOKEN_RE.split(TAKEAWAY_TEMPLATES[key]):
+            if not piece:
+                continue
+            m = re.fullmatch(r"\{(\w+)\}(%?)", piece)
+            out.append((values[m.group(1)] + m.group(2), True) if m else (piece, False))
+        return out
+
+    if not ma:
+        return fill("halo_single_channel", {"total": fmt(total)})
+    parts = fill("halo_multi", {"multi_pct": str(_round_half_up(ma * 100 / total)),
+                                "multi": fmt(ma), "total": fmt(total)})
+    # The visits comparison only when both groups have visits to compare.
+    if sa and sv and mv:
+        ratio = (mv / ma) / (sv / sa)
+        parts += fill("halo_visits", {"ratio": str(_round_half_up(ratio, "0.1"))})
+    parts.append((".", False))
+    merged = []
+    for text, is_number in parts:
+        if merged and not is_number and not merged[-1][1]:
+            merged[-1] = (merged[-1][0] + text, False)
+        else:
+            merged.append((text, is_number))
+    return merged
 
 
 def _find_r23(deck, report_type, jira_info):
@@ -1756,17 +1784,14 @@ def _find_r23(deck, report_type, jira_info):
         if shape is None:
             continue
         idx = halo_placeholder_index(shape.text_frame)
-        if idx is None:
+        parts = halo_parts(info)
+        if idx is None or parts is None:  # already filled, or no data (R6 deletes it)
             continue
-        outcome, value = halo_value(info)
-        if outcome == "unknown":
-            continue
-        after = value if outcome == "ratio" else TAKEAWAY_TEMPLATES["halo_single_channel"]
         findings.append(Finding(
-            "R23", info.index, f"Fill the Halo Effect takeaway on {_slide_label(info)} from its chart",
-            before=norm_text(_p_text(shape.text_frame.paragraphs[idx]._p)), after=after,
-            data={"shape_id": shape.shape_id, "outcome": outcome, "value": after},
-            summary="Fill the Halo Effect takeaway from its chart"))
+            "R23", info.index, f"Write the Halo Effect takeaway on {_slide_label(info)} from its chart",
+            before=norm_text(_p_text(shape.text_frame.paragraphs[idx]._p)),
+            after="".join(text for text, _number in parts), data={"shape_id": shape.shape_id},
+            summary="Write the Halo Effect takeaway from its chart"))
     return findings
 
 
@@ -1775,24 +1800,27 @@ def _apply_r23(prs, finding):
     idx = halo_placeholder_index(tf)
     if idx is None:
         return
-    p_el = tf.paragraphs[idx]._p
-    runs = [r for r in _runs(p_el) if _run_text(r).strip()]
-    if not runs:
+    info = parse_slides(prs)[finding.slide_index]
+    parts = halo_parts(info)
+    if parts is None:
         return
-    single = finding.data["outcome"] == "single"
-    # A ratio replaces only the placeholder run(s); the fallback sentence
-    # replaces the whole line. Either way it keeps the placeholder run's own
-    # formatting (same a:rPr).
-    targets = runs if single else ([r for r in runs if _HALO_PLACEHOLDER_RE.match(_run_text(r))] or runs)
-    trailing = " " if not single and _run_text(targets[-1]).endswith(" ") and targets[-1] is not runs[-1] else ""
-    _set_run_text(targets[0], finding.data["value"] + trailing)
-    for extra in targets[1:]:
-        p_el.remove(extra)
-    if single:
-        # The sentence explaining the multiplier no longer applies.
-        for p in list(tf.paragraphs[idx + 1:]):
-            if norm_text(_p_text(p._p)).lower().startswith(_HALO_EXPLAINER):
-                p._p.getparent().remove(p._p)
+    p_el = tf.paragraphs[idx]._p
+    rpr = _first_rpr(p_el)
+    # Body text style from the explainer line when there is one, so the
+    # sentence matches the box's normal text rather than the big error run.
+    body_rpr = rpr
+    for p in tf.paragraphs[idx + 1:]:
+        if norm_text(_p_text(p._p)).lower().startswith(_HALO_EXPLAINER):
+            found = _first_rpr(p._p)
+            body_rpr = found if found is not None else rpr
+            break
+    runs = [_blue_number_run(text, body_rpr) if number else _make_run(text, body_rpr, bold=False)
+            for text, number in parts]
+    _replace_paragraph_runs(p_el, runs)
+    # The sentence explains itself; drop the generator's explainer line.
+    for p in list(tf.paragraphs[idx + 1:]):
+        if norm_text(_p_text(p._p)).lower().startswith(_HALO_EXPLAINER):
+            p._p.getparent().remove(p._p)
 
 
 # ---------------------------------------------------------------- R25 Audience Reach stat

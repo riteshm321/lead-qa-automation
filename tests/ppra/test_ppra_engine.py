@@ -65,7 +65,7 @@ def test_checklist_keeps_only_manual_work():
     _out, _log, attention = engine.format(d.to_bytes(d.combined_deck()), "CS + Display", {})
     messages = {a.message for a in attention}
     assert engine.MSG_OWNER in messages  # the ticket has no owner details
-    assert engine.MSG_HALO in messages  # the two-channel Halo with 0 single-channel visits
+    assert engine.MSG_HALO not in messages  # Halo with accounts is filled from them, never left
     # Never listed: Agenda, Creative Sets, logos, country placeholder, Recommended Actions.
     joined = " ".join(messages).lower()
     for word in ("agenda", "creative sets", "logos", "to be filled", "recommended", "key call outs"):
