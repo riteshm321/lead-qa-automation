@@ -83,15 +83,27 @@ def test_comment_body_mentions_the_reporter():
     assert ppra_comment_preview("Sam Reporter").splitlines()[0] == "Hi @Sam Reporter"
 
 
-def test_post_ppra_deck_uploads_then_comments():
-    with patch("core.jira_client.upload_attachment") as upload, patch("core.jira_client.post_comment_body") as post:
+def test_post_ppra_deck_uploads_then_comments_with_the_deck_inside_the_comment():
+    # Regression: the comment used to be ADF with no media node, so the deck
+    # only reached the Attachments panel and the comment showed no attachment.
+    with patch("core.jira_client.upload_attachment") as upload, patch("core.jira_client.post_comment_wiki") as post:
         manager = MagicMock()
         manager.attach_mock(upload, "upload")
         manager.attach_mock(post, "post")
         post_ppra_deck(BASE, "me@x.com", "tok", "TM-10001", b"deck", "acc-123", "Sam Reporter")
     assert manager.mock_calls[0] == call.upload(BASE, "me@x.com", "tok", "TM-10001", "TM-10001.pptx", b"deck")
     assert manager.mock_calls[1][0] == "post"
-    assert manager.mock_calls[1].args[4]["content"][0]["content"][1]["type"] == "mention"
+    assert manager.mock_calls[1].args[4] == (
+        "Hi [~accountid:acc-123]\n\nPFA PPR for your reference. Let me know if you require any changes."
+        "\n\nThanks\n\n[^TM-10001.pptx]")
+
+
+def test_post_comment_wiki_uses_the_v2_endpoint():
+    from core.jira_client import post_comment_wiki
+    with patch("core.jira_client.requests.post", return_value=MagicMock(status_code=201)) as mock_post:
+        post_comment_wiki(BASE + "/", "me@x.com", "tok", "TM-10001", "hello")
+    assert mock_post.call_args.args[0] == f"{BASE}/rest/api/2/issue/TM-10001/comment"
+    assert mock_post.call_args.kwargs["json"] == {"body": "hello"}
 
 
 TRANSITIONS = {"expand": "transitions", "transitions": [

@@ -317,14 +317,36 @@ def ppra_comment_preview(reporter_name: str) -> str:
     return "\n".join([f"Hi @{reporter_name}", *PPRA_COMMENT_LINES])
 
 
+def build_ppra_comment_wiki(reporter_account_id: str, reporter_name: str, filename: str) -> str:
+    """The PPRA comment in Jira wiki markup: a real mention of the reporter
+    and the uploaded deck shown inside the comment ([^file]) - an ADF
+    comment can only embed a file by its Media Services id, which the
+    attachment upload API never returns, so the deck used to land only in
+    the ticket's Attachments panel and the comment showed no attachment."""
+    greeting = f"Hi [~accountid:{reporter_account_id}]" if reporter_account_id else f"Hi {reporter_name}".strip()
+    return "\n\n".join([greeting, *PPRA_COMMENT_LINES, f"[^{filename}]"])
+
+
+def post_comment_wiki(base_url: str, email: str, api_token: str, ticket_key: str, wiki_text: str) -> None:
+    """Post a wiki-markup comment (REST API v2, which renders wiki markup)."""
+    url = f"{base_url.rstrip('/')}/rest/api/2/issue/{ticket_key}/comment"
+    response = requests.post(
+        url, json={"body": wiki_text}, auth=(email, api_token),
+        headers={"Accept": "application/json", "Content-Type": "application/json"}, timeout=15,
+    )
+    if response.status_code not in (200, 201):
+        raise JiraError(f"Jira returned {response.status_code} for {ticket_key}: {response.text[:300]}")
+
+
 def post_ppra_deck(
     base_url: str, email: str, api_token: str, ticket_key: str,
     deck_bytes: bytes, reporter_account_id: str, reporter_name: str,
 ) -> None:
-    """Attach the deck as <TICKET>.pptx, then post the comment."""
-    upload_attachment(base_url, email, api_token, ticket_key, f"{ticket_key}.pptx", deck_bytes)
-    post_comment_body(base_url, email, api_token, ticket_key,
-                      build_ppra_comment_body(reporter_account_id, reporter_name))
+    """Attach the deck as <TICKET>.pptx, then post the comment showing it."""
+    filename = f"{ticket_key}.pptx"
+    upload_attachment(base_url, email, api_token, ticket_key, filename, deck_bytes)
+    post_comment_wiki(base_url, email, api_token, ticket_key,
+                      build_ppra_comment_wiki(reporter_account_id, reporter_name, filename))
 
 
 # ---------------------------------------------------------------- workflow status
