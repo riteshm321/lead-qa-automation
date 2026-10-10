@@ -256,6 +256,124 @@ def ctv_performance(prs):
     return slide
 
 
+def layout_footer(prs, top=Inches(6.6), layout_index=_BLANK):
+    """A confidential-line text box on the layout (inherited by every slide
+    that uses it, but not one of the slide's own shapes)."""
+    from pptx.oxml.shapes.autoshape import CT_Shape
+    layout = prs.slide_layouts[layout_index]
+    sp = CT_Shape.new_textbox_sp(900, "TextBox 900", Inches(0.5), top, Inches(5), Inches(0.27))
+    layout.shapes._spTree.append(sp)
+    return top
+
+
+ASSET_NAME = ("417344473_Client Logic_BROAD_JOB_NAT_Awareness-Direct-Standard-ProBuyer.CTV ProBuyer Fixed "
+              "Income_1x1_OLV_V_NA (ProBuyer_CTV) v{}")
+
+
+def ctv_data_slide(prs, n_assets=3, n_accounts=3, assets_top=Inches(3.44), row_h=Inches(0.35)):
+    """A CTV Advertising Data slide: KPI tiles, then 'Top Assets By
+    Impression' (long names that wrap to two lines, stored one line high) and
+    'Top Accounts By Impression' laid out for the stored heights."""
+    slide = blank(prs, f"Client X Combined View{EN_DASH} CTV Advertising Data" + VT)
+    textbox(slide, "TextBox 13", [[("Campaign Progress: Impressions", True)], [("96.7%", False)]],
+            left=Inches(0.65), top=Inches(1.14), width=Inches(3), height=Inches(0.8), size=14)
+    textbox(slide, "TextBox 12", [[("CTV Impressions Served", True)], [("112,090", False)]],
+            left=Inches(3.94), top=Inches(1.14), width=Inches(3), height=Inches(0.8), size=14)
+    textbox(slide, "Rectangle 6", [[("Top Assets By Impression", True)]],
+            left=Inches(0.43), top=assets_top - Inches(0.43), width=Inches(2.89), height=Inches(0.34), size=14)
+    assets = [["Asset Name", "CTV Impressions", "Accounts Reached", "VCR"]]
+    assets += [[ASSET_NAME.format(i), f"{5000 + i:,}", "900", "99%"] for i in range(n_assets)]
+    widths = [Inches(8.09), Inches(1.73), Inches(1.77), Inches(0.91)]
+    frame = table(slide, assets, name="Table 21", left=Inches(0.42), top=assets_top, width=sum(widths),
+                  height=row_h * len(assets), col_widths=widths)
+    for row in frame.table.rows:
+        row.height = row_h
+    stored_bottom = assets_top + row_h * len(assets)
+    heading_top = stored_bottom + Inches(0.16)
+    textbox(slide, "Rectangle 7", [[("Top Accounts By Impression", True)]],
+            left=Inches(0.43), top=heading_top, width=Inches(3.19), height=Inches(0.34), size=14)
+    accounts = [["Domain", "CTV Impressions", "Site Visits", "# Trending Topics"]]
+    accounts += [[f"account{i}.com", "9,000", "623", "24"] for i in range(n_accounts)]
+    second = table(slide, accounts, name="Table 22", left=Inches(0.42), top=heading_top + Inches(0.37),
+                   width=Inches(12.5), height=row_h * len(accounts))
+    for row in second.table.rows:
+        row.height = row_h
+    return slide
+
+
+def kpi_column(slide, stats, name="TextBox 7"):
+    """A Program Performance stat column: big bold stat, its label, blank
+    spacer, ... stats: [(stat, label), ...]."""
+    shape = slide.shapes.add_textbox(Inches(10.1), Inches(1.2), Inches(2.94), Inches(3.74))
+    shape.name = name
+    tf = shape.text_frame
+    first = True
+    for i, (stat, label) in enumerate(stats):
+        if i:
+            spacer = tf.add_paragraph()
+            spacer.text = ""
+        for text, size, bold in ((stat, 26, True), (label, 14, None)):
+            p = tf.paragraphs[0] if first else tf.add_paragraph()
+            first = False
+            r = p.add_run()
+            r.text = text
+            r.font.size = Pt(size)
+            if bold:
+                r.font.bold = True
+    return shape
+
+
+def account_engagement_slide(prs, takeaway=("{{2}}% of accounts were trending on 5+ intent topics.", "",
+                                            "Top job titles for leads from  include  and ."), with_table=True):
+    slide = blank(prs, f"Client X Combined View {EN_DASH} Account Engagement")
+    textbox(slide, "TextBox 4", [[("Top Accounts: Display, and CTV", True)]], left=Inches(0.42),
+            top=Inches(1.24), width=Inches(7.25), height=Inches(0.27), size=16)
+    if with_table:
+        rows = [["Account Domain", "Leads", "Display Impressions", "Clicks", "CTV Impressions", "Site Visits",
+                 "# Trending Topics"],
+                ["beta-corp.com", "0", "300,100", "328", "8,000", "668", "31"],
+                ["alpha-corp.com", "0", "350,200", "288", "9,000", "623", "24"],
+                ["gamma-corp.com", "0", "250,300", "237", "7,000", "402", "27"],
+                ["delta-corp.com", "0", "200,400", "262", "6,000", "533", "23"]]
+        table(slide, rows, name="Table 3", left=Inches(0.42), top=Inches(1.59), width=Inches(12.5))
+    paragraphs = []
+    for line in takeaway:
+        if line.startswith("{{"):
+            token, rest = line.split("%", 1)
+            paragraphs.append([(token + "%", True), (rest, None)])
+        else:
+            paragraphs.append(line)
+    textbox(slide, "TextBox 2", paragraphs, left=Inches(0.37), top=Inches(5.0), width=Inches(12.52),
+            height=Inches(0.91))
+    return slide
+
+
+def key_takeaways_slide(prs):
+    """The Key Takeaways summary slide with the generator's blank values."""
+    slide = blank(prs, "Key Takeaways", title_name="Title 7")
+    box = textbox(slide, "TextBox 8", [[("Top Industries", True)], [("Manufacturing ", True), (EN_DASH + " %", True)],
+                                       [("Textiles ", True), (EN_DASH + " %", True)]],
+                  left=Inches(6.67), top=Inches(1.19), width=Inches(6.33), height=Inches(1.45), size=14)
+    titles = textbox(slide, "TextBox 9", [[("Top Job Titles", True)], [(" " + EN_DASH + " %", True)]],
+                     left=Inches(0.33), top=Inches(5.22), width=Inches(6.07), height=Inches(1.0), size=14)
+    sizes = textbox(slide, "TextBox 20", [[("Company Size", True)], [("% ", True), ("of companies had ", None),
+                                                                      ("1-9", True), (" employees", None)]],
+                    left=Inches(6.67), top=Inches(5.22), width=Inches(6.33), height=Inches(1.0), size=14)
+    for shape in (box, titles, sizes):  # bulleted list items, as on the real slide
+        for p in shape.text_frame.paragraphs[1:]:
+            ppr = p._p.get_or_add_pPr()
+            ppr.set("marL", "228600")
+            ppr.set("indent", "-228600")
+            bu = ppr.makeelement(qn_("a:buChar"), {"char": "•"})
+            ppr.append(bu)
+    return slide
+
+
+def qn_(tag):
+    from pptx.oxml.ns import qn
+    return qn(tag)
+
+
 def long_pacing_deck(n_rows=18):
     """A CS + Display deck whose pacing table has long, wrapping campaign
     names: ContentSynd rows (Leads) and Display rows (Imps)."""

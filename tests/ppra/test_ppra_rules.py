@@ -662,17 +662,18 @@ def test_r19_adds_breathing_room_below_the_text():
     assert run_rule(prs, "R19") == []
 
 
-def test_r19_never_grows_past_the_bottom_margin():
+def test_r19_never_grows_past_the_usable_bottom():
     from core.ppra import engine
-    from core.ppra.rules import BOTTOM_MARGIN
+    from core.ppra.rules import usable_bottom
     prs = d.new_prs()
     d.content_insights(prs)
     d.industry_insights(prs, job_titles=tuple((f"A very long job title number {i} " * 6, "1", "1%")
                                               for i in range(3)))
     run_rule(prs, "R16")
     run_rule(prs, "R19")
-    box = shape_named(slide_of(prs, "content_insights"), "Rectangle 14")
-    assert box.top + box.height <= d.SLIDE_H - BOTTOM_MARGIN
+    slide = slide_of(prs, "content_insights")
+    box = shape_named(slide, "Rectangle 14")
+    assert box.top + box.height <= usable_bottom(slide, d.SLIDE_H)
     assert engine.MSG_OVERFLOW in [a.message for a in engine.attention_items(analyze(prs), "CS", OWNER)]
 
 

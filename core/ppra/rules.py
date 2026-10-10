@@ -1,4 +1,4 @@
-"""One function pair per formatting rule (R1-R26 of the PPRA spec).
+"""One function pair per formatting rule (R1-R29 of the PPRA spec).
 
 Every rule has applies(deck, report_type, jira_info) -> [Finding] and
 apply(prs, finding). applies() only reports work that is still needed, so a
@@ -18,11 +18,13 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Callable
 
 from pptx.enum.chart import XL_CHART_TYPE
+from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
 from pptx.text.text import _Run
 
+from core.ppra import blanks
 from core.ppra.detect import (
     AUDIO, CHANNELS, CS, CTV, DISPLAY, IMPS, LEADS, LINKEDIN, DeckInfo, SlideInfo, analyze, chart_data,
     chart_has_data, chart_title, channels_of, find_shape, has_impressions, is_top_level, iter_shapes, norm_text,
@@ -56,6 +58,10 @@ TAKEAWAY_TEMPLATES = {
     "halo_multi": "{multi_pct}% of engaged accounts ({multi} of {total}) engaged across multiple channels",
     "halo_visits": ", generating {ratio}x more website visits per account than single-channel accounts",
     "halo_single_channel": "All {total} engaged accounts engaged through a single channel during this campaign.",
+    # Account tables (Top Accounts / Account Engagement) when the generator left the takeaway empty.
+    "top_accounts": "{a1}, {a2} and {a3} were the most engaged accounts, led by {a1} with {v1} {metric}.",
+    "top_accounts_two": "{a1} and {a2} were the most engaged accounts, led by {a1} with {v1} {metric}.",
+    "top_accounts_one": "{a1} was the most engaged account, with {v1} {metric}.",
 }
 
 TOP_N = 3
@@ -568,8 +574,9 @@ def _planned_pacing_widths(widths: list[int], cols: dict) -> list[int]:
 _SPLIT_RE = re.compile(r"\s*\[(\d+)/(\d+)\]\s*$")
 _OLD_SPLIT_RE = re.compile(r"^\s*\[(\d+)/(\d+)\]\s*")  # earlier leading form
 _DEFAULT_TABLE_PT = 12.0
-_FOOTER_GAP = 45720  # 0.05 in clear of the footer bar
+FOOTER_GAP = 91440  # 0.1 in clear of the footer
 _NO_FOOTER_MARGIN = 457200  # 0.5 in when the layout has no footer shape
+_FOOTER_PLACEHOLDERS = (PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE_NUMBER, PP_PLACEHOLDER.DATE)
 
 
 def split_part(title: str) -> tuple[int, int] | None:
@@ -591,12 +598,16 @@ def _cell_margin(tc, name: str, default: int) -> int:
     return int(value) if value is not None else default
 
 
-def _cell_height(tc, lines_text: list[str], width: int) -> int:
-    """Conservative rendered height (EMU) of one cell's text."""
-    size = _cell_font_pt(tc)
+def _cell_height(tc, lines_text: list[str], width: int, size: float | None = None, indents=None) -> int:
+    """Conservative rendered height (EMU) of one cell's text (at its own
+    font size, or at size). indents: each paragraph's left indent (bullets)."""
+    size = size or _cell_font_pt(tc)
     usable = width - _cell_margin(tc, "marL", 91440) - _cell_margin(tc, "marR", 91440)
-    per_line = max(1, int(usable / (size * CHAR_WIDTH_EM * _EMU_PER_PT)))
-    lines = sum(wrapped_lines(text, per_line) for text in lines_text or [""])
+    lines = 0
+    for i, text in enumerate(lines_text or [""]):
+        indent = indents[i] if indents and i < len(indents) else 0
+        per_line = max(1.0, (usable - indent) / (size * CHAR_WIDTH_EM * _EMU_PER_PT))
+        lines += wrapped_lines(text, per_line)
     return (int(lines * size * _LINE_SPACING * _EMU_PER_PT)
             + _cell_margin(tc, "marT", 45720) + _cell_margin(tc, "marB", 45720))
 
@@ -611,17 +622,34 @@ def _row_height(tr, widths: list[int], suffix_cols=()) -> int:
     return height
 
 
-def pacing_bottom_limit(slide, slide_height: int) -> int:
-    """Lowest EMU a table may reach: just above the layout's footer bar (the
-    highest non-placeholder layout/master shape in the bottom half)."""
-    tops = []
+def _is_footer_shape(shape, slide_height: int) -> bool:
+    """A footer-band shape: the confidential line, the logo, or a footer /
+    slide number / date placeholder, sitting in the bottom quarter."""
+    if shape.top is None or shape.height is None:
+        return False
+    if shape.is_placeholder:
+        try:
+            if shape.placeholder_format.type not in _FOOTER_PLACEHOLDERS:
+                return False
+        except ValueError:
+            return False
+    top = int(shape.top)
+    return slide_height * 3 // 4 < top < slide_height and int(shape.height) < slide_height // 5
+
+
+def usable_bottom(slide, slide_height: int) -> int:
+    """Lowest EMU anything the tool moves, grows or splits may reach: 0.1 in
+    above the highest footer shape the slide shows - the layout's and
+    master's confidential line, logo and footer placeholders (inherited, not
+    slide shapes) plus any footer placeholder on the slide itself."""
     layout = slide.slide_layout
-    for shape in list(layout.shapes) + list(layout.slide_master.shapes):
-        if shape.is_placeholder or shape.top is None:
-            continue
-        if slide_height // 2 < int(shape.top) < slide_height:
-            tops.append(int(shape.top))
-    return (min(tops) if tops else slide_height - _NO_FOOTER_MARGIN) - _FOOTER_GAP
+    shapes = list(layout.shapes) + list(layout.slide_master.shapes)
+    shapes += [s for s in slide.shapes if s.is_placeholder]
+    tops = [int(s.top) for s in shapes if _is_footer_shape(s, slide_height)]
+    return (min(tops) if tops else slide_height - _NO_FOOTER_MARGIN) - FOOTER_GAP
+
+
+pacing_bottom_limit = usable_bottom  # the name R24 has always used
 
 
 def _split_plan(info: SlideInfo, shape, rows, cols, slide_height: int) -> list[list[int]]:
@@ -881,13 +909,15 @@ def _find_r9(deck, report_type, jira_info):
     if not has_impressions(report_type):
         return []
     findings = []
-    for info in deck.of_kind("top_accounts_display", "top_accounts"):
+    for info in deck.of_kind("top_accounts_display", "top_accounts", "other"):
         for shape, rows in info.tables:
             if not rows:
                 continue
             header = [norm_text(c).lower() for c in rows[0]]
             if "ctv impressions" not in header:
                 continue
+            if info.kind == "other" and not re.search(r"account|domain", header[0]):
+                continue  # only account tables (an "Account Engagement" slide)
             col = header.index("ctv impressions")
             data = [r for r in rows[1:] if any(norm_text(c) for c in r)]
             if data and all((_parse_number(r[col]) or 0) == 0 for r in data):
@@ -901,21 +931,27 @@ def _find_r9(deck, report_type, jira_info):
     return findings
 
 
+def _remove_columns(table, cols) -> None:
+    """Drop columns and widen the rest in proportion, keeping the table's
+    total width (12.5 in tables stay 12.5 in)."""
+    old_total = sum(c.width for c in table.columns)
+    grid = table._tbl.tblGrid
+    for col in sorted(set(cols), reverse=True):
+        grid.remove(grid.findall(qn("a:gridCol"))[col])
+        for tr in table._tbl.tr_lst:
+            tr.remove(tr.findall(qn("a:tc"))[col])
+    widths = _scale_widths([c.width for c in table.columns], old_total)
+    for column, width in zip(table.columns, widths):
+        column.width = width
+
+
 def _apply_r9(prs, finding):
     frame = _shape(prs, finding)
     table = frame.table
     header = [norm_text(c).lower() for c in table_rows(table)[0]]
     if "ctv impressions" not in header:
         return
-    col = header.index("ctv impressions")
-    old_total = sum(c.width for c in table.columns)
-    grid = table._tbl.tblGrid
-    grid.remove(grid.findall(qn("a:gridCol"))[col])
-    for tr in table._tbl.tr_lst:
-        tr.remove(tr.findall(qn("a:tc"))[col])
-    widths = _scale_widths([c.width for c in table.columns], old_total)
-    for column, width in zip(table.columns, widths):
-        column.width = width
+    _remove_columns(table, [header.index("ctv impressions")])
     title_id = finding.data.get("title_shape_id")
     title = find_shape(prs.slides[finding.slide_index], title_id) if title_id else None
     if title is not None:
@@ -936,6 +972,125 @@ def _retitle_without_ctv(title_shape) -> None:
             for r in runs[1:]:
                 r.text = ""
             return
+
+
+# ---------------------------------------------------------------- R27 channel columns
+
+# Columns whose header clearly names one channel. Generic headers
+# ("Impressions", "Clicks", "CTR", "VCR", "Exposure Time") appear in more
+# than one channel's tables and are never removed for their channel.
+_CHANNEL_COLUMN_RES = (
+    (CS, re.compile(r"^(?:#\s*(?:of\s+)?)?leads$")),
+    (CTV, re.compile(r"(?<![a-z])(?:ctv|connected tv)(?![a-z])")),
+    (DISPLAY, re.compile(r"(?<![a-z])display(?![a-z])")),
+)
+_CHANNEL_WORDS = {CS: r"(?:Content Syndication|CS)", CTV: r"(?:Connected TV|CTV)", DISPLAY: r"Display"}
+_CHANNEL_REASON = {CS: "not a CS report", CTV: "no CTV in this report", DISPLAY: "no Display in this report"}
+# CS-only insight slides: in a report without CS, R22 removes the whole slide.
+_NO_COLUMN_KINDS = ("pacing", "content_insights", "industry_insights", "country_insights")
+
+
+def _off_channel_columns(header: list[str], wanted) -> list[tuple[int, str]]:
+    found = []
+    for col, text in enumerate(header):
+        low = norm_text(text).lower()
+        for channel, pattern in _CHANNEL_COLUMN_RES:
+            if channel not in wanted and pattern.search(low):
+                found.append((col, channel))
+                break
+    return found
+
+
+def _drop_channel_words(text: str, channel: str) -> str:
+    """'Top Accounts: Display, and CTV' -> 'Top Accounts: Display' when CTV
+    goes; only when the text also names a channel that stays."""
+    word = _CHANNEL_WORDS[channel]
+    others = channels_of(text) - {channel}
+    if not others or not re.search(rf"\b{word}\b", text):
+        return text
+    new = re.sub(rf",?\s+(?:and|&)\s+{word}\b", "", text)
+    new = re.sub(rf",\s*{word}\b", "", new)
+    new = re.sub(rf"\b{word}\s*(?:,|and|&)\s*(?:and\s+)?", "", new)
+    return new if new != text else text
+
+
+def _heading_above(info: SlideInfo, frame):
+    """A short heading text box sitting just above a table (within 0.6 in)."""
+    for shape, text in info.texts:
+        if shape.shape_id == info.title_shape_id or len(text) > 80 or not is_top_level(shape):
+            continue
+        bottom = int(shape.top) + int(shape.height)
+        if (int(frame.top) - 548640 <= bottom <= int(frame.top) + 91440 and int(shape.top) < int(frame.top)
+                and int(shape.left) < int(frame.left) + int(frame.width)
+                and int(frame.left) < int(shape.left) + int(shape.width)):
+            return shape
+    return None
+
+
+def _retitle_shape(shape, channels) -> None:
+    for p in shape.text_frame.paragraphs:
+        runs = p.runs
+        joined = "".join(r.text for r in runs)
+        new = joined
+        for channel in channels:
+            new = _drop_channel_words(new, channel)
+        if new != joined and runs:
+            runs[0].text = new
+            for r in runs[1:]:
+                r.text = ""
+
+
+def _find_r27(deck, report_type, jira_info):
+    wanted = report_channels(report_type)
+    if not wanted:
+        return []
+    off = {f.slide_index for f in _find_r22(deck, report_type, jira_info)}
+    # An all-zero CTV Impressions column is R9's (it also retitles the slide).
+    by_r9 = {(f.slide_index, f.data["shape_id"]) for f in _find_r9(deck, report_type, jira_info)}
+    findings = []
+    for info in deck.slides:
+        if info.index in off or info.kind in _NO_COLUMN_KINDS:
+            continue
+        for shape, rows in info.tables:
+            if not rows or len(rows[0]) < 3:
+                continue
+            r9_table = (info.index, shape.shape_id) in by_r9
+            cols = [(c, ch) for c, ch in _off_channel_columns(rows[0], wanted)
+                    if not (r9_table and norm_text(rows[0][c]).lower() == "ctv impressions")]
+            if not cols or len(cols) >= len(rows[0]) - 1:
+                continue
+            names = [norm_text(rows[0][c]) for c, _ch in cols]
+            channels = sorted({ch for _c, ch in cols})
+            heading = _heading_above(info, shape)
+            retitle = [s for s in (find_shape(info.slide, info.title_shape_id) if info.title_shape_id else None,
+                                   heading) if s is not None]
+            renamed = [norm_text(s.text_frame.text) for s in retitle]
+            what = f"the {names[0]} column" if len(names) == 1 else f"the {', '.join(names)} columns"
+            why = "; ".join(_CHANNEL_REASON[ch] for ch in channels)
+            findings.append(Finding(
+                "R27", info.index, f"Remove {what} on {_slide_label(info)} ({why})",
+                before=" | ".join(norm_text(c) for c in rows[0]),
+                after=" | ".join(norm_text(c) for i, c in enumerate(rows[0]) if i not in {c for c, _ in cols}),
+                data={"shape_id": shape.shape_id, "headers": names, "channels": channels,
+                      "retitle_ids": [s.shape_id for s in retitle], "renamed": renamed},
+                summary=f"Remove {what} ({why})"))
+    return findings
+
+
+def _apply_r27(prs, finding):
+    slide = prs.slides[finding.slide_index]
+    table = _shape(prs, finding).table
+    header = [norm_text(c) for c in table_rows(table)[0]]
+    cols = [i for i, h in enumerate(header) if h in finding.data["headers"]]
+    if not cols or len(cols) >= len(header) - 1:
+        return
+    _remove_columns(table, cols)
+    # Only the channel whose columns went: "...Display, and CTV" keeps CTV
+    # when only the Leads column was removed.
+    for shape_id in finding.data.get("retitle_ids", []):
+        shape = find_shape(slide, shape_id)
+        if shape is not None:
+            _retitle_shape(shape, finding.data["channels"])
 
 
 # ---------------------------------------------------------------- R21 wide tables
@@ -1090,38 +1245,186 @@ def _apply_r11(prs, finding):
                     run.text = _fix_float(run.text)
 
 
-# ---------------------------------------------------------------- R12 empty KPI lines
+# ---------------------------------------------------------------- R12 blank KPI stats
 
-def _empty_kpi_paragraphs(tf) -> list[int]:
+# A big-number stat the generator left without its number: only units or
+# punctuation ("%", "+", "$", "x", "K+"), never a digit.
+_BLANK_STAT_RE = re.compile(r"^[%+$xX×KMBkmb]{1,3}$")
+_STAT_MIN_PT = 20.0
+# Slides whose text the KPI rule never touches: the deck frame, pacing, the
+# Key Takeaways summary lists (blank values there are only flagged) and Halo
+# Effect, whose "X" stat R23 fills from the slide's chart.
+_NO_KPI_KINDS = ("title", "agenda", "section", "pacing", "thank_you", "highlights", "halo")
+# Stat tiles (Display / CTV Data): label line(s), then the value line.
+_KPI_TILE_LABELS = {
+    "campaign progress: impressions", "impressions served", "ctv impressions served",
+    "display impressions served", "clicks", "avg ctr", "ctr", "avg vcr", "vcr", "site visits",
+    "exposure time", "exposure time (hours)", "accounts reached", "accounts reached with display",
+    "accounts reached with ctv", "accounts reached that visited site",
+    "accounts reached with display that visited site", "accounts reached with ctv that visited site",
+    "penetration rate",
+}
+_TILE_MAX_W = 4 * 914400
+_TILE_MAX_H = int(1.2 * 914400)
+_LABEL_BELOW = 457200  # a separate label box starts within 0.5 in under its stat box
+
+
+def is_blank_stat(text: str) -> bool:
+    compact = norm_text(text).replace(" ", "")
+    return bool(compact) and not any(ch.isdigit() for ch in compact) and bool(_BLANK_STAT_RE.match(compact))
+
+
+def _p_bold(p_el) -> bool:
+    runs = [r for r in _runs(p_el) if _run_text(r).strip()]
+    return bool(runs) and all(r.find(qn("a:rPr")) is not None and r.find(qn("a:rPr")).get("b") == "1"
+                              for r in runs)
+
+
+def _stat_styled(p_el, label_el) -> bool:
+    """Styled like the box's big numbers: large or bold, and bigger or
+    bolder than the label under it."""
+    size, label_size = _paragraph_size_pt(p_el), _paragraph_size_pt(label_el)
+    big = size >= _STAT_MIN_PT and size > label_size
+    bold = _p_bold(p_el) and not _p_bold(label_el)
+    return big or bold
+
+
+def _blank_stat_groups(tf) -> list[tuple[list[int], str]]:
+    """([paragraph indices to remove], 'stat label') per blank stat: the stat,
+    its label paragraph(s) up to the next blank line, and one adjacent blank
+    spacer. A stat whose label carries a digit is left alone, and so is the
+    Key Takeaways box's "% of leads ..." stat (R25 fills it, else it stays on
+    the checklist)."""
     paras = [p._p for p in tf.paragraphs]
-    remove = []
-    for i in range(len(paras) - 1):
-        stat = norm_text(_p_text(paras[i])).replace(" ", "")
-        if stat in ("+", "0+") and norm_text(_p_text(paras[i + 1])).lower().startswith("site visits"):
-            if i > 0 and not norm_text(_p_text(paras[i - 1])) and (i - 1) not in remove:
-                remove.append(i - 1)
-            remove += [i, i + 1]
-    return remove
+    texts = [norm_text(_p_text(p)) for p in paras]
+    takeaway = bool(texts) and texts[0].lower().startswith("key takeaways")
+    groups, taken = [], set()
+    for i, text in enumerate(texts):
+        if i in taken or not is_blank_stat(text) and text.replace(" ", "") != "0+":
+            continue
+        labels = []
+        for j in range(i + 1, len(paras)):
+            if not texts[j] or (labels and _stat_styled(paras[j], paras[labels[0]])):
+                break
+            labels.append(j)
+        if not labels or any(ch.isdigit() for j in labels for ch in texts[j]):
+            continue
+        if takeaway and texts[labels[0]].lower().startswith("of leads"):
+            continue
+        legacy = texts[labels[0]].lower().startswith("site visits") and text.replace(" ", "") in ("+", "0+")
+        if not legacy and (text.replace(" ", "") == "0+" or not _stat_styled(paras[i], paras[labels[0]])):
+            continue
+        remove = [i, *labels]
+        if i > 0 and not texts[i - 1] and (i - 1) not in taken:
+            remove.insert(0, i - 1)
+        elif labels[-1] + 1 < len(paras) and not texts[labels[-1] + 1]:
+            remove.append(labels[-1] + 1)
+        taken.update(remove)
+        groups.append((remove, f"{text.replace(' ', '')} {' '.join(texts[j] for j in labels)}"))
+    if len(taken) >= len(paras):  # never empty a box completely
+        return []
+    return groups
+
+
+def _blank_tile(shape) -> str | None:
+    """'Clicks' when a KPI tile has a known label and no value (nothing, or
+    only '%', under the label)."""
+    if int(shape.width or 0) > _TILE_MAX_W or int(shape.height or 0) > _TILE_MAX_H:
+        return None
+    texts = [norm_text(_p_text(p._p)) for p in shape.text_frame.paragraphs]
+    texts = [t for t in texts if t]
+    for k in range(1, len(texts) + 1):
+        label = " ".join(texts[:k])
+        if label.lower().rstrip(":") in _KPI_TILE_LABELS:
+            values = texts[k:]
+            if all(is_blank_stat(v) and v.replace(" ", "") == "%" for v in values):
+                return label
+            return None
+    return None
+
+
+def _stat_only(shape) -> str | None:
+    """The blank stat when a small shape holds nothing but it ('%')."""
+    paras = [p._p for p in shape.text_frame.paragraphs]
+    full = [p for p in paras if norm_text(_p_text(p))]
+    if len(full) != 1 or not is_blank_stat(_p_text(full[0])):
+        return None
+    if _paragraph_size_pt(full[0]) < _STAT_MIN_PT and not _p_bold(full[0]):
+        return None
+    return norm_text(_p_text(full[0])).replace(" ", "")
+
+
+def _label_below(info: SlideInfo, stat_shape):
+    """The label box right under a stat-only box: starts within 0.5 in of its
+    bottom, overlaps it sideways, holds a short digit-free label."""
+    bottom = int(stat_shape.top) + int(stat_shape.height)
+    left, right = int(stat_shape.left), int(stat_shape.left) + int(stat_shape.width)
+    for shape, text in info.texts:
+        if shape is stat_shape or shape.shape_id == info.title_shape_id or not is_top_level(shape):
+            continue
+        top = int(shape.top)
+        if not (int(stat_shape.top) < top <= bottom + _LABEL_BELOW):
+            continue
+        if min(right, int(shape.left) + int(shape.width)) - max(left, int(shape.left)) <= 0:
+            continue
+        lines = [p for p in shape.text_frame.paragraphs if norm_text(_p_text(p._p))]
+        if 1 <= len(lines) <= 2 and not any(ch.isdigit() for ch in text) and _stat_only(shape) is None:
+            return shape
+    return None
 
 
 def _find_r12(deck, report_type, jira_info):
     findings = []
     for info in deck.slides:
+        if info.kind in _NO_KPI_KINDS:
+            continue
         for shape, text in info.texts:
-            if _empty_kpi_paragraphs(shape.text_frame):
+            if shape.shape_id == info.title_shape_id:
+                continue
+            for _remove, label in _blank_stat_groups(shape.text_frame):
                 findings.append(Finding(
-                    "R12", info.index, f"Remove the empty 'site visits generated' line on {_slide_label(info)}",
-                    before="+ site visits generated", after="(removed)", data={"shape_id": shape.shape_id},
-                    summary="Remove the empty '+ site visits generated' line"))
+                    "R12", info.index, f"Remove the blank '{label}' stat on {_slide_label(info)}",
+                    before=label, after="(removed)", data={"shape_id": shape.shape_id, "mode": "paragraphs"},
+                    summary=f"Remove the blank '{label}' stat"))
+            if not is_top_level(shape):
+                continue
+            tile = _blank_tile(shape) if info.kind in ("display_performance", "ctv_performance") else None
+            if tile is not None:
+                findings.append(Finding(
+                    "R12", info.index, f"Remove the blank '{tile}' tile on {_slide_label(info)}",
+                    before=f"{tile} (no value)", after="(removed)",
+                    data={"shape_id": shape.shape_id, "mode": "shapes", "shape_ids": [shape.shape_id]},
+                    summary=f"Remove the blank '{tile}' tile"))
+                continue
+            stat = _stat_only(shape)
+            label_shape = _label_below(info, shape) if stat is not None else None
+            if label_shape is not None:
+                label = f"{stat} {norm_text(label_shape.text_frame.text)}"
+                findings.append(Finding(
+                    "R12", info.index, f"Remove the blank '{label}' stat on {_slide_label(info)}",
+                    before=label, after="(removed)",
+                    data={"shape_id": shape.shape_id, "mode": "shapes",
+                          "shape_ids": [shape.shape_id, label_shape.shape_id]},
+                    summary=f"Remove the blank '{label}' stat"))
     return findings
 
 
 def _apply_r12(prs, finding):
+    if finding.data.get("mode") == "shapes":
+        slide = prs.slides[finding.slide_index]
+        stat = find_shape(slide, finding.data["shape_id"])
+        if stat is None or (_stat_only(stat) is None and _blank_tile(stat) is None):
+            return  # already removed, or it has a value now
+        for shape_id in finding.data["shape_ids"]:
+            shape = find_shape(slide, shape_id)
+            if shape is not None:
+                shape._element.getparent().remove(shape._element)
+        return
     tf = _shape(prs, finding).text_frame
     paras = [p._p for p in tf.paragraphs]
-    for i in sorted(_empty_kpi_paragraphs(tf), reverse=True):
-        if len(tf.paragraphs) > 1:
-            paras[i].getparent().remove(paras[i])
+    remove = sorted({i for indices, _label in _blank_stat_groups(tf) for i in indices}, reverse=True)
+    for i in remove:
+        paras[i].getparent().remove(paras[i])
 
 
 # ---------------------------------------------------------------- R13 company sizes
@@ -1894,12 +2197,191 @@ def _apply_r25(prs, finding):
     _set_run_text(run, finding.data["value"] + " ")
 
 
+# ---------------------------------------------------------------- R28 broken takeaways
+
+_TRENDING_RE = re.compile(r"of accounts (?:are|were) trending on", re.IGNORECASE)
+_TRENDING_VALUE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%\s*of accounts (?:are|were) trending on 5\+", re.IGNORECASE)
+# Slides whose sentences other rules own (or that hold no takeaway).
+_NO_TAKEAWAY_FIX_KINDS = _NO_KPI_KINDS + ("halo", "industry_insights")
+_ACCOUNT_METRICS = (("display impressions", "display impressions"), ("ctv impressions", "CTV impressions"),
+                    ("impressions", "impressions"), ("leads", "leads"))
+MSG_WRITE_TAKEAWAY = "Write the key takeaway"
+
+
+def _is_list_item(p_el) -> bool:
+    ppr = p_el.find(qn("a:pPr"))
+    return ppr is not None and (ppr.find(qn("a:buChar")) is not None or ppr.find(qn("a:buAutoNum")) is not None)
+
+
+def trending_value(deck: DeckInfo) -> str | None:
+    """The deck's own "N% of accounts are trending on 5+ intent topics" stat
+    (Audience Insights), when one is filled in with a non-zero N."""
+    for info in deck.slides:
+        for _shape, text in info.texts:
+            if blanks.TOKEN_RE.search(text):
+                continue
+            m = _TRENDING_VALUE_RE.search(text)
+            if m and float(m.group(1)) > 0:
+                return _pct_text(m.group(1))
+    return None
+
+
+def _account_takeaway(info: SlideInfo) -> tuple[str, list[tuple[str, bool]]] | None:
+    """(plain sentence, [(text, is_number)]) for the slide's account table:
+    its top accounts by the first impressions column (else Leads)."""
+    for _shape_, rows in info.tables:
+        if len(rows) < 2 or not re.search(r"account|domain", norm_text(rows[0][0]).lower()):
+            continue
+        header = [norm_text(c).lower() for c in rows[0]]
+        metric = next(((header.index(h), label) for h, label in _ACCOUNT_METRICS if h in header), None)
+        if metric is None:
+            continue
+        col, label = metric
+        data = []
+        for row in rows[1:]:
+            value = _parse_number(row[col]) if col < len(row) else None
+            if norm_text(row[0]) and value is not None:
+                data.append((norm_text(row[0]), value))
+        data.sort(key=lambda item: item[1], reverse=True)
+        top = data[:TOP_N]
+        if not top or top[0][1] <= 0:
+            continue
+        key = {1: "top_accounts_one", 2: "top_accounts_two"}.get(len(top), "top_accounts")
+        values = {f"a{i}": name for i, (name, _v) in enumerate(top, 1)}
+        values.update(v1=_fmt_int_or_float(top[0][1]), metric=label)
+        parts = []
+        for piece in _TEMPLATE_TOKEN_RE.split(TAKEAWAY_TEMPLATES[key]):
+            m = re.fullmatch(r"\{(\w+)\}(%?)", piece) if piece else None
+            if m:
+                parts.append((values[m.group(1)] + m.group(2), m.group(1) == "v1"))
+            elif piece:
+                parts.append((piece, False))
+        merged = []
+        for text, is_number in parts:
+            if merged and not is_number and not merged[-1][1]:
+                merged[-1] = (merged[-1][0] + text, False)
+            else:
+                merged.append((text, is_number))
+        return "".join(text for text, _n in merged), merged
+    return None
+
+
+def _takeaway_fix_plan(info: SlideInfo, shape, trending: str | None) -> dict | None:
+    """What to do with one text box's broken sentences: paragraphs to drop,
+    tokens to fill, and - when nothing good is left - the standard sentence
+    from the slide's table or a checklist item. None when nothing is broken."""
+    paras = [p._p for p in shape.text_frame.paragraphs]
+    texts = [blanks.raw_text(p) for p in paras]
+    broken, fills = [], {}
+    for i, (p_el, text) in enumerate(zip(paras, texts)):
+        if _is_list_item(p_el):
+            continue  # list items are only flagged (data issues)
+        reason = blanks.broken_reason(text)
+        if reason is None:
+            continue
+        if reason == "token" and _TRENDING_RE.search(text) and trending is not None \
+                and not blanks.TOKEN_RE.search(blanks.TOKEN_RE.sub("", text, count=1)):
+            fills[i] = trending
+        else:
+            broken.append(i)
+    if not broken and not fills:
+        return None
+    if broken:  # a lone "." left behind by an empty sentence goes too
+        broken += [i for i, t in enumerate(texts) if i not in broken and blanks.only_punctuation(t)
+                   and not is_blank_stat(t) and not _is_list_item(paras[i])]
+    heading = 0 if texts and norm_text(texts[0]).lower().startswith("key takeaways") else None
+    remove = set(broken)
+    for i in sorted(broken):
+        if i - 1 >= 0 and i - 1 != heading and not norm_text(texts[i - 1]) and i - 1 not in remove:
+            remove.add(i - 1)
+        elif i + 1 < len(texts) and not norm_text(texts[i + 1]) and i + 1 not in remove:
+            remove.add(i + 1)
+    kept = [i for i, t in enumerate(texts) if norm_text(t) and i not in remove and i != heading]
+    sentence = parts = attention = None
+    if broken and not kept:
+        built = _account_takeaway(info)
+        if built is not None:
+            sentence, parts = built
+        else:
+            attention = MSG_WRITE_TAKEAWAY
+    return {"remove": sorted(remove), "broken": sorted(broken), "fills": fills, "sentence": sentence,
+            "parts": parts, "attention": attention,
+            "before": " / ".join(norm_text(texts[i]) for i in sorted(set(broken) | set(fills)))}
+
+
+def _takeaway_fix_shapes(info: SlideInfo):
+    if info.kind in _NO_TAKEAWAY_FIX_KINDS:
+        return
+    for shape, _text in info.texts:
+        if shape.shape_id != info.title_shape_id and not (getattr(shape, "has_table", False) and shape.has_table):
+            yield shape
+
+
+def _find_r28(deck, report_type, jira_info):
+    trending = trending_value(deck)
+    findings = []
+    for info in deck.slides:
+        for shape in _takeaway_fix_shapes(info):
+            plan = _takeaway_fix_plan(info, shape, trending)
+            if plan is None:
+                continue
+            if plan["sentence"]:
+                after = plan["sentence"]
+            elif plan["fills"] and not plan["broken"]:
+                after = f"filled with {trending}% (from the deck's Audience Insights)"
+            else:
+                after = "(removed)" + (" - write the takeaway by hand" if plan["attention"] else "")
+            findings.append(Finding(
+                "R28", info.index, f"Fix the key takeaway on {_slide_label(info)} (unfilled values)",
+                before=plan["before"], after=after,
+                data={"shape_id": shape.shape_id, "trending": trending, "attention": plan["attention"]},
+                summary="Fix the key takeaway (unfilled values)"))
+    return findings
+
+
+def _fill_tokens(p_el, value: str) -> None:
+    runs = [r for r in _runs(p_el) if _run_text(r)]
+    for r in runs:
+        _set_run_text(r, blanks.TOKEN_RE.sub(value, _run_text(r)))
+    if blanks.TOKEN_RE.search(_p_text(p_el)) and runs:  # a token split across runs
+        joined = blanks.TOKEN_RE.sub(value, "".join(_run_text(r) for r in runs))
+        _set_run_text(runs[0], joined)
+        for r in runs[1:]:
+            p_el.remove(r)
+
+
+def _apply_r28(prs, finding):
+    shape = _shape(prs, finding)
+    info = parse_slides(prs)[finding.slide_index]
+    plan = _takeaway_fix_plan(info, shape, finding.data.get("trending"))
+    if plan is None:
+        return
+    paras = [p._p for p in shape.text_frame.paragraphs]
+    for i, value in plan["fills"].items():
+        _fill_tokens(paras[i], value)
+    if plan["parts"]:
+        source = paras[plan["broken"][0]]
+        rpr = next((r.find(qn("a:rPr")) for r in _runs(source) if r.find(qn("a:rPr")) is not None
+                    and r.find(qn("a:rPr")).get("b") != "1" and _run_text(r).strip()), _first_rpr(source))
+        ppr = source.find(qn("a:pPr"))
+        runs = [_blue_number_run(text, rpr) if number else _make_run(text, rpr, bold=False)
+                for text, number in plan["parts"]]
+        source.addprevious(_make_paragraph(runs, ppr=copy.deepcopy(ppr) if ppr is not None else None))
+    keep_one = not plan["parts"] and len(plan["remove"]) >= len(paras)
+    for i in sorted(plan["remove"], reverse=True):
+        if keep_one and i == 0:
+            _replace_paragraph_runs(paras[0], [])  # a text body needs one paragraph
+            continue
+        paras[i].getparent().remove(paras[i])
+
+
 # ---------------------------------------------------------------- R19 auto-fit
 
 _DEFAULT_SIZE_PT = 18.0
 CHAR_WIDTH_EM = 0.58  # Montserrat is a wide face
 _LINE_SPACING = 1.2
 _EMU_PER_PT = 12700
+_HYPHEN_BREAK_RE = re.compile(r"(?<=-)(?=.)")  # a line may break after a hyphen
 
 
 def _paragraph_size_pt(p_el) -> float:
@@ -1912,21 +2394,51 @@ def _paragraph_size_pt(p_el) -> float:
     return max(sizes) / 100 if sizes else _DEFAULT_SIZE_PT
 
 
-def wrapped_lines(text: str, per_line: int) -> int:
+# Montserrat advance widths (em), so "Site Visits" counts narrower than
+# "MMMMMMMMMMM"; anything else counts as CHAR_WIDTH_EM.
+_CHAR_EM = {
+    **dict(zip("abcdefghijklmnopqrstuvwxyz",
+               (0.57, 0.64, 0.56, 0.64, 0.59, 0.35, 0.64, 0.64, 0.27, 0.28, 0.56, 0.27, 0.99, 0.64, 0.61, 0.64,
+                0.64, 0.39, 0.48, 0.39, 0.64, 0.55, 0.85, 0.53, 0.55, 0.50))),
+    **dict(zip("ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+               (0.71, 0.73, 0.69, 0.78, 0.65, 0.62, 0.74, 0.78, 0.30, 0.50, 0.68, 0.58, 0.90, 0.78, 0.81, 0.68,
+                0.81, 0.69, 0.60, 0.56, 0.76, 0.69, 1.06, 0.64, 0.60, 0.64))),
+    **dict(zip("0123456789", (0.67, 0.38, 0.58, 0.58, 0.66, 0.58, 0.62, 0.59, 0.64, 0.62))),
+    " ": 0.26, ".": 0.23, ",": 0.23, ":": 0.23, ";": 0.23, "-": 0.39, "_": 0.48, "(": 0.33, ")": 0.33,
+    "%": 0.76, "#": 0.70, "/": 0.40, "'": 0.20, "&": 0.70, "+": 0.58, "$": 0.62, "!": 0.27, "|": 0.25,
+}
+
+# PowerPoint's measured line breaks run about 3% wider than the table above.
+_RENDER_SCALE = 1.03
+
+def _units(text: str) -> float:
+    """Text width in average characters (CHAR_WIDTH_EM each)."""
+    return sum(_CHAR_EM.get(ch, CHAR_WIDTH_EM) for ch in text) * _RENDER_SCALE / CHAR_WIDTH_EM
+
+
+def wrapped_lines(text: str, per_line: float) -> int:
     """Greedy word-wrap line count, the way PowerPoint breaks at spaces and
-    only splits a word that is longer than a whole line."""
+    after hyphens, and only splits a word that is longer than a whole line.
+    per_line is the line width in average characters; each character counts
+    by its own width."""
     if not text.strip():
         return 1
-    lines, current = 1, 0
+    space = _units(" ")
+    lines, current = 1, 0.0
     for word in text.split():
-        length = len(word)
-        if current and current + 1 + length > per_line:
-            lines += 1
-            current = 0
-        if length > per_line:
-            lines += (length - 1) // per_line
-            length = length % per_line or per_line
-        current = length if not current else current + 1 + length
+        for k, part in enumerate(_HYPHEN_BREAK_RE.split(word)):
+            sep = space if k == 0 and current else 0.0
+            length = _units(part)
+            if current and current + sep + length > per_line:
+                lines += 1
+                current, sep = 0.0, 0.0
+            if length > per_line:
+                extra = int(length // per_line)
+                if length - extra * per_line < 1e-9:
+                    extra -= 1
+                lines += extra
+                length -= extra * per_line
+            current += sep + length
     return lines
 
 
@@ -1945,7 +2457,7 @@ def estimate_text_height(shape) -> int:
         ppr = p._p.find(qn("a:pPr"))
         margin = int(ppr.get("marL", "0")) if ppr is not None else 0
         usable = max(width - margin, _EMU_PER_PT * size)
-        per_line = max(1, int(usable / (size * CHAR_WIDTH_EM * _EMU_PER_PT)))
+        per_line = max(1.0, usable / (size * CHAR_WIDTH_EM * _EMU_PER_PT))
         lines = wrapped_lines(_p_text(p._p), per_line)
         height += int(lines * size * _LINE_SPACING * _EMU_PER_PT)
     return height
@@ -1965,7 +2477,6 @@ def _has_sp_autofit(shape) -> bool:
 
 MIN_BOTTOM_INSET = 91440  # 0.1 in
 BREATHING_ROOM = 182880  # 0.2 in, about one line, under the last line of text
-BOTTOM_MARGIN = 228600  # 0.25 in: a takeaway box never grows past this above the slide's bottom edge
 
 
 def _bottom_inset(shape) -> int:
@@ -1983,7 +2494,9 @@ def _padded_inset(shape) -> int:
 
 
 def box_height_cap(shape, slide_height: int) -> int:
-    return slide_height - BOTTOM_MARGIN - int(shape.top)
+    """Tallest a box may grow: down to the slide's usable bottom (above its
+    footer)."""
+    return usable_bottom(shape.part.slide, slide_height) - int(shape.top)
 
 
 def _target_height(shape, slide_height: int, original: int) -> int:
@@ -2078,6 +2591,20 @@ def _apply_r20(prs, finding):
         run.hyperlink.address = f"mailto:{finding.data['values'][2]}"
 
 
+# ---------------------------------------------------------------- R29 hidden shapes
+
+def _find_r29(deck, report_type, jira_info):
+    from core.ppra.layout import find_hidden  # local: layout.py imports this module
+
+    return find_hidden(deck)
+
+
+def _apply_r29(prs, finding):
+    from core.ppra.layout import apply_hidden
+
+    apply_hidden(prs, finding)
+
+
 # ---------------------------------------------------------------- registry
 
 RULES = [
@@ -2098,7 +2625,10 @@ RULES = [
     Rule("R9", "Top Accounts: drop an all-zero CTV Impressions column (combined reports)", _find_r9, _apply_r9),
     Rule("R10", "Hyperlink the ML Platform URLs", _find_r10, _apply_r10),
     Rule("R11", "Round long decimals to 2 places", _find_r11, _apply_r11),
-    Rule("R12", "Remove empty 'site visits generated' lines", _find_r12, _apply_r12),
+    Rule("R12", "Remove blank KPI stats (a '%' or '+' with no number)", _find_r12, _apply_r12),
+    Rule("R27", "Remove table columns for channels not in this report", _find_r27, _apply_r27),
+    Rule("R28", "Fix key takeaways the generator left unfilled", _find_r28, _apply_r28),
+    Rule("R29", "Move shapes hidden behind a taller table or text box", _find_r29, _apply_r29),
     Rule("R13", "Campaign Highlights: format company sizes", _find_r13, _apply_r13),
     Rule("R26", "Campaign Highlights: remove duplicate list items", _find_r26, _apply_r26),
     Rule("R14", "Bold chart data labels (Country pie, Program Performance doughnut)", _find_r14, _apply_r14),
@@ -2118,17 +2648,18 @@ RULES_BY_ID = {rule.id: rule for rule in RULES}
 RULE_GROUPS = [
     ("pacing", "Pacing table", ("R1", "R2", "R3", "R24")),
     ("remove", "Slides to remove", ("R22", "R4", "R5", "R6", "R7", "R8")),
-    ("takeaways", "Key takeaways", ("R25", "R15", "R16", "R17", "R18", "R23", "R19")),
+    ("takeaways", "Key takeaways", ("R25", "R15", "R16", "R17", "R18", "R23", "R28", "R19")),
     ("links", "Links and Thank You page", ("R10", "R20")),
-    ("cleanup", "Number and chart clean-up", ("R9", "R11", "R12", "R13", "R26", "R14", "R21")),
+    ("cleanup", "Number and chart clean-up", ("R9", "R27", "R11", "R12", "R13", "R26", "R14", "R21", "R29")),
 ]
 GROUP_OF_RULE = {rule_id: group_id for group_id, _title, ids in RULE_GROUPS for rule_id in ids}
 # Rules that rewrite visible text: the review list shows their before -> after.
-TEXT_CHANGE_RULES = ("R9", "R13", "R25", "R15", "R16", "R17", "R18", "R23")
+TEXT_CHANGE_RULES = ("R9", "R27", "R13", "R25", "R15", "R16", "R17", "R18", "R23", "R28")
 
 # Execution order for non-deleting rules: column removal before width fitting,
 # takeaway text before the auto-fit that sizes the boxes around it.
-EXECUTION_ORDER = ["R1", "R2", "R3", "R9", "R21", "R10", "R11", "R12", "R13", "R26", "R14",
-                   "R25", "R15", "R16", "R17", "R18", "R23", "R19", "R20"]
-# Rules that add slides run after the deletions, on the final slide order.
-AFTER_DELETE_ORDER = ["R24"]
+EXECUTION_ORDER = ["R1", "R2", "R3", "R9", "R27", "R21", "R10", "R11", "R12", "R13", "R26", "R14",
+                   "R25", "R15", "R16", "R17", "R18", "R23", "R28", "R19", "R20"]
+# Rules that add slides run after the deletions, on the final slide order;
+# R29 (hidden shapes) last of all, once every text and table edit is done.
+AFTER_DELETE_ORDER = ["R24", "R29"]

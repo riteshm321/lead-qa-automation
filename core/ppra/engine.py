@@ -14,11 +14,12 @@ from dataclasses import dataclass, field
 from pptx import Presentation
 
 from core.app_logging import get_logger
-from core.ppra.detect import DeckInfo, SlideInfo, analyze, is_top_level, norm_text
+from core.ppra.blanks import DataIssue, find_data_issues
+from core.ppra.detect import DeckInfo, SlideInfo, analyze, norm_text
+from core.ppra.layout import has_hidden_shapes
 from core.ppra.rules import (
-    AFTER_DELETE_ORDER, CHAR_WIDTH_EM, EXECUTION_ORDER, RULES, RULES_BY_ID, Finding, data_rows,
-    box_height_cap, estimate_text_height, halo_placeholder_index, owner_values, pacing_tables, reach_stat_missing,
-    row_unit, wrapped_lines,
+    AFTER_DELETE_ORDER, EXECUTION_ORDER, RULES, RULES_BY_ID, Finding, data_rows, box_height_cap,
+    estimate_text_height, halo_placeholder_index, owner_values, pacing_tables, reach_stat_missing, row_unit,
 )
 
 _P14_NS = "http://schemas.microsoft.com/office/powerpoint/2010/main"
@@ -67,6 +68,9 @@ class ScanResult:
     # found rule has run (slide numbers in that formatted deck).
     attention: list[AttentionItem] = field(default_factory=list)
     slide_titles: list[str] = field(default_factory=list)
+    # Blank values the generator left in the ORIGINAL deck (slide numbers in
+    # that deck; slides the formatter removes are left out).
+    data_issues: list[DataIssue] = field(default_factory=list)
 
     def found_rule_ids(self) -> list[str]:
         return [rid for rid, items in self.findings.items() if items]
@@ -117,9 +121,11 @@ def scan(pptx_bytes: bytes, report_type: str | None, jira_info: dict | None = No
     except Exception:  # noqa: BLE001 - fall back to the raw deck's view
         get_logger().exception("PPRA trial format failed; checklist taken from the raw deck")
         attention = attention_items(deck, report_type, jira_info)
+    removed = {f.slide_index + 1 for rid, items in findings.items() if RULES_BY_ID[rid].deletes for f in items}
     return ScanResult(
         report_type=report_type, detected_report_type=deck.detected_report_type, findings=findings,
         attention=attention, slide_titles=[s.label for s in deck.slides],
+        data_issues=find_data_issues(deck, skip_slides=removed),
     )
 
 
@@ -197,6 +203,9 @@ def format_deck(pptx_bytes: bytes, report_type: str | None, jira_info: dict | No
                                  f"Check this slide by hand ({rule_id} could not be applied)"))
                 continue
             change_log.append(_change_line(finding))
+            if finding.data.get("attention"):  # what the rule could not finish
+                info = deck.slides[finding.slide_index]
+                problems.append((info.slide.slide_id, info.label, finding.data["attention"]))
 
     for rule_id in EXECUTION_ORDER:
         if rule_id in enabled:
@@ -222,35 +231,6 @@ format = format_deck  # noqa: A001 - the spec's public name
 
 
 # ---------------------------------------------------------------- attention list
-
-def estimated_table_height(table) -> int:
-    """Rendered height (EMU) once long cell text wraps - the stored row
-    heights are only minimums, so a table of long asset names can grow down
-    over whatever sits below it."""
-    total = 0
-    for row in table.rows:
-        row_height = int(row.height)
-        for cell, column in zip(row.cells, table.columns):
-            sizes = [r.font.size.pt for p in cell.text_frame.paragraphs for r in p.runs if r.font.size]
-            size = max(sizes) if sizes else 12.0
-            per_line = max(1, int((int(column.width) - 182880) / (size * CHAR_WIDTH_EM * 12700)))
-            lines = sum(wrapped_lines(line, per_line) for line in (cell.text or " ").splitlines() or [" "])
-            row_height = max(row_height, int(lines * size * 1.2 * 12700) + 91440)
-        total += row_height
-    return total
-
-
-def _overlapping_tables(info: SlideInfo) -> bool:
-    frames = sorted((shape for shape, _rows in info.tables if is_top_level(shape)), key=lambda s: int(s.top))
-    for i, upper in enumerate(frames):
-        bottom = int(upper.top) + estimated_table_height(upper.table)
-        for lower in frames[i + 1:]:
-            side_by_side = (int(lower.left) >= int(upper.left) + int(upper.width)
-                            or int(upper.left) >= int(lower.left) + int(lower.width))
-            if not side_by_side and bottom > int(lower.top):
-                return True
-    return False
-
 
 def _reach_missing(info: SlideInfo) -> bool:
     shape = info.text_shape("key takeaways")
@@ -315,10 +295,14 @@ def attention_items(deck: DeckInfo, report_type: str | None, jira_info: dict | N
             add(info, MSG_OWNER_BOX)  # ticket has the details but the owner box wasn't found
         if info.has_text("error:") and not halo_left:
             add(info, MSG_ERROR)
-        if len(info.tables) > 1 and _overlapping_tables(info):
+        if has_hidden_shapes(info, deck.slide_width, deck.slide_height):
             add(info, MSG_OVERLAP)
         shape = info.text_shape("key takeaways")
         if shape is not None and (int(shape.top) + int(shape.height) > deck.slide_height
                                   or estimate_text_height(shape) > box_height_cap(shape, deck.slide_height)):
             add(info, MSG_OVERFLOW)
+    # Blank values still in the deck ("Manufacturing - %", "{{2}}"), beyond
+    # what the items above already cover.
+    for issue in find_data_issues(deck, for_checklist=True):
+        add(deck.slides[issue.slide_number - 1], issue.checklist_message())
     return items

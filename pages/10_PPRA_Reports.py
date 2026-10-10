@@ -280,6 +280,14 @@ if not _state.get("scan") or _state.get("scan_type") != _report_type:
         st.session_state[_group_key(_active, _gid)] = any(_new_scan.findings.get(r) for r in _ids)
 
 _scan = _state["scan"]
+_data_issues = getattr(_scan, "data_issues", None) or []
+if _data_issues:
+    # Blank values the generator left in the uploaded deck: shown before
+    # formatting so the user can fix the source instead. Formatting stays on.
+    with st.container(border=True, key="ppra_data_issues"):
+        st.markdown(":orange[:material/warning: **Data issues in the original report**]")
+        st.markdown("\n".join(f"- {_md(_issue.line())}" for _issue in _data_issues))
+        st.caption("Fix these in the source report (or Matik) and re-upload, or continue and fix them by hand.")
 _enabled = _enabled_rule_ids(_active, _scan)
 _skipped = _scan.skipped_rule_ids()
 # The checklist is about the deck that will be posted: the trial format the

@@ -314,7 +314,8 @@ def _classify(title: str, layout: str, tables, charts, texts) -> str:
         return "display_performance"
     if "program performance" in t:
         return "program_performance"
-    if t.startswith("campaign highlights") or "what topics are your accounts researching?" in first_cells:
+    if (t.startswith("campaign highlights") or t.startswith("key takeaways")
+            or "what topics are your accounts researching?" in first_cells):
         return "highlights"
     if "key call outs" in t:
         return "key_call_outs"

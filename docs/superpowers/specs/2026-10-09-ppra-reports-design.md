@@ -21,6 +21,13 @@ the user download the result, then posts it to the ticket.
    LinkedIn unconfirmed). Chips next to the selectbox show the channels and
    where the type came from.
 4. Review: the deck is scanned automatically (again on a type change).
+   First a "Data issues in the original report" panel lists, per slide, the
+   blank values the generator left (a "%" / "$" / "K+" with no number,
+   "{{...}}" tokens, "ERROR:", empty substitutions such as "from  include
+   and ."), with the advice to fix the source (or Matik) and re-upload, or
+   continue and fix by hand. Formatting stays allowed; whatever is still
+   blank afterwards goes on the "Before you post" checklist ("Fill N blank
+   % values").
    Summary cards (changes, slides to remove, needs attention, skipped), then
    findings in plain-language groups (Pacing table, Slides to remove, Key
    takeaways, Links and Thank You page, Number and chart clean-up), one line
@@ -72,7 +79,13 @@ from its section label.
   channel (never CS-only).
 - R10 MLP link: hyperlink the URL in "Click to view on ML Platform <url>".
 - R11 Float noise: `\d+\.\d{3,}%` -> rounded to 2 decimals.
-- R12 Remove empty KPI lines ("+ site visits generated", "0+ site visits ...").
+- R12 Remove blank KPI stats: a big-number stat paragraph with no digit
+  (only "%", "+", "$", "x", "K+"; legacy "0+ site visits"), styled as a stat
+  (>= 20 pt or bold, bigger/bolder than its label), with its label
+  paragraph(s) and one adjacent spacer; a stat-only box plus the label box
+  right under it; a Display/CTV Data tile whose known KPI label has no value.
+  Never a paragraph with a digit; never Key Takeaways summary lists, Halo
+  (R23 fills its "X") or the Audience Reach "% of leads" stat (R25).
 - R13 Campaign Highlights company sizes: thousands separators; top open band
   "10,000+".
 - R14 Country pie labels bold, +1 size. Program Performance doughnut labels
@@ -91,6 +104,31 @@ from its section label.
 - R19 Takeaway boxes auto-fit their text.
 - R20 Thank You page: owner name/title/email from Jira; email gets mailto.
 - R21 Tables 12.5" wide and centred (Pacing, Top Accounts, Display Performance).
+- R27 Channel columns: remove a column whose header clearly names a channel
+  the report lacks ("Leads" without CS, "CTV ..." without CTV, "Display ..."
+  without Display; generic Impressions / Clicks / CTR / VCR / Exposure Time
+  never), widths rescaled to keep the table width; the slide title or the
+  table's heading drops the removed channel only when it names it.
+- R28 Broken takeaways: in text boxes (not list items, not the Key Takeaways
+  summary slide, Halo or Industry Insights) a sentence with "{{...}}" or an
+  empty substitution is removed (with one spacer); the "% of accounts were
+  trending on 5+ intent topics" token is filled from the deck's own non-zero
+  Audience Insights stat when there is one. If nothing is left, the standard
+  account sentence is written from the slide's account table ("{a1}, {a2}
+  and {a3} were the most engaged accounts, led by {a1} with {v1} {metric}",
+  number bold PPRA blue), else the checklist says "Write the key takeaway".
+- R29 Hidden shapes (runs last, after the pacing split): tables and wrapping
+  text get an estimated rendered height (per-character Montserrat widths,
+  breaks at spaces and hyphens, 1.2 line height, cell margins). A content
+  shape starting below another's stored bottom but above its estimated
+  bottom (sideways overlap) is moved down under it + 0.1 in, cascading down
+  the column; if that crosses the usable bottom, the involved tables' rows
+  are fitted to their text and their body text stepped down (min 9 pt); if
+  still too tall nothing changes and "Move or shrink the overlapping tables"
+  stays on the checklist. Titles, backgrounds and the footer band never move.
+- Usable bottom (R19, R24, R29): 0.1 in above the highest footer shape the
+  slide shows - the layout's / master's confidential line, logo and footer /
+  slide number / date placeholders in the bottom quarter.
 - n < 3 everywhere: use the available count, wording says "top {n}".
 
 Takeaway templates live in one module-level dict so wording can be edited.

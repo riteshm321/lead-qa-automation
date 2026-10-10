@@ -266,3 +266,17 @@ def test_status_problems_are_shown_with_render_problem(tmp_path, monkeypatch):
         at.button(key=f"ppra_transition_button_{_KEY}").click().run()
     assert not at.exception
     assert any("didn't change the status" in e.value and "resolution required" in e.value for e in at.error)
+
+
+def test_data_issues_panel_shows_before_formatting(tmp_path, monkeypatch):
+    deck = d.cs_deck()
+    d.key_takeaways_slide(deck)
+    with ExitStack() as stack:
+        _patches(stack)
+        at = _to_review(tmp_path, monkeypatch, deck)
+    assert not at.session_state["ppra_tickets"][_KEY].get("formatted")
+    values = [m.value for m in at.markdown]
+    assert any("Data issues in the original report" in v for v in values)
+    assert any("Key Takeaways · 4 blank values" in v for v in values)
+    assert any("Fix these in the source report" in c.value for c in at.caption)
+    assert not at.button(key=f"ppra_format_button_{_KEY}").disabled  # formatting stays allowed
